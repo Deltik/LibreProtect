@@ -79,9 +79,9 @@ jobs:
         with:
           name: integration-logs
           path: |
-            build/it/server/console-*.log
-            build/it/server/egress-*.log
-            build/it/server/logs/
+            build/it/*/console-*.log
+            build/it/*/egress-*.log
+            build/it/*/logs/
           if-no-files-found: ignore
 
   publish:
