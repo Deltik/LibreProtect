@@ -281,7 +281,7 @@ class RouteResolverTest {
             RouteRegistry registry = parser.buildRegistry(RoutePreset.PRIVACY_FIRST, null);
             RouteResolver resolver = new RouteResolver(registry);
 
-            // Translations are answered, which fails until translations are bundled
+            // Translations are answered, which fails without CoreProtect's request body
             URLConnection translation = resolver.resolve(MockUrlFactory.translateUrl());
             assertInstanceOf(AnswerConnection.class, translation);
             IOException failure = assertThrows(IOException.class, translation::connect);

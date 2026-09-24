@@ -30,8 +30,9 @@ public enum RouteActionType {
     BLOCK,
 
     /**
-     * LibreProtect answers the request itself; nothing is sent to
-     * CoreProtect's servers.
+     * LibreProtect answers the request itself: translations come from bundled
+     * files, update checks from the configured update sources, and statistics
+     * get an empty reply. Nothing is sent to CoreProtect's servers.
      */
     ANSWER,
 

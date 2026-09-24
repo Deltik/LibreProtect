@@ -340,7 +340,7 @@ class EgressTest {
             URLConnection conn = Egress.openConnection(MockUrlFactory.translateUrl());
 
             assertInstanceOf(AnswerConnection.class, conn);
-            // No translations are bundled yet, so CoreProtect saves no language cache
+            // Answered, not blocked; without CoreProtect's request body there is nothing to translate
             IOException ex = assertThrows(IOException.class, ((HttpURLConnection) conn)::getResponseCode);
             assertFalse(ex instanceof EgressBlockedException);
         }

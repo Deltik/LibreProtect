@@ -256,7 +256,7 @@ class AnswerRegistryTest {
         }
 
         @Test
-        @DisplayName("should fail translation requests, since no translations are bundled yet")
+        @DisplayName("should fail translation requests without CoreProtect's request body")
         void failsTranslations() {
             assertThrows(IOException.class, () -> registry.answer(request("http://coreprotect.net/translate/")));
         }

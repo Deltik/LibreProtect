@@ -10,7 +10,7 @@
 <!-- begin store description -->
 **LibreProtect** is a privacy-hardened build of [CoreProtect](https://github.com/PlayPro/CoreProtect), the block logging and rollback plugin for Minecraft servers. It is rebuilt from each CoreProtect release, automatically when possible.
 
-* **No phoning home.** CoreProtect contacts coreprotect.net for update checks, usage statistics, error reports, donation-key checks and translations, and it bundles bStats. LibreProtect sends each of those requests through a [network policy](#configuration). By default, it answers translation requests itself and blocks everything else. The `allow-updates` preset also answers update checks, by asking GitHub or Modrinth for LibreProtect's latest release, without sending your version number, server port or license key.
+* **No phoning home.** CoreProtect contacts coreprotect.net for update checks, usage statistics, error reports, donation-key checks and translations, and it bundles bStats. LibreProtect sends each of those requests through a [network policy](#configuration). By default, it answers translation requests itself, from translations it bundles, and blocks everything else. The `allow-updates` preset also answers update checks, by asking GitHub or Modrinth for LibreProtect's latest release, without sending your version number, server port or license key.
 * **Everything unlocked.** Features that CoreProtect reserves for donors work without a donation key.
 * **Drop-in.** LibreProtect keeps CoreProtect's commands, permissions, API, data folder and database. Add-ons that depend on CoreProtect keep working, and you can switch back and forth between the two.
 
@@ -172,7 +172,7 @@ A list of custom routes that are checked before the preset. The first route that
 
 **ANSWER**: LibreProtect answers the request itself, and nothing is sent to CoreProtect's servers. LibreProtect can answer these requests:
 
-* A translation request gets no translations.
+* Translations come from files bundled with LibreProtect.
 * Update checks are answered from the [update sources](#update-sources).
 * Usage statistics get an empty reply.
 

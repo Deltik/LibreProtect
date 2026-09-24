@@ -448,15 +448,15 @@ class AnswerConnectionTest {
     @DisplayName("Translation Endpoint")
     class TranslationEndpoint {
 
-        // An empty answer would become an empty language cache, so the
-        // request fails until LibreProtect bundles translations.
+        // TranslationAnswerTest covers the answers; without CoreProtect's
+        // request body, there is nothing to translate.
 
         @Test
-        @DisplayName("should fail, since no translations are bundled yet")
+        @DisplayName("should fail without CoreProtect's request body")
         void fails() {
             AnswerConnection conn = connection(MockUrlFactory.translateUrl());
             IOException ex = assertThrows(IOException.class, conn::getResponseCode);
-            assertTrue(ex.getMessage().contains("translations"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("translation request"), ex.getMessage());
             assertNull(conn.getHeaderField("Content-Type"));
         }
 
@@ -465,7 +465,7 @@ class AnswerConnectionTest {
         void matchesHostCaseInsensitively() {
             AnswerConnection conn = connection(MockUrlFactory.createUrl("https://CoreProtect.NET/translate/"));
             IOException ex = assertThrows(IOException.class, conn::getInputStream);
-            assertTrue(ex.getMessage().contains("translations"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("translation request"), ex.getMessage());
         }
     }
 

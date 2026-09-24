@@ -148,7 +148,7 @@ class AnswerActionTest {
         }
 
         @Test
-        @DisplayName("should fail translation requests, since no translations are bundled yet")
+        @DisplayName("should fail translation requests without CoreProtect's request body")
         void failsTranslateEndpoint() throws IOException {
             URLConnection conn = action.createConnection(MockUrlFactory.translateUrl(), null, match);
 
