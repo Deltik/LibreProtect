@@ -1,0 +1,17 @@
+# Database servers that the integration tests run CoreProtect against, in
+# containers started by scripts/lp. Pin each image by the digest of its
+# multi-arch index, so a test failure always means CoreProtect or LibreProtect
+# changed, on any architecture.
+#
+# To update, pick a tag and resolve its index digest with any of:
+#   docker buildx imagetools inspect docker.io/library/mysql:8.4   (the "Digest:" line)
+#   skopeo inspect --raw docker://docker.io/library/mysql:8.4 | sha256sum
+#   podman pull docker.io/library/mysql:8.4 && podman image inspect --format '{{.Digest}}' docker.io/library/mysql:8.4
+# then replace the tag and the digest after "@" below.
+
+# MySQL 8.4 LTS (8.4.11 when pinned)
+MYSQL_IMAGE=docker.io/library/mysql:8.4@sha256:0744ee5ef89ce6ccfa13de3e579fe6b9e27f93dd70da9c06d2c908b1b193fb8d
+# ClickHouse 26.3 LTS (26.3.33.24 when pinned). The ClickHouse writer of the
+# CoreProtect 25 builds tested so far needs 26.1 or newer: it sends the
+# max_insert_block_size_bytes setting, which older servers such as 25.8 reject.
+CLICKHOUSE_IMAGE=docker.io/clickhouse/clickhouse-server:26.3@sha256:239a0631aff5fe34ca812dcbdbb3ac31d804f24915492ed347bc40104c5d3191

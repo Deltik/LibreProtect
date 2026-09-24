@@ -25,6 +25,15 @@
 #                                   (downloads Paper once and accepts the Minecraft EULA),
 #                                   up to N at once: by default, as many as the processors
 #                                   and the available memory allow.
+#                                   Uses the database containers if they are up, adding
+#                                   ClickHouse for the test if CoreProtect 25 needs it;
+#                                   without any, starts them for the test and removes
+#                                   them after.
+#   scripts/lp db up [--all]        Start database containers on random loopback ports:
+#                                   MySQL, and ClickHouse for CoreProtect 25 or with --all.
+#                                   While they are up, build lets unit tests use them too.
+#   scripts/lp db env               Print their endpoints and credentials (build/containers.env)
+#   scripts/lp db down              Remove them
 #   scripts/lp sources              Archive the complete source of the last build (needs a clean commit)
 #   scripts/lp clean                Remove build output
 #   scripts/lp headers [--fix]      Check that Java files and shell scripts begin with the
@@ -42,6 +51,9 @@
 #   LP_TEST_FORKS    How many JVMs each module runs its unit test classes in at once.
 #                    By default, as many as the processors and the available memory
 #                    allow, up to 8.
+#
+# The database containers need Docker or Podman. Images are pinned in
+# integration/containers.lock.
 
 set -euo pipefail
 
@@ -150,6 +162,18 @@ check_version() {
     else
         [[ "$version" =~ ^${upstream}-[0-9]{1,9}-g[0-9a-f]{7,40}(-dirty)?-libre-dev$ ]] \
             || die "The development build's version $version isn't one that LibreProtect's update check reads. It reads versions named after release tags of two or three numbers, such as v24.1."
+    fi
+}
+
+# CoreProtect generation of the checked-out upstream: 25 once it has the
+# multi-engine database layer (DuckDB, ClickHouse), otherwise 24. Only the
+# integration test and the database containers go by it: which engines to
+# test, and whether ClickHouse is needed.
+upstream_generation() {
+    if [[ -f "$UPSTREAM_DIR/src/main/java/net/coreprotect/database/DatabaseType.java" ]]; then
+        printf '25'
+    else
+        printf '24'
     fi
 }
 
@@ -352,6 +376,7 @@ cmd_build() {
     local maven_args=(-B -q -T 1C -f "$ROOT/pom.xml" clean verify -Dproject.build.outputTimestamp="$epoch"
         -Dlp.test.forks="$forks")
     $skip_tests && maven_args+=(-Dmaven.test.skip=true)
+    containers_healthy && maven_args+=(-Dlpit.containers="$CONTAINERS_ENV")
     "$ROOT/mvnw" "${maven_args[@]}"
 
     log "Transforming"
@@ -391,12 +416,33 @@ cmd_it() {
     # A server takes up to about 1.5 GiB. Past about a dozen, no suite waits for a server anymore.
     [[ -n "$jobs" ]] || jobs="$(parallelism 1536 12)"
     find_jdk
-    local fork upstream_jar
+    local fork upstream_jar generation
     fork="$(find "$DIST_DIR" -maxdepth 1 -name 'LibreProtect-*.jar' 2>/dev/null | head -n 1)"
     upstream_jar="$(find "$UPSTREAM_DIR/target" -maxdepth 1 -name '*.jar' ! -name 'original-*' ! -name '*-sources.jar' ! -name '*-javadoc.jar' 2>/dev/null | head -n 1)"
     [[ -f "$fork" && -f "$upstream_jar" ]] || die "Run scripts/lp build first"
+    generation="$(upstream_generation)"
 
-    log "Integration testing $(basename "$fork") against $(basename "$upstream_jar")"
+    local clickhouse=false
+    [[ "$generation" == 25 ]] && clickhouse=true
+    # Containers that scripts/lp db up started stay as they are, for the next test
+    if [[ ! -f "$CONTAINERS_ENV" ]]; then
+        trap db_down EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        db_up "$clickhouse"
+    elif ! containers_healthy; then
+        die "The database containers in $CONTAINERS_ENV don't respond. Start them again with scripts/lp db up, or remove them with scripts/lp db down."
+    elif $clickhouse && [[ -z "$CLICKHOUSE_CONTAINER" ]]; then
+        log "The database containers in $CONTAINERS_ENV lack ClickHouse, which CoreProtect $generation needs; adding it for this test"
+        trap clickhouse_down EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        clickhouse_up
+    else
+        log "Using the database containers in $CONTAINERS_ENV"
+    fi
+
+    log "Integration testing $(basename "$fork") against $(basename "$upstream_jar") (generation $generation)"
     "$JAVA_HOME/bin/java" "$ROOT/integration/harness/Harness.java" \
         --work "$BUILD_DIR/it" \
         --paper-lock "$ROOT/integration/paper.lock" \
@@ -404,7 +450,290 @@ cmd_it() {
         --it-plugin "$ROOT/integration/test-plugin/target/libreprotect-it-plugin.jar" \
         --upstream "$upstream_jar" \
         --fork "$fork" \
+        --generation "$generation" \
+        --containers "$CONTAINERS_ENV" \
         --jobs "$jobs"
+}
+
+# Database containers for the tests. Their names derive from $ROOT, so each
+# checkout has its own. db_up writes their endpoints to $CONTAINERS_ENV as
+# KEY=VALUE lines that shells can source and Java can load as properties.
+CONTAINERS_ENV="$BUILD_DIR/containers.env"
+CONTAINERS_KEYS=(CONTAINER_ENGINE
+    MYSQL_CONTAINER MYSQL_HOST MYSQL_PORT MYSQL_DATABASE MYSQL_USERNAME MYSQL_PASSWORD MYSQL_ROOT_PASSWORD
+    CLICKHOUSE_CONTAINER CLICKHOUSE_HOST CLICKHOUSE_PORT CLICKHOUSE_DATABASE CLICKHOUSE_USERNAME CLICKHOUSE_PASSWORD)
+
+# docker or podman, whichever is installed. Podman's docker emulation counts
+# as Podman.
+container_engine() {
+    if command -v docker >/dev/null 2>&1 && ! docker --version 2>/dev/null | grep -qi podman; then
+        printf 'docker'
+    elif command -v podman >/dev/null 2>&1; then
+        printf 'podman'
+    else
+        return 1
+    fi
+}
+
+container_prefix() {
+    local hash
+    hash="$(printf '%s' "$ROOT" | sha256sum)"
+    printf 'libreprotect-%s' "${hash:0:12}"
+}
+
+# The host port that a container publishes for a container port
+container_port() {
+    local mapping
+    mapping="$("$1" port "$2" "$3/tcp" | head -n 1)"
+    [[ "$mapping" =~ :([0-9]+)$ ]] || die "Container $2 publishes no port for $3"
+    printf '%s' "${BASH_REMATCH[1]}"
+}
+
+# Read integration/containers.lock into MYSQL_IMAGE and CLICKHOUSE_IMAGE.
+# The file is never executed.
+read_containers_lock() {
+    local key value
+    MYSQL_IMAGE="" CLICKHOUSE_IMAGE=""
+    while IFS='=' read -r key value; do
+        case "$key" in
+            MYSQL_IMAGE | CLICKHOUSE_IMAGE) printf -v "$key" '%s' "$value" ;;
+        esac
+    done < "$ROOT/integration/containers.lock"
+    [[ "$MYSQL_IMAGE" == *@sha256:* && "$CLICKHOUSE_IMAGE" == *@sha256:* ]] \
+        || die "integration/containers.lock must pin MYSQL_IMAGE and CLICKHOUSE_IMAGE by digest"
+}
+
+# Read an endpoints file (default $CONTAINERS_ENV) into the $CONTAINERS_KEYS
+# variables. Keys it lacks are empty. The file is never executed.
+read_containers_env() {
+    local file="${1:-$CONTAINERS_ENV}" key value
+    for key in "${CONTAINERS_KEYS[@]}"; do
+        printf -v "$key" '%s' ""
+    done
+    while IFS='=' read -r key value; do
+        if [[ "$key" =~ ^[A-Z_]+$ && " ${CONTAINERS_KEYS[*]} " == *" $key "* ]]; then
+            printf -v "$key" '%s' "$value"
+        fi
+    done < "$file"
+}
+
+# Probes, using the variables from read_containers_env. MySQL is probed from
+# inside its container: probing the published port without logging in would
+# count toward blocking the host (max_connect_errors).
+mysql_ready() {
+    "$CONTAINER_ENGINE" exec -e MYSQL_PWD="$MYSQL_PASSWORD" "$MYSQL_CONTAINER" \
+        mysql --protocol=TCP -h127.0.0.1 -u"$MYSQL_USERNAME" -D "$MYSQL_DATABASE" -e 'SELECT 1' >/dev/null 2>&1
+}
+
+clickhouse_query() {
+    curl -fsS --noproxy '*' -u "$CLICKHOUSE_USERNAME:$CLICKHOUSE_PASSWORD" \
+        "http://$CLICKHOUSE_HOST:$CLICKHOUSE_PORT/" --data-binary "$1"
+}
+
+clickhouse_ready() {
+    curl -fsS --noproxy '*' "http://$CLICKHOUSE_HOST:$CLICKHOUSE_PORT/ping" >/dev/null 2>&1 \
+        && [[ "$(clickhouse_query 'SELECT 1' 2>/dev/null)" == 1 ]]
+}
+
+# Whether $CONTAINERS_ENV describes containers that accept connections,
+# including ClickHouse if it lists ClickHouse
+containers_healthy() {
+    [[ -f "$CONTAINERS_ENV" ]] || return 1
+    read_containers_env
+    command -v "${CONTAINER_ENGINE:-none}" >/dev/null 2>&1 || return 1
+    mysql_ready || return 1
+    if [[ -n "$CLICKHOUSE_CONTAINER" ]]; then
+        command -v curl >/dev/null 2>&1 || return 1
+        clickhouse_ready || return 1
+    fi
+}
+
+# Retry a probe every second for up to 3 minutes
+await() {
+    local what="$1" deadline=$((SECONDS + 180))
+    shift
+    log "Waiting for $what to accept connections"
+    until "$@"; do
+        (( SECONDS < deadline )) || die "$what did not accept connections within 3 minutes"
+        sleep 1
+    done
+}
+
+# Start fresh database containers, replacing any this checkout started
+# before: MySQL, and ClickHouse if $1 is true. Each gets a database named
+# coreprotect, and a user coreprotect that owns it, with a random password.
+# Write $CONTAINERS_ENV once they accept connections.
+db_up() {
+    local clickhouse="$1" engine prefix password
+    engine="$(container_engine)" \
+        || die "The integration test runs its databases in containers. Install Docker or Podman."
+    if $clickhouse; then
+        command -v curl >/dev/null 2>&1 || die "Probing ClickHouse needs curl"
+    fi
+    read_containers_lock
+    db_down
+    prefix="$(container_prefix)"
+    password="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+    local label="net.deltik.libreprotect.checkout=$ROOT"
+
+    log "Starting MySQL in container $prefix-mysql"
+    "$engine" run -d --name "$prefix-mysql" --label "$label" -p 127.0.0.1::3306 \
+        -e MYSQL_ROOT_PASSWORD="$password" -e MYSQL_DATABASE=coreprotect \
+        -e MYSQL_USER=coreprotect -e MYSQL_PASSWORD="$password" \
+        "$MYSQL_IMAGE" >/dev/null
+    if $clickhouse; then
+        run_clickhouse "$engine" "$prefix" "$password"
+    fi
+
+    local published_mysql published_clickhouse=""
+    published_mysql="$(container_port "$engine" "$prefix-mysql" 3306)"
+    if $clickhouse; then
+        published_clickhouse="$(container_port "$engine" "$prefix-clickhouse" 8123)"
+    fi
+
+    mkdir -p "$BUILD_DIR"
+    local pending="$CONTAINERS_ENV.new"
+    (
+        umask 077
+        {
+            printf '# Database containers for the tests, from scripts/lp db up. Remove them with scripts/lp db down.\n'
+            printf 'CONTAINER_ENGINE=%s\n' "$engine"
+            printf 'MYSQL_CONTAINER=%s\n' "$prefix-mysql"
+            printf 'MYSQL_HOST=127.0.0.1\nMYSQL_PORT=%s\n' "$published_mysql"
+            printf 'MYSQL_DATABASE=coreprotect\nMYSQL_USERNAME=coreprotect\n'
+            printf 'MYSQL_PASSWORD=%s\nMYSQL_ROOT_PASSWORD=%s\n' "$password" "$password"
+            if $clickhouse; then
+                clickhouse_endpoints "$prefix" "$published_clickhouse" "$password"
+            fi
+        } > "$pending"
+    )
+    read_containers_env "$pending"
+
+    await MySQL mysql_ready
+    if $clickhouse; then
+        prepare_clickhouse
+    fi
+    mv "$pending" "$CONTAINERS_ENV"
+    log "Database containers are up: $CONTAINERS_ENV"
+}
+
+# Start ClickHouse in this checkout's container, with a database named
+# coreprotect and a user coreprotect that owns it, whose password is $3
+run_clickhouse() {
+    local engine="$1" prefix="$2" password="$3"
+    log "Starting ClickHouse in container $prefix-clickhouse"
+    "$engine" run -d --name "$prefix-clickhouse" --label "net.deltik.libreprotect.checkout=$ROOT" -p 127.0.0.1::8123 \
+        -e CLICKHOUSE_DB=coreprotect -e CLICKHOUSE_USER=coreprotect -e CLICKHOUSE_PASSWORD="$password" \
+        -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 \
+        "$CLICKHOUSE_IMAGE" >/dev/null
+}
+
+# The lines of $CONTAINERS_ENV for the ClickHouse container that run_clickhouse
+# started, which publishes port $2
+clickhouse_endpoints() {
+    local prefix="$1" port="$2" password="$3"
+    printf '# ClickHouse over HTTP, which CoreProtect uses\n'
+    printf 'CLICKHOUSE_CONTAINER=%s\n' "$prefix-clickhouse"
+    printf 'CLICKHOUSE_HOST=127.0.0.1\nCLICKHOUSE_PORT=%s\n' "$port"
+    printf 'CLICKHOUSE_DATABASE=coreprotect\nCLICKHOUSE_USERNAME=coreprotect\n'
+    printf 'CLICKHOUSE_PASSWORD=%s\n' "$password"
+}
+
+# Wait for the ClickHouse in the variables from read_containers_env, and
+# prepare its database
+prepare_clickhouse() {
+    await ClickHouse clickhouse_ready
+    # CoreProtect needs a database with UUID-backed table identities, which Atomic has
+    clickhouse_query "CREATE DATABASE IF NOT EXISTS $CLICKHOUSE_DATABASE ENGINE = Atomic" >/dev/null
+}
+
+# Add ClickHouse to the containers in $CONTAINERS_ENV, which lack it, leaving
+# the others as they are. clickhouse_down removes it again.
+clickhouse_up() {
+    local prefix password published
+    command -v curl >/dev/null 2>&1 || die "Probing ClickHouse needs curl"
+    read_containers_lock
+    read_containers_env
+    local engine="$CONTAINER_ENGINE"
+    prefix="$(container_prefix)"
+    # $CONTAINERS_ENV doesn't list it, so it's left over from a test that didn't finish
+    if "$engine" container inspect "$prefix-clickhouse" >/dev/null 2>&1; then
+        "$engine" rm -f -v "$prefix-clickhouse" >/dev/null
+    fi
+    password="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+    run_clickhouse "$engine" "$prefix" "$password"
+    published="$(container_port "$engine" "$prefix-clickhouse" 8123)"
+
+    local pending="$CONTAINERS_ENV.new"
+    (
+        umask 077
+        { cat "$CONTAINERS_ENV"; clickhouse_endpoints "$prefix" "$published" "$password"; } > "$pending"
+    )
+    read_containers_env "$pending"
+    prepare_clickhouse
+    mv "$pending" "$CONTAINERS_ENV"
+    log "ClickHouse is up: $CONTAINERS_ENV"
+}
+
+# Remove the ClickHouse container that clickhouse_up added, and its endpoints
+clickhouse_down() {
+    local engine name
+    name="$(container_prefix)-clickhouse"
+    rm -f "$CONTAINERS_ENV.new"
+    if [[ -f "$CONTAINERS_ENV" ]]; then
+        (
+            umask 077
+            grep -v -e '^CLICKHOUSE_' -e '^# ClickHouse over HTTP' "$CONTAINERS_ENV" > "$CONTAINERS_ENV.new" || true
+        )
+        mv "$CONTAINERS_ENV.new" "$CONTAINERS_ENV"
+    fi
+    engine="$(container_engine)" || return 0
+    if "$engine" container inspect "$name" >/dev/null 2>&1; then
+        log "Removing container $name"
+        "$engine" rm -f -v "$name" >/dev/null
+    fi
+}
+
+# Remove the database containers of this checkout and their endpoints
+db_down() {
+    local engine name
+    rm -f "$CONTAINERS_ENV" "$CONTAINERS_ENV.new"
+    engine="$(container_engine)" || return 0
+    for name in "$(container_prefix)-mysql" "$(container_prefix)-clickhouse"; do
+        if "$engine" container inspect "$name" >/dev/null 2>&1; then
+            log "Removing container $name"
+            "$engine" rm -f -v "$name" >/dev/null
+        fi
+    done
+}
+
+cmd_db() {
+    local action="${1:-}"
+    [[ $# -gt 0 ]] && shift
+    case "$action" in
+        up)
+            local clickhouse=false
+            [[ "$(upstream_generation)" == 25 ]] && clickhouse=true
+            while (( $# )); do
+                case "$1" in
+                    --all) clickhouse=true; shift ;;
+                    *) die "Unknown option: $1" ;;
+                esac
+            done
+            db_up "$clickhouse"
+            ;;
+        env)
+            [[ $# -eq 0 ]] || die "Unknown option: $1"
+            [[ -f "$CONTAINERS_ENV" ]] || die "No database containers. Start them with scripts/lp db up."
+            log "$CONTAINERS_ENV"
+            cat "$CONTAINERS_ENV"
+            ;;
+        down)
+            [[ $# -eq 0 ]] || die "Unknown option: $1"
+            db_down
+            ;;
+        *) die "Unknown db command: ${action:-(none)} (try --help)" ;;
+    esac
 }
 
 # The complete source of the last build, as the GPL requires for each JAR:
@@ -456,6 +785,7 @@ main() {
     case "$command" in
         build) cmd_build "$@" ;;
         it) cmd_it "$@" ;;
+        db) cmd_db "$@" ;;
         sources) cmd_sources "$@" ;;
         clean) cmd_clean "$@" ;;
         headers) exec "$ROOT/scripts/ci/license-headers.sh" "$@" ;;

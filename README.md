@@ -214,7 +214,7 @@ LibreProtect never edits CoreProtect's source code. Each build:
    * **FAIL** stops the build. It means that upstream's code does something that LibreProtect can't keep under the network policy, such as opening a raw socket.
    * **REVIEW** blocks releases, but not development builds, until a maintainer accepts the change. Examples are a new host and a change to upstream's dependencies or license.
 
-5. **Runs integration tests** ([`integration/`](integration/)) on a real Paper server, with a Java agent that records and blocks all outgoing network traffic:
+5. **Runs integration tests** ([`integration/`](integration/)) on a real Paper server, with a Java agent that records and blocks all outgoing network traffic, and MySQL and ClickHouse in containers:
    * The server runs on the same data with stock CoreProtect, then LibreProtect, then stock CoreProtect again. Stock CoreProtect must be seen contacting coreprotect.net, which proves that the test can see network traffic at all. LibreProtect must make no requests, read stock CoreProtect's data, and pass API, command and message checks. Stock CoreProtect must then read LibreProtect's data.
 
 Builds are reproducible: the same inputs produce a byte-identical JAR.
@@ -243,12 +243,13 @@ To accept upstream changes that need review, open the failing CI run's summary a
 
 <details><summary>Development</summary>
 
-You need Git, Bash, and JDK 25 or newer with `javac`. The build looks for one in `JAVA_HOME`, on the `PATH`, and in `~/.jdks`, `/usr/lib/jvm` and `/opt`.
+You need Git, Bash, and JDK 25 or newer with `javac`. The build looks for one in `JAVA_HOME`, on the `PATH`, and in `~/.jdks`, `/usr/lib/jvm` and `/opt`. The integration test also needs Docker or Podman for its database containers.
 
 ```sh
 scripts/lp build                 # Build the release in upstream.lock into dist/LibreProtect-<version>.jar
 scripts/lp build --ref master    # Build any upstream branch, tag or commit as a development build, named after git describe
 scripts/lp it                    # Integration test the last build (downloads Paper once, and accepts the Minecraft EULA)
+scripts/lp db up                 # Keep the database containers running between tests (db env shows them, db down removes them)
 scripts/lp sources               # Archive the complete source code of the last build (build from a clean commit first)
 scripts/lp clean                 # Delete build output
 scripts/lp --help                # Show every command and option

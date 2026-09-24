@@ -87,7 +87,7 @@ import java.util.stream.Stream;
  * [--containers ENV_FILE] [--jobs N]}. Java compiles the other source files in
  * this directory as they are needed (JEP 458). Without {@code --generation}, it
  * is read from the upstream JAR. Without {@code --jobs}, one server runs at a
- * time.
+ * time. {@code scripts/lp it} passes all of them.
  *
  * <p>Running this accepts the Minecraft EULA (https://aka.ms/MinecraftEULA)
  * on behalf of whoever runs it.
@@ -283,7 +283,7 @@ public final class Harness {
         /** The database containers; fails if the harness was started without them */
         Containers containers() {
             if (harness.containers == null) {
-                throw new IllegalStateException("No database containers; run the harness with --containers");
+                throw new IllegalStateException("No database containers; run the harness with --containers, as scripts/lp it does");
             }
             return harness.containers;
         }
@@ -767,8 +767,9 @@ public final class Harness {
     }
 
     /**
-     * The database containers, from the shell-style KEY=VALUE file that
-     * {@code --containers} names.
+     * The database containers that {@code scripts/lp} started, from the
+     * shell-style KEY=VALUE file it wrote ({@code build/containers.env}).
+     * MySQL is always there; ClickHouse is there for CoreProtect 25 builds.
      */
     static final class Containers {
 
@@ -805,7 +806,8 @@ public final class Harness {
         private Database database(String kind) {
             String prefix = kind.toUpperCase(Locale.ROOT) + "_";
             if (!env.containsKey(prefix + "CONTAINER")) {
-                throw new IllegalStateException("No " + kind + " container");
+                throw new IllegalStateException("No " + kind + " container; scripts/lp it starts ClickHouse for"
+                    + " CoreProtect 25 builds, and scripts/lp db up --all always");
             }
             return new Database(kind, this, prefix);
         }
