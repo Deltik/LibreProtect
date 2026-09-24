@@ -119,9 +119,9 @@ The preset decides what happens to CoreProtect's requests that no [route](#route
 
 **privacy-first** (default): Make no web requests. LibreProtect answers translation requests itself and blocks everything else, including update checks. Connections to databases are [outside the network policy](#connections-outside-the-network-policy).
 
-**allow-updates**: Like `privacy-first`, but LibreProtect also answers CoreProtect's update check by asking the [update sources](#update-sources) for LibreProtect's latest release. When possible, a LibreProtect release for each new CoreProtect release is built automatically. If a CoreProtect release needs changes to LibreProtect first, its LibreProtect release takes longer.
+**allow-updates**: Like `privacy-first`, but LibreProtect also answers CoreProtect's update check by asking the [update sources](#update-sources) for LibreProtect's latest release. The update notice names the release it found and links to it. When possible, a LibreProtect release for each new CoreProtect release is built automatically. If a CoreProtect release needs changes to LibreProtect first, its LibreProtect release takes longer.
 
-**passthrough**: Allow every request, like stock CoreProtect. This is meant for debugging.
+**passthrough**: Allow every request, like stock CoreProtect. This is meant for debugging. Translations from coreprotect.net are [layered over the bundled ones](#translations).
 
 These are the requests that the presets know about:
 
@@ -172,7 +172,7 @@ A list of custom routes that are checked before the preset. The first route that
 
 **ANSWER**: LibreProtect answers the request itself, and nothing is sent to CoreProtect's servers. LibreProtect can answer these requests:
 
-* Translations come from files bundled with LibreProtect.
+* Translations come from files bundled with LibreProtect. See [Translations](#translations).
 * Update checks are answered from the [update sources](#update-sources).
 * Usage statistics get an empty reply.
 
@@ -180,11 +180,11 @@ Any other request fails. The donation-key check can't be answered on purpose: Co
 
 LibreProtect skips an invalid route and logs a warning about it.
 
-For example, to use CoreProtect's translation service, and to send CoreProtect's own update check to a server of yours instead of asking the update sources:
+For example, to use CoreProtect's translation service as well as the bundled translations, and to send CoreProtect's own update check to a server of yours instead of asking the update sources:
 
 ```yaml
 routes:
-  # Sends your language code and CoreProtect's phrases to coreprotect.net
+  # Sends your language code and CoreProtect's phrases, including the ones you changed in language.yml, to coreprotect.net
   - pattern: "http://coreprotect\\.net/translate/"
     action: PASSTHROUGH
   - pattern: "http://update\\.coreprotect\\.net(?<path>/.*)"
@@ -197,6 +197,16 @@ routes:
 **false** (default): Log problems and which policy is active, but not individual requests.
 
 **true**: Log every request that LibreProtect intercepts and what happened to it.
+
+### Translations
+
+Set `language` in CoreProtect's `config.yml`, as with stock CoreProtect. LibreProtect bundles the translations in CoreProtect's source code, which CoreProtect's own JAR doesn't include, and by default answers CoreProtect's translation request from them, so nothing is sent. Each release's `DIFFERENCES.md` lists the bundled languages. A phrase that a bundled translation lacks stays in English. So does every phrase of a language that isn't bundled, and LibreProtect logs a warning about it.
+
+If you [allow the translation request](#routes), CoreProtect's translation service can translate phrases and languages that aren't bundled. Its translations take precedence, and the bundled ones fill any gaps, even if the service can't be reached. The request sends your language code and CoreProtect's phrases, including the ones you changed in `language.yml`.
+
+Phrases that you change in `plugins/CoreProtect/language.yml` are never replaced by translations, and don't need a network request.
+
+CoreProtect keeps the translations it gets, and only asks for them again after an update, a change of language, or a change to `language.yml`. LibreProtect also has it ask again when the translations would come from somewhere else, for example after you allow the translation request. It never discards translations that it can't replace, such as a translation that stock CoreProtect saved for a language that isn't bundled.
 
 ### Connections Outside the Network Policy
 
@@ -211,7 +221,8 @@ The network policy covers the requests that CoreProtect and the libraries it bun
 * LibreProtect has no donation keys. Features work without one, and `/co status` has no `License:` line.
 * CoreProtect's Discord link is replaced with a link to LibreProtect, and its Patreon link is left out.
 * The startup log shows which network policy is active.
-* Translations from coreprotect.net are blocked unless you [allow them](#routes).
+* LibreProtect bundles CoreProtect's [translations](#translations) and answers translation requests itself, instead of sending your phrases to coreprotect.net.
+* With the `allow-updates` preset, update checks ask [GitHub or Modrinth](#update-sources) for LibreProtect's releases instead of asking update.coreprotect.net, and the update notice shows LibreProtect's version.
 * `/co migrate-db` and automatic purging (`auto-purge`) exist only in CoreProtect's paid builds, and their code isn't public. LibreProtect has placeholders that say so. [Free implementations are welcome.](runtime/src/main/java/net/coreprotect/utility/extensions/)
 
 Each release lists its exact changes in `DIFFERENCES.md`, which is attached to the release and included in the JAR.
@@ -241,13 +252,16 @@ LibreProtect never edits CoreProtect's source code. Each build:
    * Text that shows the plugin's name is rewritten to say LibreProtect. CoreProtect's phrases and the calls that print messages go through LibreProtect's branding, which names LibreProtect, points links to LibreProtect, and leaves out donation-key messages.
    * A generated subclass of CoreProtect's main class becomes the plugin's entry point. It loads the network policy before any of CoreProtect's code can open a connection.
    * LibreProtect's [runtime](runtime/) classes are added, including placeholders for CoreProtect's closed-source extension points: database migration and automatic purging.
+   * The translations in CoreProtect's source code, which its JAR leaves out, are added, with CoreProtect's built-in English phrases taken from its code.
 3. **Checks contracts.** The build fails with an explanation if upstream breaks an assumption that the transformation relies on. For example, the main class can't be subclassed, a donation-key check was renamed, or network calls are left over.
 4. **Audits** upstream's JAR, as upstream built it, against [`audit/baseline.json`](audit/baseline.json), the reviewed state of upstream:
    * **FAIL** stops the build. It means that upstream's code does something that LibreProtect can't keep under the network policy, such as opening a raw socket.
    * **REVIEW** blocks releases, but not development builds, until a maintainer accepts the change. Examples are a new host and a change to upstream's dependencies or license.
 
-5. **Runs integration tests** ([`integration/`](integration/)) on a real Paper server, with a Java agent that records and blocks all outgoing network traffic, and MySQL and ClickHouse in containers:
-   * The server runs on the same data with stock CoreProtect, then LibreProtect, then stock CoreProtect again. Stock CoreProtect must be seen contacting coreprotect.net, which proves that the test can see network traffic at all. LibreProtect must make no requests, read stock CoreProtect's data, and pass API, command and message checks. Stock CoreProtect must then read LibreProtect's data.
+   The audit covers upstream's code. LibreProtect's own code makes one kind of network request itself: update checks to the [update sources](#update-sources), and only when the network policy answers update checks.
+5. **Runs integration tests** ([`integration/`](integration/)) on real Paper servers, with a Java agent that records and blocks all outgoing network traffic, and MySQL and ClickHouse in containers:
+   * One server runs on the same data with stock CoreProtect, then LibreProtect, then stock CoreProtect again. Stock CoreProtect must be seen contacting coreprotect.net, which proves that the test can see network traffic at all. LibreProtect must make no requests, read stock CoreProtect's data, and pass API, command and message checks. Stock CoreProtect must then read LibreProtect's data.
+   * More servers test bundled and layered translations, and update checks against stand-ins for GitHub and Modrinth.
 
 Builds are reproducible: the same inputs produce a byte-identical JAR.
 
@@ -294,7 +308,7 @@ A development build's version is what `git describe --tags --long` says about th
 
 | Path                                         | Contents                                                                                                                                                                                                                                      |
 |----------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| [`runtime/`](runtime/)                       | Classes added to the plugin: the network policy and its routes, branding, and placeholders for CoreProtect's closed-source extension points. Compiled against the Bukkit API, never against CoreProtect.                                      |
+| [`runtime/`](runtime/)                       | Classes added to the plugin: the network policy and its routes, update checks, bundled translations, branding, and placeholders for CoreProtect's closed-source extension points. Compiled against the Bukkit API, never against CoreProtect. |
 | [`transformer/`](transformer/)               | The build-time bytecode transformer, contract checks and audit, using [ASM](https://asm.ow2.io/)                                                                                                                                              |
 | [`audit/baseline.json`](audit/baseline.json) | The reviewed state of upstream                                                                                                                                                                                                                |
 | [`integration/`](integration/)               | The egress-recording Java agent, test plugin and harness                                                                                                                                                                                      |
