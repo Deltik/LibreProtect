@@ -10,7 +10,7 @@
 <!-- begin store description -->
 **LibreProtect** is a privacy-hardened build of [CoreProtect](https://github.com/PlayPro/CoreProtect), the block logging and rollback plugin for Minecraft servers. It is rebuilt from each CoreProtect release, automatically when possible.
 
-* **No phoning home.** CoreProtect contacts coreprotect.net for update checks, usage statistics, error reports, donation-key checks and translations, and it bundles bStats. LibreProtect sends each of those requests through a [network policy](#configuration) that blocks all of them by default.
+* **No phoning home.** CoreProtect contacts coreprotect.net for update checks, usage statistics, error reports, donation-key checks and translations, and it bundles bStats. LibreProtect sends each of those requests through a [network policy](#configuration). By default, it answers translation requests itself and blocks everything else.
 * **Everything unlocked.** Features that CoreProtect reserves for donors work without a donation key.
 * **Drop-in.** LibreProtect keeps CoreProtect's commands, permissions, API, data folder and database. Add-ons that depend on CoreProtect keep working, and you can switch back and forth between the two.
 
@@ -61,7 +61,7 @@ Commands, permissions and the API are CoreProtect's. See [CoreProtect's document
 
 CoreProtect's settings stay in `plugins/CoreProtect/config.yml`.
 
-LibreProtect's network policy is in `plugins/CoreProtect/libreprotect.yml`. LibreProtect creates the file with default values the first time it starts. Changes take effect after a server restart. A setting that the file leaves out has its default value. If the file can't be read, LibreProtect blocks every request.
+LibreProtect's network policy is in `plugins/CoreProtect/libreprotect.yml`. LibreProtect creates the file with default values the first time it starts. Changes take effect after a server restart. A setting that the file leaves out has its default value. If the file can't be read, LibreProtect makes no web requests.
 
 <details><summary>Default libreprotect.yml</summary>
 
@@ -76,8 +76,8 @@ LibreProtect's network policy is in `plugins/CoreProtect/libreprotect.yml`. Libr
 # https://github.com/Deltik/LibreProtect
 
 # What happens to requests that no route matches
-# privacy-first - Block every request (default)
-# allow-updates - Allow update checks, block everything else
+# privacy-first - Send no web requests: LibreProtect answers translations itself and blocks the rest (default)
+# allow-updates - Like privacy-first, but LibreProtect also answers update checks
 # passthrough - Allow every request through unchanged (for debugging)
 preset: privacy-first
 
@@ -103,9 +103,9 @@ verbose-logging: false
 
 The preset decides what happens to CoreProtect's requests that no [route](#routes) matches.
 
-**privacy-first** (default): Block every request. Connections to databases are [outside the network policy](#connections-outside-the-network-policy).
+**privacy-first** (default): Make no web requests. LibreProtect answers translation requests itself and blocks everything else, including update checks. Connections to databases are [outside the network policy](#connections-outside-the-network-policy).
 
-**allow-updates**: Allow CoreProtect's update check, and block everything else. The update notice links to LibreProtect's releases. When possible, a LibreProtect release for each new CoreProtect release is built automatically. If a CoreProtect release needs changes to LibreProtect first, its LibreProtect release takes longer.
+**allow-updates**: Like `privacy-first`, but LibreProtect also answers CoreProtect's update check, with the running version, so no update is announced. When possible, a LibreProtect release for each new CoreProtect release is built automatically. If a CoreProtect release needs changes to LibreProtect first, its LibreProtect release takes longer.
 
 **passthrough**: Allow every request, like stock CoreProtect. This is meant for debugging.
 
@@ -113,15 +113,15 @@ These are the requests that the presets know about:
 
 | Destination                       | Purpose            | `privacy-first` (default) | `allow-updates` | `passthrough` |
 |-----------------------------------|--------------------|---------------------------|-----------------|---------------|
-| `update.coreprotect.net`          | Update check       | Block                     | Allow           | Allow         |
+| `update.coreprotect.net`          | Update check       | Block                     | Answer          | Allow         |
 | `stats.coreprotect.net`           | Usage statistics   | Block                     | Block           | Allow         |
 | `coreprotect.net/license/`        | Donation-key check | Block                     | Block           | Allow         |
-| `coreprotect.net/translate/`      | Translations       | Block                     | Block           | Allow         |
+| `coreprotect.net/translate/`      | Translations       | Answer                    | Answer          | Allow         |
 | `error-reporting.coreprotect.net` | Error reports      | Block                     | Block           | Allow         |
 | `bstats.org`                      | bStats metrics     | Block                     | Block           | Allow         |
 | Anything else                     |                    | Block                     | Block           | Allow         |
 
-A blocked request fails the same way it would if the server were offline, and CoreProtect carries on without it.
+A blocked request fails the same way it would if the server were offline, and CoreProtect carries on without it. An answered request isn't sent where CoreProtect meant it to go: LibreProtect replies to it itself. See [`ANSWER`](#routes).
 
 ### `routes`
 

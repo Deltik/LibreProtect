@@ -329,6 +329,40 @@ class EgressTest {
     }
 
     @Nested
+    @DisplayName("Answers from presets")
+    class PresetAnswers {
+
+        @Test
+        @DisplayName("privacy-first should answer translation requests without sending them")
+        void privacyFirstAnswersTranslations() throws IOException {
+            Egress.install(resolver(RoutePreset.PRIVACY_FIRST));
+
+            URLConnection conn = Egress.openConnection(MockUrlFactory.translateUrl());
+
+            assertInstanceOf(AnswerConnection.class, conn);
+            // No translations are bundled yet, so CoreProtect saves no language cache
+            IOException ex = assertThrows(IOException.class, ((HttpURLConnection) conn)::getResponseCode);
+            assertFalse(ex instanceof EgressBlockedException);
+        }
+
+        @Test
+        @DisplayName("privacy-first should still block update checks")
+        void privacyFirstBlocksUpdates() {
+            Egress.install(resolver(RoutePreset.PRIVACY_FIRST));
+            assertThrows(EgressBlockedException.class, () -> Egress.openConnection(MockUrlFactory.updateUrl()));
+        }
+
+        @Test
+        @DisplayName("allow-updates should answer update checks without sending them")
+        void allowUpdatesAnswersUpdates() throws IOException {
+            Egress.install(resolver(RoutePreset.ALLOW_UPDATES));
+
+            assertInstanceOf(AnswerConnection.class, Egress.openConnection(MockUrlFactory.updateEdgeUrl()));
+            assertEquals("0.0", read(Egress.openStream(MockUrlFactory.updateUrl())));
+        }
+    }
+
+    @Nested
     @DisplayName("URL normalization")
     class Normalization {
 

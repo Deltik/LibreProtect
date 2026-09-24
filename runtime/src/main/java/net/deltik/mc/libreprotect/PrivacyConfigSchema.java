@@ -83,8 +83,8 @@ public class PrivacyConfigSchema {
         "preset",
         "privacy-first",
         "What happens to requests that no route matches",
-        "privacy-first - Block every request (default)",
-        "allow-updates - Allow update checks, block everything else",
+        "privacy-first - Send no web requests: LibreProtect answers translations itself and blocks the rest (default)",
+        "allow-updates - Like privacy-first, but LibreProtect also answers update checks",
         "passthrough - Allow every request through unchanged (for debugging)"
     );
 

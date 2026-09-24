@@ -70,19 +70,20 @@ class RoutePresetTest {
         }
 
         @Test
-        @DisplayName("should BLOCK every route")
-        void blocksEveryRoute() {
+        @DisplayName("should ANSWER the translation endpoint and BLOCK every other route")
+        void answersTranslationsBlocksRest() {
             for (Route route : preset.getRoutes()) {
-                assertEquals(RouteActionType.BLOCK, route.getActionType(), route.toString());
+                RouteActionType expected = route.getPatternString().equals(RoutePreset.TRANSLATE)
+                    ? RouteActionType.ANSWER
+                    : RouteActionType.BLOCK;
+                assertEquals(expected, route.getActionType(), route.toString());
             }
         }
 
         @Test
-        @DisplayName("should never ANSWER or PASSTHROUGH")
-        void neverAnswersOrPassesThrough() {
-            assertTrue(preset.getRoutes().stream()
-                .noneMatch(r -> r.getActionType() == RouteActionType.ANSWER
-                    || r.getActionType() == RouteActionType.PASSTHROUGH));
+        @DisplayName("should make no network requests: no PASSTHROUGH or REDIRECT, and BLOCK by default")
+        void makesNoNetworkRequests() {
+            assertNoNetworkRequests(preset);
         }
 
         @ParameterizedTest
@@ -118,14 +119,14 @@ class RoutePresetTest {
         }
 
         @ParameterizedTest
-        @DisplayName("should block translation endpoint")
+        @DisplayName("should answer translation endpoint")
         @ValueSource(strings = {
             "https://coreprotect.net/translate/",
             "http://coreprotect.net/translate/",
             "http://coreprotect.net/translate"
         })
-        void blocksTranslateEndpoint(String url) {
-            assertRoutedTo(preset, url, RoutePreset.TRANSLATE, RouteActionType.BLOCK);
+        void answersTranslateEndpoint(String url) {
+            assertRoutedTo(preset, url, RoutePreset.TRANSLATE, RouteActionType.ANSWER);
         }
 
         @ParameterizedTest
@@ -187,25 +188,42 @@ class RoutePresetTest {
         }
 
         @Test
-        @DisplayName("should pass through only the update endpoint and block the rest")
-        void onlyUpdatesPassThrough() {
+        @DisplayName("should ANSWER the translation and update endpoints and BLOCK the rest")
+        void answersTranslationsAndUpdatesBlocksRest() {
             for (Route route : preset.getRoutes()) {
-                RouteActionType expected = route.getPatternString().equals(RoutePreset.UPDATE)
-                    ? RouteActionType.PASSTHROUGH
+                RouteActionType expected = route.getPatternString().equals(RoutePreset.TRANSLATE)
+                    || route.getPatternString().equals(RoutePreset.UPDATE)
+                    ? RouteActionType.ANSWER
                     : RouteActionType.BLOCK;
                 assertEquals(expected, route.getActionType(), route.toString());
             }
         }
 
+        @Test
+        @DisplayName("should never PASSTHROUGH or REDIRECT, and BLOCK by default")
+        void makesNoNetworkRequests() {
+            assertNoNetworkRequests(preset);
+        }
+
         @ParameterizedTest
-        @DisplayName("should passthrough update endpoint")
+        @DisplayName("should answer update endpoint")
         @ValueSource(strings = {
             "https://update.coreprotect.net/",
             "http://update.coreprotect.net/version/",
             "http://update.coreprotect.net/version-edge/"
         })
-        void passthroughUpdateEndpoint(String url) {
-            assertRoutedTo(preset, url, RoutePreset.UPDATE, RouteActionType.PASSTHROUGH);
+        void answersUpdateEndpoint(String url) {
+            assertRoutedTo(preset, url, RoutePreset.UPDATE, RouteActionType.ANSWER);
+        }
+
+        @ParameterizedTest
+        @DisplayName("should answer translation endpoint")
+        @ValueSource(strings = {
+            "https://coreprotect.net/translate/",
+            "http://coreprotect.net/translate"
+        })
+        void answersTranslateEndpoint(String url) {
+            assertRoutedTo(preset, url, RoutePreset.TRANSLATE, RouteActionType.ANSWER);
         }
 
         @ParameterizedTest
@@ -229,9 +247,8 @@ class RoutePresetTest {
         }
 
         @Test
-        @DisplayName("should still block translation, error reporting and bStats")
+        @DisplayName("should still block error reporting and bStats")
         void blocksOthers() {
-            assertRoutedTo(preset, "http://coreprotect.net/translate/", RoutePreset.TRANSLATE, RouteActionType.BLOCK);
             assertRoutedTo(preset, "https://error-reporting.coreprotect.net/x",
                 RoutePreset.ERROR_REPORTING, RouteActionType.BLOCK);
             assertRoutedTo(preset, "https://bstats.org/api/v2/data/bukkit", RoutePreset.BSTATS, RouteActionType.BLOCK);
@@ -273,6 +290,8 @@ class RoutePresetTest {
         @ParameterizedTest
         @DisplayName("should pass every URL through by default")
         @ValueSource(strings = {
+            "http://coreprotect.net/translate/",
+            "http://update.coreprotect.net/version/",
             "https://stats.coreprotect.net/u/",
             "https://coreprotect.net/license/KEY",
             "https://bstats.org/api/v2/data/bukkit",
@@ -282,6 +301,30 @@ class RoutePresetTest {
             RouteRegistry.RouteMatch match = registry(preset).match(url);
             assertTrue(match.isDefault());
             assertEquals(RouteActionType.PASSTHROUGH, match.getActionType());
+        }
+    }
+
+    @Nested
+    @DisplayName("Preset table")
+    class PresetTable {
+
+        @ParameterizedTest(name = "{0}: {1}, {2}, {3}")
+        @DisplayName("should treat each endpoint as the table in the README says")
+        @CsvSource({
+            // URL,                                     privacy-first, allow-updates, passthrough
+            "http://update.coreprotect.net/version/,    BLOCK,         ANSWER,        PASSTHROUGH",
+            "http://stats.coreprotect.net/u/,           BLOCK,         BLOCK,         PASSTHROUGH",
+            "http://coreprotect.net/license/KEY,        BLOCK,         BLOCK,         PASSTHROUGH",
+            "http://coreprotect.net/translate/,         ANSWER,        ANSWER,        PASSTHROUGH",
+            "https://error-reporting.coreprotect.net/x, BLOCK,         BLOCK,         PASSTHROUGH",
+            "https://bstats.org/api/v2/data/bukkit,     BLOCK,         BLOCK,         PASSTHROUGH",
+            "https://example.com/,                      BLOCK,         BLOCK,         PASSTHROUGH"
+        })
+        void matchesTable(String url, RouteActionType privacyFirst, RouteActionType allowUpdates,
+                          RouteActionType passthrough) {
+            assertEquals(privacyFirst, registry(RoutePreset.PRIVACY_FIRST).match(url).getActionType(), url);
+            assertEquals(allowUpdates, registry(RoutePreset.ALLOW_UPDATES).match(url).getActionType(), url);
+            assertEquals(passthrough, registry(RoutePreset.PASSTHROUGH).match(url).getActionType(), url);
         }
     }
 
@@ -424,6 +467,18 @@ class RoutePresetTest {
 
     private static RouteRegistry registry(RoutePreset preset) {
         return new RouteConfigParser().buildRegistry(preset, null);
+    }
+
+    /**
+     * Assert that nothing the preset does reaches the network: ANSWER and
+     * BLOCK send nothing, PASSTHROUGH and REDIRECT would.
+     */
+    private static void assertNoNetworkRequests(RoutePreset preset) {
+        for (Route route : preset.getRoutes()) {
+            assertTrue(route.getActionType() == RouteActionType.ANSWER
+                || route.getActionType() == RouteActionType.BLOCK, route.toString());
+        }
+        assertEquals(RouteActionType.BLOCK, preset.getDefaultAction());
     }
 
     /**

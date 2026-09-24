@@ -29,19 +29,22 @@ import java.util.Locale;
  * Built-in presets: what happens to each of CoreProtect's known endpoints,
  * and to every other request that no custom route matches.
  *
- * <p>Blocking is preferred over answering. A blocked request fails the way it
- * would offline, so CoreProtect writes nothing. An answer can be saved: an
- * answered translation becomes an empty language cache. The license endpoint
- * can't be answered at all (see {@link net.deltik.mc.libreprotect.routing.answer.AnswerConnection}).
+ * <p>Only passthrough sends anything to CoreProtect's servers. The other
+ * presets let LibreProtect answer what it can answer itself (see
+ * {@link RouteActionType#ANSWER}) and block the rest. A blocked request fails
+ * the way it would offline, so CoreProtect carries on without it. The license
+ * endpoint is never answered (see
+ * {@link net.deltik.mc.libreprotect.routing.answer.AnswerRegistry}).
  */
 public enum RoutePreset {
     /**
-     * Privacy-first: block everything, known endpoints and unknown ones alike
+     * Privacy-first: answer translation requests, block everything else. No
+     * request leaves the server.
      */
     PRIVACY_FIRST("privacy-first", RouteActionType.BLOCK),
 
     /**
-     * Allow updates: passthrough update checks, block everything else
+     * Allow updates: like privacy-first, but answer update checks too
      */
     ALLOW_UPDATES("allow-updates", RouteActionType.BLOCK),
 
@@ -75,7 +78,7 @@ public enum RoutePreset {
             case "PRIVACY_FIRST":
                 routes.add(new Route(STATS, RouteActionType.BLOCK));
                 routes.add(new Route(LICENSE, RouteActionType.BLOCK));
-                routes.add(new Route(TRANSLATE, RouteActionType.BLOCK));
+                routes.add(new Route(TRANSLATE, RouteActionType.ANSWER));
                 routes.add(new Route(UPDATE, RouteActionType.BLOCK));
                 routes.add(new Route(ERROR_REPORTING, RouteActionType.BLOCK));
                 routes.add(new Route(BSTATS, RouteActionType.BLOCK));
@@ -84,8 +87,8 @@ public enum RoutePreset {
             case "ALLOW_UPDATES":
                 routes.add(new Route(STATS, RouteActionType.BLOCK));
                 routes.add(new Route(LICENSE, RouteActionType.BLOCK));
-                routes.add(new Route(TRANSLATE, RouteActionType.BLOCK));
-                routes.add(new Route(UPDATE, RouteActionType.PASSTHROUGH));
+                routes.add(new Route(TRANSLATE, RouteActionType.ANSWER));
+                routes.add(new Route(UPDATE, RouteActionType.ANSWER));
                 routes.add(new Route(ERROR_REPORTING, RouteActionType.BLOCK));
                 routes.add(new Route(BSTATS, RouteActionType.BLOCK));
                 break;

@@ -58,8 +58,9 @@ final class Differences {
         md.append("## Network Requests\n\n")
             .append("Each call below used to open a network connection directly. It now goes through ")
             .append("`net.deltik.mc.libreprotect.Egress`, which applies the network policy in ")
-            .append("`plugins/CoreProtect/libreprotect.yml`. By default, that policy blocks every request. ")
-            .append("Connections to the databases in `config.yml` are outside the network policy.\n\n")
+            .append("`plugins/CoreProtect/libreprotect.yml`. By default, that policy sends no web requests: ")
+            .append("LibreProtect answers translation requests itself and blocks every other request. Connections to ")
+            .append("the databases in `config.yml` are outside the network policy.\n\n")
             .append("| Class | Method | Call | Origin | Places |\n|---|---|---|---|---|\n");
         Map<String, Long> egress = report.egressSites.stream().collect(Collectors.groupingBy(site ->
                 cellCode(site.className().replace('/', '.')) + " | " + cellCode(readable(site.method())) + " | "

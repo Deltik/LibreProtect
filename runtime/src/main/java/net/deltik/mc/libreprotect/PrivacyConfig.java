@@ -45,7 +45,7 @@ import java.util.Locale;
  * them.
  *
  * <p>Any problem reading the file falls back to {@link #defaults()}, which
- * blocks everything.
+ * sends nothing.
  */
 public final class PrivacyConfig {
 

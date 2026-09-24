@@ -276,17 +276,22 @@ class RouteResolverTest {
 
         @Test
         @DisplayName("should work with PRIVACY_FIRST preset")
-        void worksWithPrivacyFirstPreset() {
+        void worksWithPrivacyFirstPreset() throws IOException {
             RouteConfigParser parser = new RouteConfigParser();
             RouteRegistry registry = parser.buildRegistry(RoutePreset.PRIVACY_FIRST, null);
             RouteResolver resolver = new RouteResolver(registry);
 
-            // Every known endpoint is blocked by its own route
+            // Translations are answered, which fails until translations are bundled
+            URLConnection translation = resolver.resolve(MockUrlFactory.translateUrl());
+            assertInstanceOf(AnswerConnection.class, translation);
+            IOException failure = assertThrows(IOException.class, translation::connect);
+            assertFalse(failure instanceof EgressBlockedException);
+
+            // Every other known endpoint is blocked by its own route
             for (URL url : new URL[]{
                 MockUrlFactory.statsUrl(),
                 MockUrlFactory.licenseUrl(),
                 MockUrlFactory.httpsLicenseUrl(),
-                MockUrlFactory.translateUrl(),
                 MockUrlFactory.updateUrl(),
                 MockUrlFactory.updateEdgeUrl(),
                 MockUrlFactory.errorReportingUrl(),
@@ -304,7 +309,7 @@ class RouteResolverTest {
 
         @Test
         @DisplayName("should work with ALLOW_UPDATES preset")
-        void worksWithAllowUpdatesPreset() {
+        void worksWithAllowUpdatesPreset() throws IOException {
             RouteConfigParser parser = new RouteConfigParser();
             RouteRegistry registry = parser.buildRegistry(RoutePreset.ALLOW_UPDATES, null);
             RouteResolver resolver = new RouteResolver(registry);
@@ -315,12 +320,11 @@ class RouteResolverTest {
             // License should be blocked
             assertThrows(EgressBlockedException.class, () -> resolver.resolve(MockUrlFactory.licenseUrl()));
 
-            // Updates should be passthrough. Opening a real connection to
-            // update.coreprotect.net is off limits in tests, so check the match.
-            RouteRegistry.RouteMatch match = registry.match(
-                UrlNormalizer.normalize(MockUrlFactory.createUrl("HTTP://Update.CoreProtect.net/version/")));
-            assertEquals(RouteActionType.PASSTHROUGH, match.getActionType());
-            assertFalse(match.isDefault());
+            // Updates and translations are answered
+            URLConnection update = resolver.resolve(MockUrlFactory.createUrl("HTTP://Update.CoreProtect.net/version/"));
+            update.setRequestProperty("User-Agent", "CoreProtect/v24.1 (by Intelli)");
+            assertEquals("24.1", LocalHttpServer.read(update));
+            assertInstanceOf(AnswerConnection.class, resolver.resolve(MockUrlFactory.translateUrl()));
         }
 
         @Test
