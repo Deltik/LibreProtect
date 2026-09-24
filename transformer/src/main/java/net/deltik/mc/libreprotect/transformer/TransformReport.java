@@ -62,6 +62,15 @@ final class TransformReport {
     record BrandingSite(String entry, String className, String member, String kind, String before, String after) {
     }
 
+    /**
+     * @param language the language code, as CoreProtect's {@code language} setting names it
+     * @param phrases  how many of upstream's phrases it translates
+     * @param missing  upstream's phrases that it doesn't translate, which stay in English
+     * @param unknown  its keys that aren't upstream's phrases, which are never used
+     */
+    record Translation(String language, int phrases, List<String> missing, List<String> unknown) {
+    }
+
     String upstreamRef;
     String upstreamCommit;
     String upstreamVersion;
@@ -87,6 +96,14 @@ final class TransformReport {
     final List<ExtensionPoint> extensionPoints = new ArrayList<>();
     /** LibreProtect extension classes or methods that upstream no longer asks for; the audit reports these */
     final List<String> unrequestedExtensions = new ArrayList<>();
+    /** How many phrases upstream has */
+    int phraseCount;
+    /** Upstream's translations that LibreProtect bundles, by language code */
+    final List<Translation> translations = new ArrayList<>();
+    /** Upstream's phrases with no built-in English found in its code, which are never translated */
+    final List<String> phrasesWithoutDefault = new ArrayList<>();
+    /** Phrases whose text in upstream's en.yml differs from its code's built-in English, which is what counts */
+    final List<String> englishDifferences = new ArrayList<>();
 
     long countBranding(String kind) {
         return brandingSites.stream().filter(site -> site.kind().equals(kind)).count();

@@ -120,6 +120,34 @@ final class Differences {
                 TreeMap::new, Collectors.counting()));
         texts.forEach((change, count) -> md.append("| ").append(change).append(" | ").append(count).append(" |\n"));
 
+        md.append("\n## Translations\n\n")
+            .append("CoreProtect's source code has translations that its JAR leaves out. LibreProtect bundles them ")
+            .append("in `").append(Translations.DIRECTORY).append("` and answers CoreProtect's translation requests ")
+            .append("with them, so `language` in `config.yml` works without a network request. Of CoreProtect's ")
+            .append(report.phraseCount).append(" phrases, those that a translation lacks stay in English, and those ")
+            .append("customized in `language.yml` stay as customized. A phrase counts as customized when its text ")
+            .append("isn't CoreProtect's built-in English, as CoreProtect's own cache decides; the build takes that ")
+            .append("English from CoreProtect's code into `").append(Translations.DEFAULTS).append("`.\n\n")
+            .append("| Language | Phrases | Missing |\n|---|---|---|\n");
+        for (TransformReport.Translation translation : report.translations) {
+            md.append("| ").append(cellCode(translation.language())).append(" | ").append(translation.phrases())
+                .append(" | ").append(translation.missing().size()).append(" |\n");
+        }
+        String unknown = report.translations.stream().filter(translation -> !translation.unknown().isEmpty())
+            .map(translation -> code(translation.language()) + ": " + codes(translation.unknown()))
+            .collect(Collectors.joining("; "));
+        if (!unknown.isEmpty()) {
+            md.append("\nThese keys aren't CoreProtect's phrases, so they are never used: ").append(unknown).append("\n");
+        }
+        if (!report.phrasesWithoutDefault.isEmpty()) {
+            md.append("\nCoreProtect's code has no plain English text for ").append(codes(report.phrasesWithoutDefault))
+                .append(", so these phrases stay in English.\n");
+        }
+        if (!report.englishDifferences.isEmpty()) {
+            md.append("\n`").append(Translations.ENGLISH).append(".yml` differs from the built-in English for ")
+                .append(codes(report.englishDifferences)).append(". The built-in English is what counts.\n");
+        }
+
         md.append("\n## Plugin Entry Point\n\n")
             .append(code(report.upstreamMainClass)).append(" is no longer `final`. The new main class ")
             .append(code(report.generatedMainClass)).append(" extends it. It loads the network policy in its ")

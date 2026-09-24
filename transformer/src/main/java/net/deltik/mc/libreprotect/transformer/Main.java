@@ -29,6 +29,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.stream.Collectors;
 
 /**
  * Command-line entry point, run by {@code scripts/lp build}.
@@ -40,7 +41,7 @@ import java.util.TreeMap;
 public final class Main {
 
     private static final List<String> REQUIRED = List.of(
-        "upstream-jar", "original-jar", "runtime-jar", "upstream-dir", "baseline", "output", "version",
+        "upstream-jar", "original-jar", "runtime-jar", "translations", "upstream-dir", "baseline", "output", "version",
         "upstream-ref", "upstream-commit", "fork-commit", "timestamp", "report", "differences", "audit-report",
         "observed");
 
@@ -65,6 +66,7 @@ public final class Main {
                 Path.of(single(arguments, "upstream-jar")),
                 Path.of(single(arguments, "original-jar")),
                 Path.of(single(arguments, "runtime-jar")),
+                Path.of(single(arguments, "translations")),
                 Path.of(single(arguments, "output")),
                 single(arguments, "version"),
                 arguments.containsKey("description") ? single(arguments, "description") : null,
@@ -93,6 +95,11 @@ public final class Main {
             System.out.println("  " + report.countBranding(BrandingRewriter.KIND_TEXT) + " texts rebranded, "
                 + report.countBranding(BrandingRewriter.KIND_PHRASE) + " phrase renderings and "
                 + report.countBranding(BrandingRewriter.KIND_OUTPUT) + " message outputs hooked");
+            System.out.println("  " + report.translations.size() + " translations bundled: " + report.translations.stream()
+                .map(TransformReport.Translation::language).collect(Collectors.joining(", ")) + "; built-in English "
+                + "for " + (report.phraseCount - report.phrasesWithoutDefault.size()) + " of " + report.phraseCount
+                + " phrases" + (report.englishDifferences.isEmpty() ? ""
+                : ", which en.yml differs from for " + String.join(", ", report.englishDifferences)));
             System.out.println("  main class " + report.upstreamMainClass + " -> " + report.generatedMainClass);
             System.out.println("  " + report.upstreamClassCount + " upstream classes, "
                 + report.libraryClassCount + " bundled library classes, "

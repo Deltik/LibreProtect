@@ -76,7 +76,7 @@ class AuditTest {
         change.accept(upstream);
         SyntheticUpstream.Jars jars = upstream.write(directory);
         Transformer transformer = new Transformer(new Transformer.Options(
-            jars.shaded(), jars.original(), TestClasses.runtimeJar(directory), directory.resolve("out.jar"),
+            jars.shaded(), jars.original(), TestClasses.runtimeJar(directory), jars.lang(), directory.resolve("out.jar"),
             "24.1-libre1", "description", "https://example.invalid", "v24.1", "0000000", "0000000", 0L,
             List.copyOf(baseline.egressExemptPrefixes)));
         TransformReport report = transformer.run();

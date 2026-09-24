@@ -372,9 +372,10 @@ cmd_build() {
     [[ "$forks" =~ ^[1-9][0-9]*$ ]] || die "LP_TEST_FORKS must be a positive number"
 
     log "Building LibreProtect"
+    # The transformer's tests of the upstream being built read this exact upstream JAR.
     # Modules that don't depend on each other build at the same time, and so do test classes, in $forks JVMs.
     local maven_args=(-B -q -T 1C -f "$ROOT/pom.xml" clean verify -Dproject.build.outputTimestamp="$epoch"
-        -Dlp.test.forks="$forks")
+        -Dupstream.jar="$upstream_jar" -Dlp.test.forks="$forks")
     $skip_tests && maven_args+=(-Dmaven.test.skip=true)
     containers_healthy && maven_args+=(-Dlpit.containers="$CONTAINERS_ENV")
     "$ROOT/mvnw" "${maven_args[@]}"
@@ -387,6 +388,7 @@ cmd_build() {
         --upstream-jar "$upstream_jar" \
         --original-jar "$original" \
         --runtime-jar "$ROOT/runtime/target/libreprotect-runtime.jar" \
+        --translations "$UPSTREAM_DIR/lang" \
         --upstream-dir "$UPSTREAM_DIR" \
         --baseline "$ROOT/audit/baseline.json" \
         --output "$DIST_DIR/LibreProtect-$version.jar" \

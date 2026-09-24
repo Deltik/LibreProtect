@@ -35,6 +35,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 
 /**
@@ -47,12 +49,14 @@ import java.util.stream.Collectors;
 final class Transformer {
 
     /**
+     * @param translations upstream's {@code lang/} directory, whose translations LibreProtect bundles
      * @param description plugin.yml's description, or {@code null} to derive it from upstream's
      */
     record Options(
         Path upstreamJar,
         Path originalJar,
         Path runtimeJar,
+        Path translations,
         Path outputJar,
         String version,
         String description,
@@ -162,6 +166,7 @@ final class Transformer {
             output.put(name, runtime.get(name));
             report.injectedEntries.add(name);
         }
+        bundleTranslations();
 
         String generatedEntry = SubclassGenerator.CLASS_NAME + ".class";
         ContractViolation.require(!output.contains(generatedEntry), "Upstream ships " + generatedEntry);
@@ -361,6 +366,34 @@ final class Transformer {
             "Found no phrase renderer: a static method of an enum that takes one of its constants and a String[] "
                 + "and returns a String, like CoreProtect's Phrase.build(Phrase, String...). LibreProtect hooks it "
                 + "to leave out donation-key messages and to point links at LibreProtect.");
+    }
+
+    /**
+     * Add upstream's translations unchanged, each checked against the phrases
+     * of the enum that the phrase renderer renders, and the built-in English
+     * from upstream's code.
+     */
+    private void bundleTranslations() throws IOException {
+        Set<String> phraseEnums = phraseRenderers.stream()
+            .map(renderer -> renderer.substring(0, renderer.indexOf('.')))
+            .collect(Collectors.toCollection(TreeSet::new));
+        Set<String> phrases = Translations.phrases(upstream, phraseEnums);
+        report.phraseCount = phrases.size();
+        Map<String, byte[]> files = new TreeMap<>(Translations.read(options.translations(), phrases,
+            report.translations));
+
+        Map<String, String> defaults = Translations.defaults(upstream, phraseEnums, phrases);
+        phrases.stream().filter(phrase -> !defaults.containsKey(phrase)).forEach(report.phrasesWithoutDefault::add);
+        report.englishDifferences.addAll(Translations.englishDifferences(Translations.parse(new String(
+            files.get(Translations.DIRECTORY + Translations.ENGLISH + ".yml"), StandardCharsets.UTF_8)), defaults));
+        files.put(Translations.DEFAULTS, Translations.defaultsFile(defaults));
+
+        for (Map.Entry<String, byte[]> file : files.entrySet()) {
+            ContractViolation.require(!output.contains(file.getKey()), "LibreProtect's " + file.getKey()
+                + " would overwrite a file that upstream now ships, or that LibreProtect adds twice");
+            output.put(file.getKey(), file.getValue());
+            report.injectedEntries.add(file.getKey());
+        }
     }
 
     private void checkBranding() {
