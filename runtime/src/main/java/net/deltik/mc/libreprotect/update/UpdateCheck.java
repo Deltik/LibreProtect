@@ -40,7 +40,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * build gave it, such as {@code 24.1}, which the transformer has it compare
  * instead of LibreProtect's. So when there is a newer release, this reports a
  * synthetic version that CoreProtect sees as newer, and records the release
- * in {@link UpdateStatus}.
+ * in {@link UpdateStatus} so that {@link UpdatePhrases} can show the release
+ * instead.
  */
 public final class UpdateCheck {
 

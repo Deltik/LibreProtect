@@ -30,8 +30,9 @@ import java.util.Objects;
  * and the ones it told CoreProtect about before.
  *
  * <p>CoreProtect only understands its own version numbers, so
- * {@link UpdateCheck} reports a stand-in, the synthetic version, for the
- * release to be shown in its place wherever CoreProtect shows it.
+ * {@link UpdateCheck} reports a stand-in, the synthetic version, and
+ * {@link UpdatePhrases} shows the release in its place wherever CoreProtect
+ * shows it.
  *
  * <p>CoreProtect can show a synthetic version after a later check has
  * replaced or forgotten its release: it records the reply only after

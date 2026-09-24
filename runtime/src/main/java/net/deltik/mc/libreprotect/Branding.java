@@ -20,6 +20,7 @@
 
 package net.deltik.mc.libreprotect;
 
+import net.deltik.mc.libreprotect.update.UpdatePhrases;
 import org.bukkit.command.CommandSender;
 
 import java.util.Map;
@@ -100,6 +101,11 @@ public final class Branding {
             String name = phrase.name();
             if (DROPPED.contains(name)) {
                 return rendered + DROP;
+            }
+            // Update messages show the release that LibreProtect found, when there is one
+            String update = UpdatePhrases.rewrite(name, params, rendered);
+            if (update != null) {
+                return update;
             }
             String[] link = LINKS.get(name);
             if (link != null) {
