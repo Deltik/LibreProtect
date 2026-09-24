@@ -42,7 +42,9 @@ public enum RouteActionType {
     REDIRECT,
 
     /**
-     * Allow the request through unchanged
+     * Allow the request through unchanged. The reply to a translation
+     * request is layered over LibreProtect's bundled translations, which
+     * answer alone if the request fails.
      */
     PASSTHROUGH
 }

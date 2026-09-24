@@ -24,17 +24,22 @@ import net.deltik.mc.libreprotect.LibreProtectLogger;
 import net.deltik.mc.libreprotect.routing.Route;
 import net.deltik.mc.libreprotect.routing.RouteActionType;
 import net.deltik.mc.libreprotect.routing.RouteRegistry;
+import net.deltik.mc.libreprotect.routing.answer.AnswerConnection;
 import net.deltik.mc.libreprotect.testutil.LocalHttpServer;
 import net.deltik.mc.libreprotect.testutil.MockUrlFactory;
 import net.deltik.mc.libreprotect.testutil.TestLogger;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.Proxy;
 import java.net.URL;
 import java.net.URLConnection;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
@@ -157,6 +162,53 @@ class PassthroughActionTest {
                 assertTrue(testLogger.hasMessageContaining("Passthrough: " + server.getBaseUrl() + "/x"));
                 assertFalse(testLogger.hasMessageContaining("secret"));
                 assertFalse(testLogger.hasMessageContaining("frag"));
+            }
+        }
+    }
+
+    @Nested
+    @DisplayName("Translation requests")
+    class Translations {
+
+        @ParameterizedTest
+        @ValueSource(strings = {
+            "http://coreprotect.net/translate/",
+            "https://coreprotect.net/translate/",
+            "http://CoreProtect.NET/translate"
+        })
+        @DisplayName("should get the bundled translation layered under the service's")
+        void layered(String url) throws IOException {
+            URLConnection conn = action.createConnection(MockUrlFactory.createUrl(url), null, match);
+            assertInstanceOf(AnswerConnection.class, conn);
+        }
+
+        @Test
+        @DisplayName("should reach the service through the proxy that CoreProtect asked for")
+        void throughProxy() throws IOException {
+            try (LocalHttpServer service = new LocalHttpServer(exchange ->
+                LocalHttpServer.respond(exchange, 200, "{\"HELP_HEADER\":\"{0} Hilfe\"}"))) {
+                HttpURLConnection conn = (HttpURLConnection) action.createConnection(MockUrlFactory.translateUrl(),
+                    service.asProxy(), match);
+                conn.setRequestMethod("POST");
+                conn.setDoOutput(true);
+                try (OutputStream out = conn.getOutputStream()) {
+                    out.write("data={\"DATA_LANGUAGE\":\"de\",\"HELP_HEADER\":\"{0} Help\"}"
+                        .getBytes(StandardCharsets.UTF_8));
+                }
+
+                assertEquals(200, conn.getResponseCode());
+                assertEquals("{\"HELP_HEADER\":\"{0} Hilfe\"}", LocalHttpServer.read(conn));
+                assertEquals("http://coreprotect.net/translate/", service.getRequests().get(0).toString());
+            }
+        }
+
+        @Test
+        @DisplayName("should leave CoreProtect's other endpoints unchanged")
+        void otherEndpoints() throws IOException {
+            for (URL url : new URL[] {MockUrlFactory.licenseUrl(), MockUrlFactory.updateUrl(),
+                MockUrlFactory.createUrl("http://coreprotect.net/translate/extra")}) {
+                URLConnection conn = action.createConnection(url, null, match);
+                assertFalse(conn instanceof AnswerConnection, url.toString());
             }
         }
     }

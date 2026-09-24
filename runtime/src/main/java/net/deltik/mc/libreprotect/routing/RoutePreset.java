@@ -49,7 +49,8 @@ public enum RoutePreset {
     ALLOW_UPDATES("allow-updates", RouteActionType.BLOCK),
 
     /**
-     * Passthrough: Allow all requests through unchanged
+     * Passthrough: Allow all requests through unchanged, with translation
+     * replies layered over the bundled translations
      */
     PASSTHROUGH("passthrough", RouteActionType.PASSTHROUGH);
 

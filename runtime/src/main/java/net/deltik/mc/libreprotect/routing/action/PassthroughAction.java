@@ -25,16 +25,40 @@ import net.deltik.mc.libreprotect.routing.RouteAction;
 import net.deltik.mc.libreprotect.routing.RouteActionType;
 import net.deltik.mc.libreprotect.routing.RouteRegistry;
 import net.deltik.mc.libreprotect.routing.UrlNormalizer;
+import net.deltik.mc.libreprotect.routing.answer.AnswerConnection;
+import net.deltik.mc.libreprotect.routing.answer.AnswerRegistry;
+import net.deltik.mc.libreprotect.routing.answer.LayeredTranslationAnswer;
+import net.deltik.mc.libreprotect.routing.answer.TranslationAnswer;
 
 import java.io.IOException;
 import java.net.Proxy;
 import java.net.URL;
 import java.net.URLConnection;
+import java.util.Objects;
 
 /**
  * Action that allows the request through unchanged.
+ *
+ * <p>A translation request also gets LibreProtect's bundled translation,
+ * under the translation service's answer (see
+ * {@link LayeredTranslationAnswer}), so a failed request doesn't cost the
+ * translations.
  */
 public class PassthroughAction implements RouteAction {
+
+    private final TranslationAnswer bundledTranslations;
+
+    public PassthroughAction() {
+        this(new TranslationAnswer());
+    }
+
+    /**
+     * @param bundledTranslations answers translation requests from the
+     *                            bundled translations
+     */
+    public PassthroughAction(TranslationAnswer bundledTranslations) {
+        this.bundledTranslations = Objects.requireNonNull(bundledTranslations, "bundledTranslations");
+    }
 
     @Override
     public RouteActionType getType() {
@@ -44,6 +68,9 @@ public class PassthroughAction implements RouteAction {
     @Override
     public URLConnection createConnection(URL url, Proxy proxy, RouteRegistry.RouteMatch match) throws IOException {
         LibreProtectLogger.debug("Passthrough: " + UrlNormalizer.normalize(url));
+        if (AnswerRegistry.Endpoint.of(url) == AnswerRegistry.Endpoint.TRANSLATION) {
+            return new AnswerConnection(url, new LayeredTranslationAnswer(bundledTranslations, proxy));
+        }
         // LibreProtect's own classes are never rewritten, so this is a real connection
         return proxy == null ? url.openConnection() : url.openConnection(proxy);
     }

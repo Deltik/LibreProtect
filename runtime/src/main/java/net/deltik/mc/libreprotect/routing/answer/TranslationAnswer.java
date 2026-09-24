@@ -118,26 +118,37 @@ public final class TranslationAnswer implements Answer {
             throw new IOException("The translation request names no language");
         }
         String code = bundle.resolve(language);
-        if (code == null) {
-            return null;
-        }
+        return code == null ? null : uncustomized(sent, bundle.phrases(code));
+    }
+
+    /**
+     * Leave out the translations of phrases that the server customized, and
+     * of phrases that it didn't send, which CoreProtect doesn't have.
+     * CoreProtect shows every translation in its answer at once, even of a
+     * customized phrase; only its cache loader leaves those out, at the next
+     * start.
+     *
+     * @param sent         the phrases of a translation request, as
+     *                     {@link #phrases} reads them
+     * @param translations translations by phrase name
+     * @return the non-blank translations of the phrases that the request has
+     *         with CoreProtect's built-in English text
+     * @throws IOException if the built-in English isn't bundled
+     */
+    Map<String, String> uncustomized(Map<String, String> sent, Map<String, String> translations) throws IOException {
         Map<String, String> english = bundle.defaults();
         if (english == null) {
             throw new IOException(PrivacyConstants.FORK_NAME + "'s bundled translations lack CoreProtect's "
                 + "built-in English, " + TranslationBundle.DEFAULTS);
         }
-
-        Map<String, String> translations = new TreeMap<>();
-        for (Map.Entry<String, String> phrase : bundle.phrases(code).entrySet()) {
-            String name = phrase.getKey();
-            // A phrase that differs from the built-in English was customized, as CoreProtect's cache loader
-            // decides, and one that isn't sent is unknown to CoreProtect
-            if (!phrase.getValue().trim().isEmpty() && english.containsKey(name)
-                && english.get(name).equals(sent.get(name))) {
-                translations.put(name, phrase.getValue());
+        Map<String, String> uncustomized = new TreeMap<>();
+        translations.forEach((name, text) -> {
+            // A phrase that differs from the built-in English was customized, as CoreProtect's cache loader decides
+            if (!text.trim().isEmpty() && english.containsKey(name) && english.get(name).equals(sent.get(name))) {
+                uncustomized.put(name, text);
             }
-        }
-        return translations;
+        });
+        return uncustomized;
     }
 
     /**

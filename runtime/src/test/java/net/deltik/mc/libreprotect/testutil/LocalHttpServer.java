@@ -23,6 +23,7 @@ package net.deltik.mc.libreprotect.testutil;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -64,11 +65,13 @@ public final class LocalHttpServer implements AutoCloseable {
         private final String method;
         private final URI uri;
         private final Map<String, List<String>> headers;
+        private final byte[] body;
 
-        private Received(String method, URI uri, Map<String, List<String>> headers) {
+        private Received(String method, URI uri, Map<String, List<String>> headers, byte[] body) {
             this.method = method;
             this.uri = uri;
             this.headers = headers;
+            this.body = body;
         }
 
         public String method() {
@@ -93,6 +96,13 @@ public final class LocalHttpServer implements AutoCloseable {
             List<String> values = headers.get(name);
             return values == null || values.isEmpty() ? null : values.get(0);
         }
+
+        /**
+         * @return a copy of the request body, empty if there was none
+         */
+        public byte[] body() {
+            return body.clone();
+        }
     }
 
     private final HttpServer server;
@@ -116,7 +126,13 @@ public final class LocalHttpServer implements AutoCloseable {
         server.createContext("/", exchange -> {
             Map<String, List<String>> headers = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
             exchange.getRequestHeaders().forEach((name, values) -> headers.put(name, List.copyOf(values)));
-            received.add(new Received(exchange.getRequestMethod(), exchange.getRequestURI(), headers));
+            byte[] body;
+            try (InputStream in = exchange.getRequestBody()) {
+                body = in.readAllBytes();
+            }
+            // The handler can read the body too
+            exchange.setStreams(new ByteArrayInputStream(body), null);
+            received.add(new Received(exchange.getRequestMethod(), exchange.getRequestURI(), headers, body));
             try (exchange) {
                 handler.handle(exchange);
             }

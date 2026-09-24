@@ -88,7 +88,7 @@ public class PrivacyConfigSchema {
         "What happens to requests that no route matches",
         "privacy-first - Send no web requests: LibreProtect answers translations itself and blocks the rest (default)",
         "allow-updates - Like privacy-first, but LibreProtect also answers update checks from update-sources",
-        "passthrough - Allow every request through unchanged (for debugging)"
+        "passthrough - Allow every request through unchanged (for debugging). Bundled translations fill any gaps"
     );
 
     public static final ConfigOption UPDATE_SOURCES = new ConfigOption(
