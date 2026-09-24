@@ -22,8 +22,10 @@ package net.deltik.mc.libreprotect.routing;
 
 import net.deltik.mc.libreprotect.*;
 import net.deltik.mc.libreprotect.routing.answer.AnswerConnection;
+import net.deltik.mc.libreprotect.routing.answer.Response;
 import net.deltik.mc.libreprotect.testutil.LocalHttpServer;
 import net.deltik.mc.libreprotect.testutil.MockUrlFactory;
+import net.deltik.mc.libreprotect.testutil.RecordingAnswer;
 import net.deltik.mc.libreprotect.testutil.TestLogger;
 import org.junit.jupiter.api.*;
 
@@ -176,6 +178,17 @@ class RouteResolverTest {
                 resolver.resolve(url("http://update.coreprotect.net/version/")));
             assertThrows(EgressBlockedException.class,
                 () -> resolver.resolve(url("http://coreprotect.net/license/KEY")));
+        }
+
+        @Test
+        @DisplayName("should answer with the actions it was given")
+        void usesGivenActions() throws IOException {
+            RecordingAnswer answer = RecordingAnswer.replying(Response.text("given"));
+            RouteResolver resolver = new RouteResolver(RouteRegistry.builder()
+                .setDefaultAction(RouteActionType.ANSWER).build(), new RouteActionFactory(answer));
+
+            assertEquals("given", LocalHttpServer.read(resolver.resolve(MockUrlFactory.updateUrl())));
+            assertEquals(1, answer.calls());
         }
 
         @Test

@@ -22,23 +22,26 @@ package net.deltik.mc.libreprotect.routing.answer;
 
 import net.deltik.mc.libreprotect.LibreProtectVersion;
 import net.deltik.mc.libreprotect.PrivacyConstants;
+import net.deltik.mc.libreprotect.routing.UrlNormalizer;
 
 import javax.net.ssl.HttpsURLConnection;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.ProtocolException;
 import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.security.Permission;
 import java.security.cert.Certificate;
 import java.util.Collections;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.TreeMap;
 
 /**
  * A connection that LibreProtect answers itself, without connecting to
@@ -48,32 +51,77 @@ import java.util.Map;
  * so it survives both casts that callers make: CoreProtect casts to
  * {@code HttpURLConnection}, and bStats casts to {@code HttpsURLConnection}.
  *
- * <p>The license endpoint is deliberately not answerable. CoreProtect saves
- * validated keys to {@code plugins/CoreProtect/.license}, and stock CoreProtect
- * trusts that file when it is offline, so an answered license would leak out
- * of LibreProtect.
+ * <p>The {@link Answer} is asked once, by the first call that needs the reply:
+ * {@link #connect()}, {@link #getResponseCode()}, {@link #getInputStream()}, or
+ * a header getter such as {@link #getContentType()}. It sees the request
+ * properties and whatever was written to {@link #getOutputStream()} by then.
+ * If the answer fails, its {@link IOException} comes out of every call that
+ * can throw one, as a failed connection's would, and the header getters
+ * return nothing.
  */
 public class AnswerConnection extends HttpsURLConnection {
 
-    /** The answer to a translation request: no translations */
-    private static final String TRANSLATION_ANSWER = "{}";
+    private static final String REASON = "Answered by " + PrivacyConstants.FORK_NAME;
 
-    private ByteArrayOutputStream outputStream;
-    private final Map<String, String> requestProperties = new HashMap<>();
+    private final Answer answer;
+    private final Map<String, String> requestProperties = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+    private ByteArrayOutputStream requestBody;
+    private Response response;
+    private IOException failure;
 
-    public AnswerConnection(URL url) {
+    public AnswerConnection(URL url, Answer answer) {
         super(url);
+        this.answer = Objects.requireNonNull(answer, "answer");
+    }
+
+    /**
+     * @return the answer's reply, asking for it on the first call
+     * @throws IOException the answer's failure, on this and every later call
+     */
+    private Response response() throws IOException {
+        if (response == null && failure == null) {
+            try {
+                response = Objects.requireNonNull(answer.answer(request()), "The answer gave no response");
+                connected = true;
+            } catch (IOException e) {
+                failure = e;
+            } catch (RuntimeException e) {
+                // A broken answer fails the request like any other answer failure
+                failure = new IOException(PrivacyConstants.FORK_NAME + " couldn't answer "
+                    + UrlNormalizer.normalize(url) + ": " + e, e);
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
+        return response;
+    }
+
+    /**
+     * @return the answer's reply, or {@code null} if the answer failed
+     */
+    private Response responseOrNull() {
+        try {
+            return response();
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private Request request() {
+        byte[] body = requestBody == null ? new byte[0] : requestBody.toByteArray();
+        return new Request(url, method, requestProperties, body);
     }
 
     @Override
-    public void connect() {
-        connected = true;
+    public void connect() throws IOException {
+        response();
     }
 
     @Override
     public void disconnect() {
         connected = false;
-        outputStream = null;
+        requestBody = null;
     }
 
     @Override
@@ -82,70 +130,72 @@ public class AnswerConnection extends HttpsURLConnection {
     }
 
     @Override
-    public int getResponseCode() {
-        return HttpURLConnection.HTTP_OK;
+    public int getResponseCode() throws IOException {
+        return response().status();
     }
 
     @Override
-    public String getResponseMessage() {
-        return "OK (Answered by " + PrivacyConstants.FORK_NAME + ")";
-    }
-
-    @Override
-    public InputStream getInputStream() throws IOException {
-        return new ByteArrayInputStream(generateAnswer().getBytes(StandardCharsets.UTF_8));
-    }
-
-    @Override
-    public InputStream getErrorStream() {
-        return null;
-    }
-
-    @Override
-    public OutputStream getOutputStream() {
-        if (outputStream == null) {
-            outputStream = new ByteArrayOutputStream();
-        }
-        return outputStream;
+    public String getResponseMessage() throws IOException {
+        response();
+        return REASON;
     }
 
     /**
-     * Generate the answer for the endpoint
+     * @throws FileNotFoundException for status 404 or 410, and
+     *         {@link IOException} for any other status from 400 up, as
+     *         {@code HttpURLConnection} does; the body is in
+     *         {@link #getErrorStream()} then
      */
-    private String generateAnswer() throws IOException {
-        String host = url.getHost().toLowerCase(Locale.ROOT);
-        String path = url.getPath() != null ? url.getPath().toLowerCase(Locale.ROOT) : "";
-
-        // Translation endpoint: no translations
-        if (host.equals("coreprotect.net") && (path.equals("/translate/") || path.equals("/translate"))) {
-            return TRANSLATION_ANSWER;
-        }
-
-        // Version check endpoints: report the running version so no update is announced
-        if (host.equals("update.coreprotect.net")) {
-            String userAgent = requestProperties.get("User-Agent");
-            if (userAgent != null && userAgent.startsWith("CoreProtect/v")) {
-                // User-Agent: "CoreProtect/vX.Y.Z (by Intelli)"
-                return userAgent.substring("CoreProtect/v".length()).split(" ")[0];
+    @Override
+    public InputStream getInputStream() throws IOException {
+        Response reply = response();
+        if (reply.status() >= HTTP_BAD_REQUEST) {
+            String message = PrivacyConstants.FORK_NAME + " answered with HTTP response code " + reply.status()
+                + " for URL: " + UrlNormalizer.normalize(url);
+            if (reply.status() == HTTP_NOT_FOUND || reply.status() == HTTP_GONE) {
+                throw new FileNotFoundException(message);
             }
-            return "0.0";
+            throw new IOException(message);
         }
+        return new ByteArrayInputStream(reply.body());
+    }
 
-        // Statistics endpoint: accepted and discarded
-        if (host.equals("stats.coreprotect.net")) {
-            return "";
+    /**
+     * @return the body of an error reply (status 400 and up), or {@code null}
+     *         if there is none yet; this doesn't ask the answer
+     */
+    @Override
+    public InputStream getErrorStream() {
+        if (response == null || response.status() < HTTP_BAD_REQUEST) {
+            return null;
         }
+        return new ByteArrayInputStream(response.body());
+    }
 
-        throw new IOException(PrivacyConstants.FORK_NAME + " can't answer requests to "
-            + url.getProtocol() + "://" + url.getHost() + url.getPath()
-            + "; use BLOCK for it instead. If upstream added this endpoint, please report it at "
-            + PrivacyConstants.FORK_ISSUE_URL);
+    /**
+     * @throws ProtocolException if the answer was already asked, because it
+     *         wouldn't see anything written now
+     */
+    @Override
+    public OutputStream getOutputStream() throws IOException {
+        if (response != null || failure != null) {
+            throw new ProtocolException("Cannot write output after " + PrivacyConstants.FORK_NAME
+                + " answered the request");
+        }
+        if (requestBody == null) {
+            requestBody = new ByteArrayOutputStream();
+        }
+        return requestBody;
     }
 
     @Override
     public String getHeaderField(String name) {
+        Response reply = responseOrNull();
+        if (reply == null) {
+            return null;
+        }
         if ("Content-Type".equalsIgnoreCase(name)) {
-            return getContentType();
+            return reply.contentType();
         }
         if ("Server".equalsIgnoreCase(name)) {
             return serverHeader();
@@ -154,19 +204,14 @@ public class AnswerConnection extends HttpsURLConnection {
     }
 
     @Override
-    public String getContentType() {
-        String path = url.getPath();
-        if (path != null && path.contains("translate")) {
-            return "application/json; charset=utf-8";
-        }
-        return "text/plain; charset=utf-8";
-    }
-
-    @Override
     public String getHeaderField(int n) {
+        Response reply = responseOrNull();
+        if (reply == null) {
+            return null;
+        }
         switch (n) {
-            case 0: return "HTTP/1.1 200 OK";
-            case 1: return getContentType();
+            case 0: return "HTTP/1.1 " + reply.status() + " " + REASON;
+            case 1: return reply.contentType();
             case 2: return serverHeader();
             default: return null;
         }
@@ -174,6 +219,9 @@ public class AnswerConnection extends HttpsURLConnection {
 
     @Override
     public String getHeaderFieldKey(int n) {
+        if (responseOrNull() == null) {
+            return null;
+        }
         switch (n) {
             case 1: return "Content-Type";
             case 2: return "Server";
@@ -183,10 +231,14 @@ public class AnswerConnection extends HttpsURLConnection {
 
     @Override
     public Map<String, List<String>> getHeaderFields() {
-        Map<String, List<String>> headers = new HashMap<>();
-        headers.put("Content-Type", Collections.singletonList(getContentType()));
+        Response reply = responseOrNull();
+        if (reply == null) {
+            return Collections.emptyMap();
+        }
+        Map<String, List<String>> headers = new LinkedHashMap<>();
+        headers.put("Content-Type", Collections.singletonList(reply.contentType()));
         headers.put("Server", Collections.singletonList(serverHeader()));
-        return headers;
+        return Collections.unmodifiableMap(headers);
     }
 
     private static String serverHeader() {
@@ -210,16 +262,16 @@ public class AnswerConnection extends HttpsURLConnection {
 
     @Override
     public String getRequestProperty(String key) {
-        return requestProperties.get(key);
+        return key == null ? null : requestProperties.get(key);
     }
 
     @Override
     public Map<String, List<String>> getRequestProperties() {
-        Map<String, List<String>> result = new HashMap<>();
+        Map<String, List<String>> result = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
         for (Map.Entry<String, String> entry : requestProperties.entrySet()) {
             result.put(entry.getKey(), Collections.singletonList(entry.getValue()));
         }
-        return result;
+        return Collections.unmodifiableMap(result);
     }
 
     @Override

@@ -25,7 +25,9 @@ import net.deltik.mc.libreprotect.routing.Route;
 import net.deltik.mc.libreprotect.routing.RouteActionType;
 import net.deltik.mc.libreprotect.routing.RouteRegistry;
 import net.deltik.mc.libreprotect.routing.answer.AnswerConnection;
+import net.deltik.mc.libreprotect.routing.answer.Response;
 import net.deltik.mc.libreprotect.testutil.MockUrlFactory;
+import net.deltik.mc.libreprotect.testutil.RecordingAnswer;
 import net.deltik.mc.libreprotect.testutil.TestLogger;
 import org.junit.jupiter.api.*;
 
@@ -146,12 +148,12 @@ class AnswerActionTest {
         }
 
         @Test
-        @DisplayName("should work for translate endpoint")
-        void worksForTranslateEndpoint() throws IOException {
+        @DisplayName("should fail translation requests, since no translations are bundled yet")
+        void failsTranslateEndpoint() throws IOException {
             URLConnection conn = action.createConnection(MockUrlFactory.translateUrl(), null, match);
 
             assertInstanceOf(AnswerConnection.class, conn);
-            assertEquals("{}", read(conn));
+            assertThrows(IOException.class, conn::connect);
         }
 
         @Test
@@ -175,6 +177,36 @@ class AnswerActionTest {
         void freshConnection() throws IOException {
             URL url = MockUrlFactory.updateUrl();
             assertNotSame(action.createConnection(url, null, match), action.createConnection(url, null, match));
+        }
+    }
+
+    @Nested
+    @DisplayName("Given Answer")
+    class GivenAnswer {
+
+        private final RecordingAnswer answer = RecordingAnswer.replying(Response.text("answered"));
+        private final AnswerAction given = new AnswerAction(answer);
+
+        @Test
+        @DisplayName("should answer with the answer it was given")
+        void answersWithGivenAnswer() throws IOException {
+            URL url = MockUrlFactory.createUrl("https://example.com/anything");
+
+            assertEquals("answered", read(given.createConnection(url, null, match)));
+            assertSame(url, answer.lastRequest().url());
+        }
+
+        @Test
+        @DisplayName("should not ask the answer until the connection needs a reply")
+        void doesNotAskEarly() throws IOException {
+            given.createConnection(MockUrlFactory.updateUrl(), null, match);
+            assertEquals(0, answer.calls());
+        }
+
+        @Test
+        @DisplayName("should require an answer")
+        void requiresAnswer() {
+            assertThrows(NullPointerException.class, () -> new AnswerAction(null));
         }
     }
 }

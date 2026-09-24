@@ -21,9 +21,16 @@
 package net.deltik.mc.libreprotect.routing;
 
 import net.deltik.mc.libreprotect.routing.action.*;
+import net.deltik.mc.libreprotect.routing.answer.Response;
+import net.deltik.mc.libreprotect.testutil.LocalHttpServer;
+import net.deltik.mc.libreprotect.testutil.MockUrlFactory;
+import net.deltik.mc.libreprotect.testutil.RecordingAnswer;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+
+import java.io.IOException;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -36,7 +43,7 @@ class RouteActionFactoryTest {
         @Test
         @DisplayName("should return BlockAction for BLOCK type")
         void returnsBlockAction() {
-            RouteAction action = RouteActionFactory.getAction(RouteActionType.BLOCK);
+            RouteAction action = RouteActionFactory.defaults().getAction(RouteActionType.BLOCK);
             assertInstanceOf(BlockAction.class, action);
             assertEquals(RouteActionType.BLOCK, action.getType());
         }
@@ -44,7 +51,7 @@ class RouteActionFactoryTest {
         @Test
         @DisplayName("should return AnswerAction for ANSWER type")
         void returnsAnswerAction() {
-            RouteAction action = RouteActionFactory.getAction(RouteActionType.ANSWER);
+            RouteAction action = RouteActionFactory.defaults().getAction(RouteActionType.ANSWER);
             assertInstanceOf(AnswerAction.class, action);
             assertEquals(RouteActionType.ANSWER, action.getType());
         }
@@ -52,7 +59,7 @@ class RouteActionFactoryTest {
         @Test
         @DisplayName("should return RedirectAction for REDIRECT type")
         void returnsRedirectAction() {
-            RouteAction action = RouteActionFactory.getAction(RouteActionType.REDIRECT);
+            RouteAction action = RouteActionFactory.defaults().getAction(RouteActionType.REDIRECT);
             assertInstanceOf(RedirectAction.class, action);
             assertEquals(RouteActionType.REDIRECT, action.getType());
         }
@@ -60,7 +67,7 @@ class RouteActionFactoryTest {
         @Test
         @DisplayName("should return PassthroughAction for PASSTHROUGH type")
         void returnsPassthroughAction() {
-            RouteAction action = RouteActionFactory.getAction(RouteActionType.PASSTHROUGH);
+            RouteAction action = RouteActionFactory.defaults().getAction(RouteActionType.PASSTHROUGH);
             assertInstanceOf(PassthroughAction.class, action);
             assertEquals(RouteActionType.PASSTHROUGH, action.getType());
         }
@@ -69,7 +76,7 @@ class RouteActionFactoryTest {
         @DisplayName("should return action for all action types")
         @EnumSource(RouteActionType.class)
         void returnsActionForAllTypes(RouteActionType type) {
-            RouteAction action = RouteActionFactory.getAction(type);
+            RouteAction action = RouteActionFactory.defaults().getAction(type);
             assertNotNull(action);
             assertEquals(type, action.getType());
         }
@@ -77,8 +84,8 @@ class RouteActionFactoryTest {
         @Test
         @DisplayName("should return singleton instances")
         void returnsSingletonInstances() {
-            RouteAction first = RouteActionFactory.getAction(RouteActionType.BLOCK);
-            RouteAction second = RouteActionFactory.getAction(RouteActionType.BLOCK);
+            RouteAction first = RouteActionFactory.defaults().getAction(RouteActionType.BLOCK);
+            RouteAction second = RouteActionFactory.defaults().getAction(RouteActionType.BLOCK);
             assertSame(first, second);
         }
 
@@ -86,9 +93,48 @@ class RouteActionFactoryTest {
         @DisplayName("should return same instance on repeated calls")
         @EnumSource(RouteActionType.class)
         void returnsSameInstanceForAllTypes(RouteActionType type) {
-            RouteAction first = RouteActionFactory.getAction(type);
-            RouteAction second = RouteActionFactory.getAction(type);
+            RouteAction first = RouteActionFactory.defaults().getAction(type);
+            RouteAction second = RouteActionFactory.defaults().getAction(type);
             assertSame(first, second);
+        }
+    }
+
+    @Nested
+    @DisplayName("With answers")
+    class WithAnswers {
+
+        private final RouteRegistry.RouteMatch match =
+            RouteRegistry.RouteMatch.of(new Route(".*", RouteActionType.ANSWER), Map.of());
+
+        @Test
+        @DisplayName("should answer ANSWER routes with the given answer")
+        void answersWithGivenAnswer() throws IOException {
+            RecordingAnswer answer = RecordingAnswer.replying(Response.text("24.1.1"));
+            RouteActionFactory factory = new RouteActionFactory(answer);
+
+            RouteAction action = factory.getAction(RouteActionType.ANSWER);
+
+            assertEquals("24.1.1", LocalHttpServer.read(action.createConnection(MockUrlFactory.updateUrl(), null, match)));
+            assertEquals(1, answer.calls());
+        }
+
+        @ParameterizedTest
+        @DisplayName("should have an action of the right type for every type")
+        @EnumSource(RouteActionType.class)
+        void everyType(RouteActionType type) {
+            RouteActionFactory factory = new RouteActionFactory(RecordingAnswer.replying(Response.text("")));
+            assertEquals(type, factory.getAction(type).getType());
+            assertSame(factory.getAction(type), factory.getAction(type));
+        }
+
+        @Test
+        @DisplayName("should leave the default factory's answers alone")
+        void defaultsUnaffected() {
+            RouteActionFactory factory = new RouteActionFactory(RecordingAnswer.replying(Response.text("")));
+
+            assertNotSame(factory.getAction(RouteActionType.ANSWER),
+                RouteActionFactory.defaults().getAction(RouteActionType.ANSWER));
+            assertSame(RouteActionFactory.defaults(), RouteActionFactory.defaults());
         }
     }
 }

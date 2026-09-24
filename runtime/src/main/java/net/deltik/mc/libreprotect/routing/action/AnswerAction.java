@@ -25,17 +25,37 @@ import net.deltik.mc.libreprotect.routing.RouteAction;
 import net.deltik.mc.libreprotect.routing.RouteActionType;
 import net.deltik.mc.libreprotect.routing.RouteRegistry;
 import net.deltik.mc.libreprotect.routing.UrlNormalizer;
+import net.deltik.mc.libreprotect.routing.answer.Answer;
 import net.deltik.mc.libreprotect.routing.answer.AnswerConnection;
+import net.deltik.mc.libreprotect.routing.answer.AnswerRegistry;
 
 import java.io.IOException;
 import java.net.Proxy;
 import java.net.URL;
 import java.net.URLConnection;
+import java.util.Objects;
 
 /**
  * Action that answers requests to CoreProtect's endpoints without connecting.
  */
 public class AnswerAction implements RouteAction {
+
+    private final Answer answer;
+
+    /**
+     * Answer with LibreProtect's own answers ({@link AnswerRegistry#defaults()}).
+     */
+    public AnswerAction() {
+        this(AnswerRegistry.defaults());
+    }
+
+    /**
+     * @param answer answers every request this action handles, usually an
+     *               {@link AnswerRegistry}
+     */
+    public AnswerAction(Answer answer) {
+        this.answer = Objects.requireNonNull(answer, "answer");
+    }
 
     @Override
     public RouteActionType getType() {
@@ -45,6 +65,6 @@ public class AnswerAction implements RouteAction {
     @Override
     public URLConnection createConnection(URL url, Proxy proxy, RouteRegistry.RouteMatch match) throws IOException {
         LibreProtectLogger.debug("Answering: " + UrlNormalizer.normalize(url));
-        return new AnswerConnection(url);
+        return new AnswerConnection(url, answer);
     }
 }

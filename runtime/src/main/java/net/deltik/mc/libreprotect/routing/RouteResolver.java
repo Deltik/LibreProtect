@@ -26,6 +26,7 @@ import java.io.IOException;
 import java.net.Proxy;
 import java.net.URL;
 import java.net.URLConnection;
+import java.util.Objects;
 
 /**
  * Main orchestrator for URL routing decisions.
@@ -33,14 +34,27 @@ import java.net.URLConnection;
  */
 public class RouteResolver {
     private final RouteRegistry registry;
+    private final RouteActionFactory actions;
 
     /**
-     * Create a resolver with the given registry
+     * Create a resolver with the given registry and the default actions
+     * ({@link RouteActionFactory#defaults()})
      *
      * @param registry The route registry to use for matching
      */
     public RouteResolver(RouteRegistry registry) {
+        this(registry, RouteActionFactory.defaults());
+    }
+
+    /**
+     * Create a resolver with the given registry and actions
+     *
+     * @param registry The route registry to use for matching
+     * @param actions  The actions that matched routes run
+     */
+    public RouteResolver(RouteRegistry registry, RouteActionFactory actions) {
         this.registry = registry;
+        this.actions = Objects.requireNonNull(actions, "actions");
     }
 
     /**
@@ -61,7 +75,7 @@ public class RouteResolver {
             LibreProtectLogger.debug("URL '" + target + "' matched route: " + match.getRoute().getPatternString());
         }
 
-        RouteAction action = RouteActionFactory.getAction(match.getActionType());
+        RouteAction action = actions.getAction(match.getActionType());
         return action.createConnection(url, proxy, match);
     }
 
