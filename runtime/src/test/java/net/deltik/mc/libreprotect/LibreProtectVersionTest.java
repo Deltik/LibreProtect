@@ -42,6 +42,7 @@ class LibreProtectVersionTest {
             "build information is on the test classpath");
 
         assertEquals("unknown", LibreProtectVersion.getForkVersion());
+        assertNull(LibreProtectVersion.getUpstreamVersion(), "update checks fall back to the fork version's");
     }
 
     @Test

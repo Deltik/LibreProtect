@@ -57,7 +57,7 @@ public class RouteActionFactory {
 
     /**
      * @return the factory whose ANSWER action uses
-     *         {@link AnswerRegistry#defaults()}
+     *         {@link AnswerRegistry#defaults()}, which asks no update source
      */
     public static RouteActionFactory defaults() {
         return Defaults.INSTANCE;

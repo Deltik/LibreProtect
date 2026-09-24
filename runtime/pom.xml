@@ -43,6 +43,23 @@
         <targetPath>META-INF/libreprotect/LICENSES</targetPath>
       </resource>
     </resources>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <!-- Only classes that ask for it with @Execution(CONCURRENT) run
+               their tests at the same time. -->
+          <properties>
+            <configurationParameters>
+              junit.jupiter.execution.parallel.enabled = true
+              junit.jupiter.execution.parallel.mode.default = same_thread
+              junit.jupiter.execution.parallel.mode.classes.default = same_thread
+            </configurationParameters>
+          </properties>
+        </configuration>
+      </plugin>
+    </plugins>
   </build>
 
   <dependencies>

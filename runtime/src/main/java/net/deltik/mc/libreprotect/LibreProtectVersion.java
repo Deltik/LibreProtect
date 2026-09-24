@@ -30,7 +30,7 @@ import java.util.Properties;
  * <p>The transformer writes {@value #RESOURCE} into the JAR when it builds
  * LibreProtect. It also records the commits the JAR was built from. Values
  * fall back to {@code "unknown"} when the resource is absent, as in unit
- * tests.
+ * tests, except where noted.
  */
 public final class LibreProtectVersion {
 
@@ -62,5 +62,14 @@ public final class LibreProtectVersion {
      */
     public static String getForkVersion() {
         return get("fork.version");
+    }
+
+    /**
+     * @return the version that upstream's build wrote into CoreProtect's
+     *         plugin.yml, such as {@code 24.1}, which CoreProtect compares as
+     *         its own; or {@code null} if unknown
+     */
+    public static String getUpstreamVersion() {
+        return PROPERTIES.getProperty("upstream.version");
     }
 }

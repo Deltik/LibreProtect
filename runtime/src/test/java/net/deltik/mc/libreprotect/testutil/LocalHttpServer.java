@@ -33,37 +33,115 @@ import java.net.URL;
 import java.net.URLConnection;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * An HTTP server bound to 127.0.0.1 on an ephemeral port, so tests can make
  * real connections without touching the network.
  *
- * <p>Every request gets a 200 response whose body tells how the request
- * arrived: {@code "proxied <uri>"} when the request line carries an absolute
- * URI, which is what a client sends to an HTTP proxy, or
+ * <p>By default, every request gets a 200 response whose body tells how the
+ * request arrived: {@code "proxied <uri>"} when the request line carries an
+ * absolute URI, which is what a client sends to an HTTP proxy, or
  * {@code "direct <path>"} otherwise. Tests can therefore point a connection at
- * this server either as the destination or as a {@link Proxy}.
+ * this server either as the destination or as a {@link Proxy}. A test can
+ * give its own {@link Handler} instead.
  */
 public final class LocalHttpServer implements AutoCloseable {
 
+    /** Answers one request */
+    @FunctionalInterface
+    public interface Handler {
+        void handle(HttpExchange exchange) throws IOException;
+    }
+
+    /** A request as the server received it */
+    public static final class Received {
+
+        private final String method;
+        private final URI uri;
+        private final Map<String, List<String>> headers;
+
+        private Received(String method, URI uri, Map<String, List<String>> headers) {
+            this.method = method;
+            this.uri = uri;
+            this.headers = headers;
+        }
+
+        public String method() {
+            return method;
+        }
+
+        public URI uri() {
+            return uri;
+        }
+
+        /**
+         * @return the request headers, with case-insensitive names
+         */
+        public Map<String, List<String>> headers() {
+            return headers;
+        }
+
+        /**
+         * @return the first value of the named header, or {@code null}
+         */
+        public String header(String name) {
+            List<String> values = headers.get(name);
+            return values == null || values.isEmpty() ? null : values.get(0);
+        }
+    }
+
     private final HttpServer server;
-    private final List<URI> requests = new CopyOnWriteArrayList<>();
+    private final ExecutorService executor = Executors.newCachedThreadPool(runnable -> {
+        Thread thread = new Thread(runnable, "LocalHttpServer");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private final List<Received> received = new CopyOnWriteArrayList<>();
 
     public LocalHttpServer() throws IOException {
+        this(LocalHttpServer::describe);
+    }
+
+    /**
+     * @param handler answers every request; exceptions it throws close the
+     *                connection without a response
+     */
+    public LocalHttpServer(Handler handler) throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.createContext("/", this::handle);
+        server.createContext("/", exchange -> {
+            Map<String, List<String>> headers = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+            exchange.getRequestHeaders().forEach((name, values) -> headers.put(name, List.copyOf(values)));
+            received.add(new Received(exchange.getRequestMethod(), exchange.getRequestURI(), headers));
+            try (exchange) {
+                handler.handle(exchange);
+            }
+        });
+        server.setExecutor(executor);
         server.start();
     }
 
-    private void handle(HttpExchange exchange) throws IOException {
+    private static void describe(HttpExchange exchange) throws IOException {
         URI uri = exchange.getRequestURI();
-        requests.add(uri);
-        byte[] body = ((uri.isAbsolute() ? "proxied " : "direct ") + uri).getBytes(StandardCharsets.UTF_8);
-        exchange.sendResponseHeaders(200, body.length);
+        respond(exchange, 200, ((uri.isAbsolute() ? "proxied " : "direct ") + uri).getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Send a complete response with a known length.
+     */
+    public static void respond(HttpExchange exchange, int status, byte[] body) throws IOException {
+        exchange.sendResponseHeaders(status, body.length == 0 ? -1 : body.length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(body);
         }
+    }
+
+    public static void respond(HttpExchange exchange, int status, String body) throws IOException {
+        respond(exchange, status, body.getBytes(StandardCharsets.UTF_8));
     }
 
     public int getPort() {
@@ -95,7 +173,14 @@ public final class LocalHttpServer implements AutoCloseable {
      * @return the request URIs received so far, in order
      */
     public List<URI> getRequests() {
-        return List.copyOf(requests);
+        return received.stream().map(Received::uri).toList();
+    }
+
+    /**
+     * @return the requests received so far, in order
+     */
+    public List<Received> getReceived() {
+        return List.copyOf(received);
     }
 
     /**
@@ -110,5 +195,6 @@ public final class LocalHttpServer implements AutoCloseable {
     @Override
     public void close() {
         server.stop(0);
+        executor.shutdownNow();
     }
 }

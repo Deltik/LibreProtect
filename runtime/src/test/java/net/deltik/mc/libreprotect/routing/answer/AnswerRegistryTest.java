@@ -230,6 +230,18 @@ class AnswerRegistryTest {
         }
 
         @Test
+        @DisplayName("should answer update checks with the update answer it is given")
+        void givenUpdateAnswer() throws IOException {
+            UpdateAnswer updates = new UpdateAnswer();
+            AnswerRegistry given = AnswerRegistry.defaults(updates);
+
+            assertSame(updates, given.answerFor(MockUrlFactory.updateUrl()));
+            assertInstanceOf(TranslationAnswer.class, given.answerFor(MockUrlFactory.translateUrl()));
+            assertInstanceOf(StatsAnswer.class, given.answerFor(MockUrlFactory.statsUrl()));
+            assertThrows(NullPointerException.class, () -> AnswerRegistry.defaults(null));
+        }
+
+        @Test
         @DisplayName("should answer update checks with the running version")
         void answersUpdates() throws IOException {
             Response response = registry.answer(

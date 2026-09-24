@@ -27,6 +27,7 @@ import java.net.URL;
 import java.util.EnumMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Answers each request with the {@link Answer} for its endpoint.
@@ -90,12 +91,22 @@ public final class AnswerRegistry implements Answer {
     }
 
     /**
-     * @return a registry with LibreProtect's own answer for each endpoint
+     * @return a registry with LibreProtect's own answer for each endpoint,
+     *         which answers update checks without asking any update source
      */
     public static AnswerRegistry defaults() {
+        return defaults(new UpdateAnswer());
+    }
+
+    /**
+     * @param updates the answer to update checks, which asks the configured
+     *                update sources
+     * @return a registry with LibreProtect's own answer for each endpoint
+     */
+    public static AnswerRegistry defaults(UpdateAnswer updates) {
         Map<Endpoint, Answer> answers = new EnumMap<>(Endpoint.class);
         answers.put(Endpoint.TRANSLATION, new TranslationAnswer());
-        answers.put(Endpoint.UPDATE, new UpdateAnswer());
+        answers.put(Endpoint.UPDATE, Objects.requireNonNull(updates, "updates"));
         answers.put(Endpoint.STATS, new StatsAnswer());
         return new AnswerRegistry(answers);
     }
