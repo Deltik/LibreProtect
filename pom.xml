@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>net.deltik.mc</groupId>
+  <artifactId>libreprotect-parent</artifactId>
+  <!-- Module versions are internal. The shipped plugin version is derived from
+       the upstream CoreProtect version and upstream.lock by scripts/lp. -->
+  <version>0-SNAPSHOT</version>
+  <packaging>pom</packaging>
+
+  <name>LibreProtect</name>
+  <description>Privacy-hardened build of CoreProtect</description>
+  <url>https://github.com/Deltik/LibreProtect</url>
+
+  <licenses>
+    <license>
+      <name>GPL-3.0-or-later</name>
+      <url>https://www.gnu.org/licenses/gpl-3.0.html</url>
+      <comments>The plugin JAR includes CoreProtect, which is licensed under the Artistic License 2.0. See NOTICE.</comments>
+    </license>
+  </licenses>
+
+  <developers>
+    <developer>
+      <id>Deltik</id>
+      <url>https://github.com/Deltik</url>
+    </developer>
+  </developers>
+
+  <scm>
+    <connection>scm:git:https://github.com/Deltik/LibreProtect.git</connection>
+    <developerConnection>scm:git:git@github.com:Deltik/LibreProtect.git</developerConnection>
+    <url>https://github.com/Deltik/LibreProtect</url>
+  </scm>
+
+  <issueManagement>
+    <system>GitHub Issues</system>
+    <url>https://github.com/Deltik/LibreProtect/issues</url>
+  </issueManagement>
+
+  <modules>
+    <module>runtime</module>
+    <module>transformer</module>
+    <module>integration/egress-agent</module>
+    <module>integration/test-plugin</module>
+  </modules>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <!-- Overridden by scripts/lp with the upstream commit time for reproducible builds -->
+    <project.build.outputTimestamp>2026-01-01T00:00:00Z</project.build.outputTimestamp>
+
+    <asm.version>9.10.1</asm.version>
+    <gson.version>2.14.0</gson.version>
+    <junit.version>6.1.3</junit.version>
+    <!-- Oldest server API that upstream supports; compiling against it keeps
+         LibreProtect's runtime from depending on newer server APIs. -->
+    <paper-api.version>1.16.5-R0.1-SNAPSHOT</paper-api.version>
+
+    <!-- How many JVMs run test classes at once, and their options.
+         scripts/lp sets the number by the machine's processors and memory.
+         The tests run short and side by side: a small heap, the serial
+         collector and the quick compiler keep each JVM's memory, and its
+         threads for garbage collection and compiling, few. -->
+    <lp.test.forks>2</lp.test.forks>
+    <lp.test.jvm>-Xmx512m -XX:+UseSerialGC -XX:TieredStopAtLevel=1</lp.test.jvm>
+  </properties>
+
+  <repositories>
+    <repository>
+      <id>papermc</id>
+      <url>https://repo.papermc.io/repository/maven-public/</url>
+    </repository>
+  </repositories>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>${junit.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>com.destroystokyo.paper</groupId>
+        <artifactId>paper-api</artifactId>
+        <version>${paper-api.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.ow2.asm</groupId>
+        <artifactId>asm</artifactId>
+        <version>${asm.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.ow2.asm</groupId>
+        <artifactId>asm-tree</artifactId>
+        <version>${asm.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.ow2.asm</groupId>
+        <artifactId>asm-util</artifactId>
+        <version>${asm.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.google.code.gson</groupId>
+        <artifactId>gson</artifactId>
+        <version>${gson.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>3.15.0</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>3.6.0</version>
+          <configuration>
+            <!-- Test classes run in several JVMs at once, each JVM running
+                 one class at a time. -->
+            <forkCount>${lp.test.forks}</forkCount>
+            <reuseForks>true</reuseForks>
+            <argLine>${lp.test.jvm}</argLine>
+            <!-- The classes that took longest last time start first, so that
+                 none starts late and ends alone. Surefire keeps their times
+                 in .surefire-* beside each module's pom.xml. -->
+            <runOrder>balanced</runOrder>
+          </configuration>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-jar-plugin</artifactId>
+          <version>3.5.0</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-shade-plugin</artifactId>
+          <version>3.6.2</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-resources-plugin</artifactId>
+          <version>3.3.1</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-install-plugin</artifactId>
+          <version>3.1.4</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-clean-plugin</artifactId>
+          <version>3.5.0</version>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
+</project>

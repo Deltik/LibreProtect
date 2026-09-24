@@ -1,0 +1,4 @@
+# LF line endings everywhere, including Windows checkouts, except for Windows batch files
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.jar binary

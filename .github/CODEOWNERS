@@ -1,0 +1,11 @@
+# With "Require review from Code Owners" enabled on main, these paths need
+# the maintainer's approval. Pull requests that change nothing else, notably
+# the upstream.lock bumps that upstream-watch opens with auto-merge, merge
+# once CI passes.
+
+# What LibreProtect trusts in upstream
+/audit/             @Deltik
+# What CI is allowed to do
+/.github/           @Deltik
+/scripts/ci/        @Deltik
+/scripts/lib/       @Deltik

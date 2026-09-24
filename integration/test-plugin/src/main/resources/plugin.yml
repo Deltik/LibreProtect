@@ -1,0 +1,6 @@
+name: LibreProtectIT
+main: net.deltik.mc.lpit.ItPlugin
+version: "1"
+api-version: "1.16"
+depend: [CoreProtect]
+description: Integration test probe for LibreProtect. Never install this on a real server; it shuts the server down.

@@ -1,0 +1,51 @@
+name: Bug report
+description: Something in LibreProtect doesn't work as it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. If stock CoreProtect has the same problem, please report it to [CoreProtect](https://github.com/PlayPro/CoreProtect/issues) instead, because LibreProtect gets CoreProtect's fixes with each release.
+
+  - type: input
+    id: version
+    attributes:
+      label: LibreProtect version
+      description: The `Version:` line of `/co status`
+      placeholder: LibreProtect v24.1-libre1
+    validations:
+      required: true
+
+  - type: input
+    id: server
+    attributes:
+      label: Server software and version
+      description: The output of `/version`
+      placeholder: Paper 26.2 build 129
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Include error messages from the console.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: stock
+    attributes:
+      label: Does stock CoreProtect have the same problem?
+      options:
+        - "No, only LibreProtect"
+        - "I haven't checked"
+    validations:
+      required: true
+
+  - type: textarea
+    id: policy
+    attributes:
+      label: libreprotect.yml
+      description: The contents of `plugins/CoreProtect/libreprotect.yml`, if you changed it
+      render: yaml

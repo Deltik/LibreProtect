@@ -1,0 +1,41 @@
+LibreProtect
+https://github.com/Deltik/LibreProtect
+
+LibreProtect is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. See LICENSE.
+
+LibreProtect is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+CoreProtect
+-----------
+
+LibreProtect's plugin JAR is a Modified Version of CoreProtect, which is
+Copyright (c) Intelli and the CoreProtect contributors and licensed under the
+Artistic License 2.0 (see LICENSES/Artistic-2.0.txt).
+https://github.com/PlayPro/CoreProtect
+
+LibreProtect distributes that Modified Version under the GNU General Public
+License, version 3 or later, as section 4(c)(ii) of the Artistic License 2.0
+permits. CoreProtect's own code remains available under the Artistic License
+2.0 from the CoreProtect project.
+
+Some of LibreProtect's source files, including tests and build tools, contain
+portions of CoreProtect and credit it. LibreProtect distributes them under the
+GNU General Public License, version 3 or later, on the same terms as the plugin
+JAR.
+
+As section 4 of the Artistic License 2.0 requires, each LibreProtect JAR
+documents how it differs from CoreProtect in META-INF/libreprotect/DIFFERENCES.md.
+Each release also provides that file and a source archive containing both
+LibreProtect's source and CoreProtect's source at the commit the release was
+built from.
+
+The Artistic License 2.0 grants no rights to CoreProtect's name (section 12).
+LibreProtect is not affiliated with or endorsed by CoreProtect or its authors.
+It uses the name "CoreProtect" only to say what it is built from and
+compatible with, and as the plugin name that other plugins and existing data
+folders depend on.

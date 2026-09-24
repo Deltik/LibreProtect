@@ -1,0 +1,134 @@
+{
+  "comment": [
+    "The reviewed state of upstream CoreProtect. See transformer/src/main/java/net/deltik/mc/libreprotect/transformer/Audit.java for the rules.",
+    "The build fails on a FAIL finding unless 'allow' lists that rule at that site. A REVIEW finding blocks releases until a maintainer accepts it.",
+    "A site ending in '*' matches by prefix. Pin FAIL-rule allowances to a method so new uses get reviewed; REVIEW-rule allowances can cover a whole class so upstream renames don't cause churn.",
+    "To accept upstream changes, compare dist/audit-observed.json with this file and copy over what you have reviewed, in a pull request.",
+    "egressExemptPrefixes: com/clickhouse/ is the ClickHouse JDBC driver, bundled on upstream's master branch after v24.1. It connects only to the ClickHouse server configured in config.yml, so its network code is neither redirected nor failed by the audit. Its bundled org/roaringbitmap/ and org/jspecify/annotations/ are accepted with it.",
+    "versionReads: the upstream methods that read a plugin's version or full name (getVersion() or getFullName() of PluginDescriptionFile, getVersion() or getDisplayName() of PluginMeta) or name plugin.yml in a string, as code that reads it itself does. CoreProtect compares its own version with others only in VersionUtils.getPluginVersion(), which the transformer has read upstream's version instead of LibreProtect's. StatusCommand, Patch and ShutdownService only show the version, loadWorldEdit reads WorldEdit's, and getBranch reads the branch from plugin.yml. A new method is a version-read REVIEW: if CoreProtect compares its own version there, it would compare LibreProtect's, whose leading numbers name upstream's nearest release tag, so extend the transformer before accepting it.",
+    "Reviewed against CoreProtect v24.1 (0af209a0a05135216599113c0b5e2638ad3c704b)."
+  ],
+  "allow": [
+    {
+      "rule": "process",
+      "site": "net/coreprotect/utility/SystemUtils#getAppleSiliconSpeed()Ljava/lang/Double;",
+      "reason": "Runs the constant command 'sysctl -n machdep.cpu.brand_string' on macOS to read the CPU model for /co status. Local only."
+    },
+    {
+      "rule": "process",
+      "site": "net/coreprotect/utility/SystemUtils#getProcessorModel()Ljava/lang/String;",
+      "reason": "Runs the constant command 'sysctl -n machdep.cpu.brand_string' on macOS to read the CPU model for /co status. Local only."
+    },
+    {
+      "rule": "network-api",
+      "site": "net/coreprotect/hikari/HikariJNDIFactory#*",
+      "reason": "Bundled HikariCP's JNDI DataSource factory. It is only used when a JNDI DataSource is configured, and CoreProtect configures HikariCP with a JDBC URL."
+    },
+    {
+      "rule": "network-api",
+      "site": "net/coreprotect/hikari/HikariConfig#getObjectOrPerformJndiLookup(Ljava/lang/Object;)Ljava/lang/Object;",
+      "reason": "Bundled HikariCP's JNDI lookup, only reached when a JNDI name is configured. CoreProtect never sets one."
+    },
+    {
+      "rule": "network-api",
+      "site": "net/coreprotect/hikari/pool/PoolBase#initializeDataSource()V",
+      "reason": "Bundled HikariCP's JNDI lookup, only reached when dataSourceJNDI is configured. CoreProtect never sets it."
+    },
+    {
+      "rule": "system-property",
+      "site": "net/coreprotect/config/ConfigHandler#*",
+      "reason": "Sets java.io.tmpdir to 'cache' for SQLite's native library extraction. Upstream behavior that affects the whole server, but not a network or privacy concern."
+    },
+    {
+      "rule": "self-inspection",
+      "site": "net/coreprotect/patch/Patch#*",
+      "reason": "Opens its own JAR to list the database schema patch classes under net/coreprotect/patch/script/."
+    },
+    {
+      "rule": "dynamic-class-loading",
+      "site": "net/coreprotect/patch/Patch#*",
+      "reason": "Loads the database schema patch classes by a version-derived name: net.coreprotect.patch.script.__<version>."
+    }
+  ],
+  "egressExemptPrefixes": [
+    "com/clickhouse/"
+  ],
+  "hosts": [
+    "coreprotect.net",
+    "error-reporting.coreprotect.net",
+    "stats.coreprotect.net",
+    "update.coreprotect.net"
+  ],
+  "extensionPoints": [
+    "net.coreprotect.utility.extensions.BackgroundService",
+    "net.coreprotect.utility.extensions.DatabaseMigration"
+  ],
+  "libraryPackages": [
+    "com/clickhouse/",
+    "net/coreprotect/",
+    "net/coreprotect/bukkit/",
+    "net/coreprotect/charts/",
+    "net/coreprotect/config/",
+    "net/coreprotect/hikari/",
+    "net/coreprotect/hikari/hibernate/",
+    "net/coreprotect/hikari/metrics/",
+    "net/coreprotect/hikari/metrics/dropwizard/",
+    "net/coreprotect/hikari/metrics/micrometer/",
+    "net/coreprotect/hikari/metrics/prometheus/",
+    "net/coreprotect/hikari/pool/",
+    "net/coreprotect/hikari/util/",
+    "net/coreprotect/json/",
+    "org/jspecify/annotations/",
+    "org/roaringbitmap/"
+  ],
+  "dependencies": [
+    "com.clickhouse:clickhouse-jdbc:compile",
+    "com.fastasyncworldedit:FastAsyncWorldEdit-Bukkit:provided",
+    "com.fastasyncworldedit:FastAsyncWorldEdit-Core:provided",
+    "com.github.DeadSilenceIV:AdvancedChestsAPI:provided",
+    "com.github.seeseemelk:MockBukkit-v1.21:test",
+    "com.zaxxer:HikariCP:compile",
+    "io.papermc.paper:paper-api:provided",
+    "net.bytebuddy:byte-buddy-agent:test",
+    "net.bytebuddy:byte-buddy:test",
+    "org.apache.logging.log4j:log4j-api:compile",
+    "org.apache.logging.log4j:log4j-core:compile",
+    "org.bstats:bstats-bukkit:compile",
+    "org.junit.jupiter:junit-jupiter-api:test",
+    "org.junit.jupiter:junit-jupiter-engine:test",
+    "org.junit.jupiter:junit-jupiter-params:test",
+    "org.mockito:mockito-core:test",
+    "org.mockito:mockito-junit-jupiter:test",
+    "org.slf4j:slf4j-simple:test",
+    "org.xerial:sqlite-jdbc:test"
+  ],
+  "repositories": [
+    "https://hub.spigotmc.org/nexus/content/groups/public/",
+    "https://jitpack.io",
+    "https://maven.enginehub.org/repo/",
+    "https://repo.codemc.org/repository/maven-public/",
+    "https://repo.maven.apache.org/maven2/",
+    "https://repo.papermc.io/repository/maven-public/"
+  ],
+  "buildPlugins": [
+    "org.apache.maven.plugins:maven-compiler-plugin",
+    "org.apache.maven.plugins:maven-enforcer-plugin",
+    "org.apache.maven.plugins:maven-jar-plugin",
+    "org.apache.maven.plugins:maven-shade-plugin",
+    "org.apache.maven.plugins:maven-surefire-plugin",
+    "profile maven-install: org.apache.maven.plugins:maven-antrun-plugin"
+  ],
+  "profiles": [
+    "maven-install"
+  ],
+  "pluginLibraries": [],
+  "versionReads": [
+    "net/coreprotect/command/StatusCommand$1BasicThread#run()V",
+    "net/coreprotect/patch/Patch$1runPatch#run()V",
+    "net/coreprotect/services/ShutdownService#safeShutdown(Lorg/bukkit/plugin/Plugin;)V",
+    "net/coreprotect/utility/VersionUtils#getBranch()Ljava/lang/String;",
+    "net/coreprotect/utility/VersionUtils#getPluginVersion()Ljava/lang/String;",
+    "net/coreprotect/utility/VersionUtils#loadWorldEdit()V"
+  ],
+  "licenseSha256": "f2e0707902c4cd92155bb081a6eb0d77ebab789eafb212659fa6f44fcdca531b"
+}

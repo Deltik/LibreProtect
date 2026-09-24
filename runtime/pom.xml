@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>net.deltik.mc</groupId>
+    <artifactId>libreprotect-parent</artifactId>
+    <version>0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>libreprotect-runtime</artifactId>
+  <name>LibreProtect Runtime</name>
+  <description>
+    Classes added to the CoreProtect plugin JAR: the network egress gate, the
+    network policy, message branding, the bootstrap hook, and placeholders for
+    upstream's closed-source extension points. Depends only on the JDK and the
+    Bukkit API, never on CoreProtect itself.
+  </description>
+
+  <properties>
+    <!-- Must not exceed the bytecode level of upstream CoreProtect -->
+    <maven.compiler.release>11</maven.compiler.release>
+    <maven.compiler.testRelease>21</maven.compiler.testRelease>
+  </properties>
+
+  <build>
+    <finalName>libreprotect-runtime</finalName>
+    <resources>
+      <!-- License notices travel inside the plugin JAR. LibreProtect's own
+           directory avoids clashing with META-INF/LICENSE from bundled libraries. -->
+      <resource>
+        <directory>${project.basedir}/..</directory>
+        <targetPath>META-INF/libreprotect</targetPath>
+        <includes>
+          <include>LICENSE</include>
+          <include>NOTICE</include>
+        </includes>
+      </resource>
+      <resource>
+        <directory>${project.basedir}/../LICENSES</directory>
+        <targetPath>META-INF/libreprotect/LICENSES</targetPath>
+      </resource>
+    </resources>
+  </build>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.destroystokyo.paper</groupId>
+      <artifactId>paper-api</artifactId>
+      <scope>provided</scope>
+      <exclusions>
+        <!-- Pulled in by json-simple. Surefire refuses to run with JUnit 4.10
+             on the test classpath. -->
+        <exclusion>
+          <groupId>junit</groupId>
+          <artifactId>junit</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.platform</groupId>
+      <artifactId>junit-platform-launcher</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>

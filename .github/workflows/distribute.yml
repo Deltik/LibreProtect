@@ -1,0 +1,93 @@
+name: Distribute
+
+# Publishes a GitHub release to Modrinth and tracks its SpigotMC update.
+# The release workflow calls this after publishing. upstream-watch
+# dispatches it again while the newest release isn't on Modrinth, so a
+# failed or postponed upload is retried.
+#
+# Opt in with the repository variables MODRINTH_PROJECT_ID and
+# SPIGOTMC_RESOURCE_ID, and the MODRINTH_TOKEN secret in the modrinth
+# environment. scripts/setup-github.sh sets them up.
+
+run-name: Distribute ${{ inputs.tag }}
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to distribute, such as v24.1-libre1
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: distribute-${{ inputs.tag }}
+
+jobs:
+  modrinth:
+    name: Publish to Modrinth
+    if: github.ref == 'refs/heads/main' && vars.MODRINTH_PROJECT_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: modrinth
+    permissions:
+      # To link the GitHub release to Modrinth
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Publish
+        run: scripts/ci/modrinth.sh "$TAG"
+        env:
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          MODRINTH_PROJECT_ID: ${{ vars.MODRINTH_PROJECT_ID }}
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+
+  spigotmc:
+    name: Track the SpigotMC update
+    if: github.ref == 'refs/heads/main' && vars.SPIGOTMC_RESOURCE_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Open, update or close the SpigotMC issue
+        run: scripts/ci/spigotmc.sh "$TAG"
+        env:
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          SPIGOTMC_RESOURCE_ID: ${{ vars.SPIGOTMC_RESOURCE_ID }}
+
+  report:
+    name: Report outcome
+    needs: [modrinth, spigotmc]
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Open, update or close the failure issue
+        run: scripts/ci/report.sh "Distribution" "$SUCCEEDED" "$TAG"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          SUCCEEDED: ${{ !contains(fromJSON('["failure", "cancelled"]'), needs.modrinth.result) && !contains(fromJSON('["failure", "cancelled"]'), needs.spigotmc.result) }}

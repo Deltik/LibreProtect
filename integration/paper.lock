@@ -1,0 +1,8 @@
+# Paper build used by the integration tests. Pin the build and its SHA-256
+# so a test failure always means CoreProtect or LibreProtect changed.
+# Latest builds: https://fill.papermc.io/v3/projects/paper/versions/<version>/builds
+
+PAPER_VERSION=26.2
+PAPER_BUILD=129
+PAPER_URL=https://fill-data.papermc.io/v1/objects/b1d8f6bfa1b6101fa8e947b53041cb3bdf5540e7b83b6547ca19ba7edefeb083/paper-26.2-129.jar
+PAPER_SHA256=b1d8f6bfa1b6101fa8e947b53041cb3bdf5540e7b83b6547ca19ba7edefeb083

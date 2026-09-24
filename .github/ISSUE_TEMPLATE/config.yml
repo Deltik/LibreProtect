@@ -1,0 +1,7 @@
+contact_links:
+  - name: Security problem or network leak
+    url: https://github.com/Deltik/LibreProtect/security/advisories/new
+    about: Report it privately instead of in a public issue.
+  - name: Problem that stock CoreProtect has too
+    url: https://github.com/PlayPro/CoreProtect/issues
+    about: LibreProtect gets CoreProtect's fixes with each release.

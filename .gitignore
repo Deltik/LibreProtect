@@ -1,0 +1,23 @@
+# Build output
+/build/
+/dist/
+target/
+dependency-reduced-pom.xml
+# Test classes' run times, which order the next run's
+.surefire-*
+
+# IDE files
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.project
+.classpath
+.settings/
+
+# Temporary files
+*.tmp
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,48 @@
+name: Upstream watch
+
+# Every half hour, compares the desired state with what exists and closes
+# the gap:
+#   - a new upstream release gets a bump pull request, with CI and auto-merge,
+#     or, if LibreProtect can't build its kind of tag, an issue and a failed run
+#   - upstream.lock on main without a matching GitHub release gets a release
+#   - a new commit on upstream's default branch gets a development build
+#   - a moved upstream release tag gets an issue
+#   - the newest release gets published to Modrinth, and an issue with
+#     its SpigotMC update's details until SpigotMC shows it
+# Every step is idempotent, so a missed or repeated run does no harm.
+
+on:
+  schedule:
+    - cron: '17,47 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-watch
+
+jobs:
+  watch:
+    name: Reconcile
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # To push bump branches
+      contents: write
+      pull-requests: write
+      # To dispatch workflows and cycle this one
+      actions: write
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Needed to push bump branches; no upstream code runs in this job
+          persist-credentials: true
+
+      - name: Reconcile
+        run: scripts/ci/upstream-watch.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODRINTH_PROJECT_ID: ${{ vars.MODRINTH_PROJECT_ID }}
+          SPIGOTMC_RESOURCE_ID: ${{ vars.SPIGOTMC_RESOURCE_ID }}

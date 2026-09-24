@@ -1,0 +1,14 @@
+# The upstream CoreProtect release that LibreProtect releases are built from.
+#
+# The upstream-watch workflow opens a pull request that updates this file when
+# upstream publishes a new release. Development builds use only UPSTREAM_REPO
+# from this file, and track the upstream default branch instead.
+#
+# FORK_REVISION is the N in "<upstream tag>-libreN", such as 24.1-libre1 for
+# v24.1. Reset it to 1 whenever UPSTREAM_TAG changes; increment it to release
+# LibreProtect-only changes.
+
+UPSTREAM_REPO=https://github.com/PlayPro/CoreProtect.git
+UPSTREAM_TAG=v24.1
+UPSTREAM_SHA=0af209a0a05135216599113c0b5e2638ad3c704b
+FORK_REVISION=1

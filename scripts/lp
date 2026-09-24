@@ -1,0 +1,455 @@
+#!/usr/bin/env bash
+# Copyright (C) 2026 Deltik <https://www.deltik.net/>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of LibreProtect.
+#
+# LibreProtect is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# LibreProtect is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with LibreProtect.  If not, see <https://www.gnu.org/licenses/>.
+
+# LibreProtect build entry point. CI runs exactly these commands too.
+#
+#   scripts/lp build                Build the upstream release pinned in upstream.lock
+#   scripts/lp build --ref master   Development build of any upstream branch, tag or commit
+#   scripts/lp it                   Integration test the last build on a real Paper server
+#                                   (downloads Paper once and accepts the Minecraft EULA)
+#   scripts/lp sources              Archive the complete source of the last build (needs a clean commit)
+#   scripts/lp clean                Remove build output
+#   scripts/lp headers [--fix]      Check that Java files and shell scripts begin with the
+#                                   license notice, or add it to those that have none
+#
+# Options for build:
+#   --ref REF        Upstream ref to build instead of the locked release. The build
+#                    is named after what git describe says about it, such as
+#                    24.0-121-gd5cad31-libre-dev, while a release is named after
+#                    its tag, such as 24.1-libre1.
+#   --skip-tests     Skip LibreProtect's unit tests
+#
+# Environment:
+#   JAVA_HOME        A JDK 25 or newer (with javac). Found automatically if unset.
+#   LP_TEST_FORKS    How many JVMs each module runs its unit test classes in at once.
+#                    By default, as many as the processors and the available memory
+#                    allow, up to 8.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BUILD_DIR="$ROOT/build"
+DIST_DIR="$ROOT/dist"
+UPSTREAM_DIR="$BUILD_DIR/upstream"
+MIN_JAVA=25
+
+log() { printf '==> %s\n' "$*" >&2; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+    # The first comment after the shebang, other than the license notice
+    awk 'NR == 1 { next }
+        /^#/ { sub(/^# ?/, ""); text = text $0 "\n"; next }
+        text ~ /^Copyright / { text = ""; next }
+        { print text; exit }' "${BASH_SOURCE[0]}"
+}
+
+javac_major() {
+    local version
+    version="$("$1/bin/javac" -version 2>&1)" || return 1
+    version="${version#javac }"
+    printf '%s' "${version%%.*}"
+}
+
+find_jdk() {
+    local candidate major
+    local candidates=()
+    [[ -n "${JAVA_HOME:-}" ]] && candidates+=("$JAVA_HOME")
+    if command -v javac >/dev/null 2>&1; then
+        candidates+=("$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")")
+    fi
+    candidates+=("$HOME"/.jdks/* /usr/lib/jvm/* /opt/*jdk* /opt/java/*)
+
+    for candidate in "${candidates[@]}"; do
+        [[ -x "$candidate/bin/javac" ]] || continue
+        major="$(javac_major "$candidate")" || continue
+        if [[ "$major" =~ ^[0-9]+$ ]] && (( major >= MIN_JAVA )); then
+            export JAVA_HOME="$candidate"
+            return 0
+        fi
+    done
+    die "No JDK $MIN_JAVA+ with javac found. Install one or set JAVA_HOME."
+}
+
+# shellcheck source=scripts/lib/lock.sh
+source "$ROOT/scripts/lib/lock.sh"
+
+# Check out an upstream ref into $UPSTREAM_DIR and print its commit SHA
+checkout_upstream() {
+    local ref="$1" sha
+    if [[ ! -d "$UPSTREAM_DIR/.git" ]]; then
+        log "Cloning $UPSTREAM_REPO"
+        git clone --quiet --filter=blob:none --no-checkout "$UPSTREAM_REPO" "$UPSTREAM_DIR"
+    fi
+    git -C "$UPSTREAM_DIR" remote set-url origin "$UPSTREAM_REPO"
+    # With every tag, including those on no branch, since builds are named after upstream's nearest release tag
+    git -C "$UPSTREAM_DIR" fetch --quiet --force --tags origin '+refs/heads/*:refs/remotes/origin/*'
+
+    sha="$(git -C "$UPSTREAM_DIR" rev-parse --verify --quiet "refs/remotes/origin/$ref^{commit}" \
+        || git -C "$UPSTREAM_DIR" rev-parse --verify --quiet "$ref^{commit}")" \
+        || die "Upstream ref '$ref' not found"
+
+    git -C "$UPSTREAM_DIR" checkout --quiet --force --detach "$sha"
+    git -C "$UPSTREAM_DIR" clean -xfdq
+    printf '%s' "$sha"
+}
+
+# Upstream's version as its pom declares it, such as 24.1, which upstream's
+# build writes into plugin.yml and CoreProtect compares as its own
+upstream_version() {
+    # The project version is the first <version> in upstream's pom, after the parent-less coordinates
+    sed -n 's:^  <version>\(.*\)</version>.*:\1:p' "$UPSTREAM_DIR/pom.xml" | head -n 1
+}
+
+# The upstream tags that development builds are named after, as git describe
+# options: v and two or three numbers, such as v24.1, which are the release
+# tags that upstream-watch takes. git describe passes over any other tag, such
+# as a pre-release tag or v25, for the nearest tag of this kind.
+RELEASE_TAGS=(--match 'v[0-9]*.[0-9]*' --exclude 'v*[!0-9.]*' --exclude 'v*.*.*.*')
+
+# What git describe says about the upstream checkout, given options that choose
+# the tags: the nearest such tag, how many commits the checkout is past it, and
+# its commit, such as v24.0-121-gd5cad31, or v24.1-0-g0af209a at the tag
+# itself. The commit is abbreviated to 7 characters unless more are needed to
+# tell it apart. A checkout with local changes would be named ...-dirty, but
+# checkout_upstream resets the checkout first; --dirty is a safeguard.
+upstream_describe() {
+    git -C "$UPSTREAM_DIR" describe --tags --long --dirty --abbrev=7 "$@" \
+        || die "git describe finds no upstream tag ($*) that upstream's commit $(git -C "$UPSTREAM_DIR" rev-parse --short HEAD) descends from, so the build can't be named after one. checkout_upstream fetches all of upstream's tags; build a ref from after upstream's first release tag."
+}
+
+# Check that LibreProtect's update check (ForkVersion) can read a version, and
+# that a release's version fits in a Modrinth version number
+check_version() {
+    local version="$1" release="$2"
+    # Two or three numbers, each of which fits in an int, as CoreProtect and ForkVersion parse them
+    local upstream='[0-9]{1,9}\.[0-9]{1,9}(\.[0-9]{1,9})?'
+    if $release; then
+        [[ "$version" =~ ^${upstream}-libre[0-9]{1,9}$ ]] \
+            || die "The release version $version isn't one that LibreProtect's update check reads. It reads versions named after release tags of two or three numbers, such as v24.1."
+        # Only releases go to Modrinth, whose version numbers have at most 32 characters
+        (( ${#version} <= 32 )) || die "The release version $version is longer than the 32 characters that Modrinth allows."
+    else
+        [[ "$version" =~ ^${upstream}-[0-9]{1,9}-g[0-9a-f]{7,40}(-dirty)?-libre-dev$ ]] \
+            || die "The development build's version $version isn't one that LibreProtect's update check reads. It reads versions named after release tags of two or three numbers, such as v24.1."
+    fi
+}
+
+# Upstream's builds for development builds, kept by what went into them, so
+# that building the same upstream commit with the same settings again takes a
+# copy rather than another Maven build. Upstream's build is reproducible: it
+# would give the same bytes again. Releases never use them. scripts/lp clean
+# removes them, like all build output.
+UPSTREAM_BUILDS="$BUILD_DIR/upstream-builds"
+
+# The settings of upstream's build of the checkout at commit $1 with the Maven
+# arguments that follow, as a SHA-256: the commit, the arguments, the JDK and
+# the options that the environment gives Java and Maven, the Maven version, the
+# user's Maven settings and mavenrc files, and the Maven settings in
+# LibreProtect's .mvn directory, which Maven finds above build/upstream too.
+# What the local Maven repository already holds isn't part of it.
+upstream_build_key() {
+    local sha="$1" config
+    shift
+    {
+        printf 'commit %s\n' "$sha"
+        printf 'argument %s\n' "$@"
+        "$JAVA_HOME/bin/java" -version 2>&1
+        printf 'MAVEN_ARGS=%s\nMAVEN_OPTS=%s\n' "${MAVEN_ARGS:-}" "${MAVEN_OPTS:-}"
+        printf 'JAVA_TOOL_OPTIONS=%s\nJDK_JAVA_OPTIONS=%s\n' "${JAVA_TOOL_OPTIONS:-}" "${JDK_JAVA_OPTIONS:-}"
+        for config in "$ROOT"/.mvn/{wrapper/maven-wrapper.properties,maven.config,jvm.config,extensions.xml} \
+            "$HOME"/.m2/{settings.xml,toolchains.xml} "$HOME/.mavenrc" /etc/mavenrc; do
+            if [[ -f "$config" ]]; then
+                printf 'file %s\n' "$config"
+                cat "$config"
+            fi
+        done
+    } | sha256sum | cut -d ' ' -f 1
+}
+
+# Build upstream's checkout at commit $1 with Maven and the arguments that
+# follow, or restore its output from an earlier build with the same inputs
+build_upstream() {
+    local sha="$1" key
+    key="$(upstream_build_key "$@")"
+    shift
+    local kept="$UPSTREAM_BUILDS/$key"
+    if [[ -d "$kept/target" ]]; then
+        log "Using upstream's earlier build of $sha with the same settings ($kept)"
+        cp -a "$kept/target" "$UPSTREAM_DIR/target"
+        if [[ -f "$kept/dependency-reduced-pom.xml" ]]; then
+            cp -a "$kept/dependency-reduced-pom.xml" "$UPSTREAM_DIR/"
+        fi
+        return
+    fi
+
+    log "Building upstream CoreProtect unmodified"
+    "$ROOT/mvnw" "$@"
+    # Kept whole, so that a restored checkout looks as it does after a build
+    rm -rf "$kept.new"
+    mkdir -p "$kept.new"
+    cp -a "$UPSTREAM_DIR/target" "$kept.new/target"
+    if [[ -f "$UPSTREAM_DIR/dependency-reduced-pom.xml" ]]; then
+        cp -a "$UPSTREAM_DIR/dependency-reduced-pom.xml" "$kept.new/"
+    fi
+    rm -rf "$kept"
+    mv "$kept.new" "$kept"
+}
+
+# How many of something to run at once: one per processor that this process
+# may use, but no more than $2, and no more than fit in the memory available
+# now at $1 MiB each. A cgroup's limits count too, such as a container's.
+parallelism() {
+    local each="$1" most="$2" count memory="" cgroup="" limit used cache quota period
+    # nproc counts the processors that this process may run on; macOS has sysctl instead
+    count="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null)"
+    [[ "$count" =~ ^[1-9][0-9]*$ ]] || count=1
+    # Memory available now, in KiB
+    if [[ -r /proc/meminfo ]]; then
+        memory="$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)"
+    elif command -v vm_stat >/dev/null 2>&1; then
+        # macOS: free, inactive and speculative pages can all be had
+        memory="$(vm_stat | awk '/page size of/ { size = $8 }
+            /^Pages (free|inactive|speculative):/ { pages += $NF }
+            END { if (size) print int(pages * size / 1024) }')"
+    fi
+    # The limits of this process's cgroup (v2) and of those above it
+    [[ -r /proc/self/cgroup ]] && cgroup="/sys/fs/cgroup$(sed -n 's/^0:://p' /proc/self/cgroup)"
+    cgroup="${cgroup%/}"
+    while [[ "$cgroup" == /sys/fs/cgroup* && -d "$cgroup" ]]; do
+        if [[ -r "$cgroup/memory.max" && -r "$cgroup/memory.current" && -r "$cgroup/memory.stat" ]]; then
+            read -r limit < "$cgroup/memory.max"
+            read -r used < "$cgroup/memory.current"
+            # Page cache that the cgroup could drop is as good as available
+            cache="$(awk '$1 == "inactive_file" { n = $2 } END { print n + 0 }' "$cgroup/memory.stat")"
+            if [[ "$limit" =~ ^[0-9]+$ && "$used" =~ ^[0-9]+$ && "$cache" =~ ^[0-9]+$ ]]; then
+                limit=$(( (limit - used + cache) / 1024 ))
+                if [[ ! "$memory" =~ ^-?[0-9]+$ ]] || (( limit < memory )); then
+                    memory="$limit"
+                fi
+            fi
+        fi
+        if [[ -r "$cgroup/cpu.max" ]]; then
+            read -r quota period < "$cgroup/cpu.max"
+            if [[ "$quota" =~ ^[0-9]+$ && "$period" =~ ^[1-9][0-9]*$ ]] && (( (quota + period - 1) / period < count )); then
+                count=$(( (quota + period - 1) / period ))
+            fi
+        fi
+        [[ "$cgroup" != /sys/fs/cgroup ]] || break
+        cgroup="${cgroup%/*}"
+    done
+    (( count <= most )) || count="$most"
+    if [[ "$memory" =~ ^-?[0-9]+$ ]] && (( memory / 1024 / each < count )); then
+        count=$(( memory / 1024 / each ))
+    fi
+    printf '%s' "$(( count > 0 ? count : 1 ))"
+}
+
+fork_commit() {
+    local sha
+    sha="$(git -C "$ROOT" rev-parse --verify --quiet HEAD 2>/dev/null)" || { printf 'uncommitted'; return; }
+    if [[ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]]; then
+        sha="$sha-dirty"
+    fi
+    printf '%s' "$sha"
+}
+
+cmd_build() {
+    local ref="" skip_tests=false
+    while (( $# )); do
+        case "$1" in
+            # An empty ref would mean the release in upstream.lock
+            --ref) [[ $# -ge 2 && -n "$2" ]] || die "--ref needs an upstream branch, tag or commit"; ref="$2"; shift 2 ;;
+            --skip-tests) skip_tests=true; shift ;;
+            *) die "Unknown option: $1" ;;
+        esac
+    done
+
+    find_jdk
+    read_lock "$ROOT/upstream.lock"
+    log "Using JDK at $JAVA_HOME"
+
+    local release=false
+    if [[ -z "$ref" ]]; then
+        release=true
+        ref="$UPSTREAM_TAG"
+    fi
+
+    local sha
+    sha="$(checkout_upstream "$ref")"
+    if $release && [[ "$sha" != "$UPSTREAM_SHA" ]]; then
+        die "Upstream tag $UPSTREAM_TAG now points to $sha, but upstream.lock pins $UPSTREAM_SHA. A published tag was moved; review upstream before trusting it."
+    fi
+
+    # Described before upstream's build runs, so its output can't count as local changes.
+    # A release is described from its own tag, even if another tag names the same commit.
+    local describe upstream_version epoch branch version
+    if $release; then
+        describe="$(upstream_describe --match "$UPSTREAM_TAG")"
+    else
+        describe="$(upstream_describe "${RELEASE_TAGS[@]}")"
+    fi
+    upstream_version="$(upstream_version)"
+    epoch="$(git -C "$UPSTREAM_DIR" show -s --format=%ct "$sha")"
+    if $release; then
+        branch="libre"
+        # Named after the tag, as release_tag names it for publish.sh and upstream-watch
+        version="$(version_name "$UPSTREAM_TAG")-libre$FORK_REVISION"
+        [[ "$describe" == "$UPSTREAM_TAG-0-g"* && "$describe" != *-dirty ]] \
+            || die "git describe says upstream's checkout is $describe, rather than the tag $UPSTREAM_TAG itself. A release is built from exactly the tag in upstream.lock, without local changes."
+        # The release is named after the tag, while its CoreProtect goes by the pom's version
+        [[ "$upstream_version" == "$(version_name "$UPSTREAM_TAG")" ]] \
+            || die "Upstream's pom.xml at $UPSTREAM_TAG declares version $upstream_version, but the tag names it $(version_name "$UPSTREAM_TAG"). The release would be called $version, while its CoreProtect would take itself for $upstream_version. Find out which version upstream released."
+    else
+        # CoreProtect skips its schema-version guard on branches containing "-dev"
+        branch="libre-dev"
+        version="$(version_name "$describe")-libre-dev"
+    fi
+    check_version "$version" "$release"
+    log "Upstream $ref at $sha ($describe, pom.xml $upstream_version) -> LibreProtect $version"
+
+    local upstream_args=(-B -q -f "$UPSTREAM_DIR/pom.xml" clean package
+        -DskipTests
+        -Dproject.branch="$branch"
+        -Dproject.build.outputTimestamp="$epoch")
+    if $release; then
+        # A release trusts no kept build, which whatever can write to build/ could have changed
+        log "Building upstream CoreProtect unmodified"
+        "$ROOT/mvnw" "${upstream_args[@]}"
+    else
+        build_upstream "$sha" "${upstream_args[@]}"
+    fi
+
+    local original upstream_jar
+    original="$(find "$UPSTREAM_DIR/target" -maxdepth 1 -name 'original-*.jar' | head -n 1)"
+    upstream_jar="$(find "$UPSTREAM_DIR/target" -maxdepth 1 -name '*.jar' ! -name 'original-*' ! -name '*-sources.jar' ! -name '*-javadoc.jar' | head -n 1)"
+    [[ -f "$original" && -f "$upstream_jar" ]] || die "Upstream build did not produce a shaded and an original JAR"
+
+    # A test JVM takes 250-550 MB
+    local forks="${LP_TEST_FORKS:-$(parallelism 768 8)}"
+    [[ "$forks" =~ ^[1-9][0-9]*$ ]] || die "LP_TEST_FORKS must be a positive number"
+
+    log "Building LibreProtect"
+    # Modules that don't depend on each other build at the same time, and so do test classes, in $forks JVMs.
+    local maven_args=(-B -q -T 1C -f "$ROOT/pom.xml" clean verify -Dproject.build.outputTimestamp="$epoch"
+        -Dlp.test.forks="$forks")
+    $skip_tests && maven_args+=(-Dmaven.test.skip=true)
+    "$ROOT/mvnw" "${maven_args[@]}"
+
+    log "Transforming"
+    mkdir -p "$DIST_DIR"
+    rm -f "$DIST_DIR"/LibreProtect-*.jar
+    rm -f "$DIST_DIR"/*.json "$DIST_DIR"/*.md "$DIST_DIR"/*.sha256 "$DIST_DIR"/*.tar.gz
+    "$JAVA_HOME/bin/java" -jar "$ROOT/transformer/target/libreprotect-transformer.jar" \
+        --upstream-jar "$upstream_jar" \
+        --original-jar "$original" \
+        --runtime-jar "$ROOT/runtime/target/libreprotect-runtime.jar" \
+        --upstream-dir "$UPSTREAM_DIR" \
+        --baseline "$ROOT/audit/baseline.json" \
+        --output "$DIST_DIR/LibreProtect-$version.jar" \
+        --version "$version" \
+        --upstream-ref "$ref" \
+        --upstream-commit "$sha" \
+        --fork-commit "$(fork_commit)" \
+        --timestamp "$epoch" \
+        --report "$DIST_DIR/transform-report.json" \
+        --differences "$DIST_DIR/DIFFERENCES.md" \
+        --audit-report "$DIST_DIR/audit-report.json" \
+        --observed "$DIST_DIR/audit-observed.json"
+
+    (cd "$DIST_DIR" && sha256sum "LibreProtect-$version.jar" > "LibreProtect-$version.jar.sha256")
+    printf '%s\n' "$version" > "$DIST_DIR/version.txt"
+    log "Done: $DIST_DIR/LibreProtect-$version.jar"
+}
+
+cmd_it() {
+    find_jdk
+    local fork upstream_jar
+    fork="$(find "$DIST_DIR" -maxdepth 1 -name 'LibreProtect-*.jar' 2>/dev/null | head -n 1)"
+    upstream_jar="$(find "$UPSTREAM_DIR/target" -maxdepth 1 -name '*.jar' ! -name 'original-*' ! -name '*-sources.jar' ! -name '*-javadoc.jar' 2>/dev/null | head -n 1)"
+    [[ -f "$fork" && -f "$upstream_jar" ]] || die "Run scripts/lp build first"
+
+    log "Integration testing $(basename "$fork") against $(basename "$upstream_jar")"
+    "$JAVA_HOME/bin/java" "$ROOT/integration/harness/Harness.java" \
+        --work "$BUILD_DIR/it" \
+        --paper-lock "$ROOT/integration/paper.lock" \
+        --agent "$ROOT/integration/egress-agent/target/libreprotect-egress-agent.jar" \
+        --it-plugin "$ROOT/integration/test-plugin/target/libreprotect-it-plugin.jar" \
+        --upstream "$upstream_jar" \
+        --fork "$fork"
+}
+
+# The complete source of the last build, as the GPL requires for each JAR:
+# LibreProtect at the commit it was built from and CoreProtect at the upstream
+# commit it was built from.
+cmd_sources() {
+    local report="$DIST_DIR/transform-report.json"
+    [[ -f "$DIST_DIR/version.txt" && -f "$report" ]] || die "Run scripts/lp build first"
+
+    local version upstream_commit fork_commit
+    version="$(cat "$DIST_DIR/version.txt")"
+    upstream_commit="$(sed -n 's/^ *"upstreamCommit": "\([0-9a-f]\{40\}\)",*$/\1/p' "$report")"
+    fork_commit="$(sed -n 's/^ *"forkCommit": "\(.*\)",*$/\1/p' "$report")"
+    [[ -n "$upstream_commit" ]] || die "No upstream commit in $report"
+    [[ "$fork_commit" =~ ^[0-9a-f]{40}$ ]] \
+        || die "The last build was made from '$fork_commit', not a clean commit. Commit, rebuild, then archive, so the source matches the JAR."
+
+    local top="LibreProtect-$version-sources"
+    local archive="$DIST_DIR/$top.tar"
+    local readme="LibreProtect $version, built from:
+  libreprotect/  LibreProtect at commit $fork_commit
+  coreprotect/   CoreProtect at commit $upstream_commit
+
+To rebuild, see libreprotect/README.md: libreprotect/scripts/lp build clones
+CoreProtect at the pinned commit, which is the source in coreprotect/.
+Licenses: libreprotect/LICENSE (GPL-3.0-or-later), libreprotect/NOTICE, and
+coreprotect/LICENSE (Artistic-2.0).
+"
+    rm -f "$archive" "$archive.gz"
+    # The virtual file comes before any --prefix, so its path is used exactly as given
+    git -C "$ROOT" archive --format=tar \
+        --add-virtual-file="$top/README.txt:$readme" \
+        --prefix="$top/libreprotect/" -o "$archive" "$fork_commit"
+    git -C "$UPSTREAM_DIR" archive --format=tar --prefix="$top/coreprotect/" -o "$archive.upstream" "$upstream_commit"
+    tar --concatenate --file="$archive" "$archive.upstream"
+    rm -f "$archive.upstream"
+    gzip -9n "$archive"
+    log "Done: $archive.gz"
+}
+
+cmd_clean() {
+    rm -rf "$BUILD_DIR" "$DIST_DIR"
+    find "$ROOT" -maxdepth 3 -name target -type d -prune -exec rm -rf {} +
+}
+
+main() {
+    local command="${1:-}"
+    [[ $# -gt 0 ]] && shift
+    case "$command" in
+        build) cmd_build "$@" ;;
+        it) cmd_it "$@" ;;
+        sources) cmd_sources "$@" ;;
+        clean) cmd_clean "$@" ;;
+        headers) exec "$ROOT/scripts/ci/license-headers.sh" "$@" ;;
+        "" | -h | --help | help) usage ;;
+        *) die "Unknown command: $command (try --help)" ;;
+    esac
+}
+
+main "$@"

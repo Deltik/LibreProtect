@@ -1,0 +1,146 @@
+name: Release
+
+# Publishes the release that upstream.lock on main describes, then hands it
+# to the distribute workflow for Modrinth and SpigotMC. upstream-watch
+# dispatches this when that release doesn't exist yet: after a bump pull
+# request merges, or after FORK_REVISION is bumped for a LibreProtect-only
+# release. Merges made with GITHUB_TOKEN can't trigger workflows themselves.
+#
+# The audit must be clean. CI already requires that before anything merges,
+# and this job checks again.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+
+jobs:
+  build:
+    name: Build, test and audit
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/it/paper-*
+          key: paper-${{ hashFiles('integration/paper.lock') }}
+
+      - name: Build
+        run: scripts/lp build
+
+      - name: Integration test
+        run: scripts/lp it
+
+      - name: Require a reviewed audit baseline
+        run: scripts/ci/require-reviewed.sh dist/audit-report.json
+
+      - name: Source archive
+        run: scripts/lp sources
+
+      - name: Software bill of materials for the bundled upstream dependencies
+        run: |
+          ./mvnw -B -q -f build/upstream/pom.xml org.cyclonedx:cyclonedx-maven-plugin:2.9.3:makeBom \
+            -DoutputFormat=json -DoutputName=sbom -DincludeTestScope=false -DincludeProvidedScope=false
+          cp build/upstream/target/sbom.json "dist/LibreProtect-$(cat dist/version.txt).cdx.json"
+
+      - name: Summarize
+        if: always()
+        run: scripts/ci/summary.sh >> "$GITHUB_STEP_SUMMARY"
+
+      - id: meta
+        run: echo "version=$(cat dist/version.txt)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: integration-logs
+          path: |
+            build/it/server/console-*.log
+            build/it/server/egress-*.log
+            build/it/server/logs/
+          if-no-files-found: ignore
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Add required reviewers to this environment in the repository settings
+    # to approve every release by hand
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/LibreProtect-*.jar
+
+      - name: Publish
+        run: scripts/ci/publish.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  distribute:
+    name: Distribute
+    needs: [build, publish]
+    permissions:
+      contents: write
+      issues: write
+    uses: ./.github/workflows/distribute.yml
+    with:
+      tag: v${{ needs.build.outputs.version }}
+    secrets: inherit
+
+  report:
+    name: Report outcome
+    needs: [build, publish]
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Open, update or close the failure issue
+        run: scripts/ci/report.sh "Release" "$SUCCEEDED" "upstream.lock at $GITHUB_SHA"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUCCEEDED: ${{ needs.build.result == 'success' && needs.publish.result == 'success' }}
