@@ -26,6 +26,9 @@ import net.deltik.mc.libreprotect.routing.RouteConfigParser;
 import net.deltik.mc.libreprotect.routing.RoutePreset;
 import net.deltik.mc.libreprotect.routing.RouteRegistry;
 import net.deltik.mc.libreprotect.routing.UrlPatternMatcher;
+import net.deltik.mc.libreprotect.testutil.TestLogger;
+import net.deltik.mc.libreprotect.update.UpdateSource;
+import net.deltik.mc.libreprotect.update.UpdateSourceParser;
 import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.*;
@@ -61,7 +64,7 @@ class PrivacyConfigSchemaTest {
         @Test
         @DisplayName("ALL_OPTIONS should contain all options")
         void allOptionsContainsAll() {
-            assertEquals(3, PrivacyConfigSchema.ALL_OPTIONS.length);
+            assertEquals(4, PrivacyConfigSchema.ALL_OPTIONS.length);
         }
     }
 
@@ -98,6 +101,44 @@ class PrivacyConfigSchemaTest {
             assertEquals("routes", PrivacyConfigSchema.ROUTES.key);
             assertTrue(((List<?>) PrivacyConfigSchema.ROUTES.defaultValue).isEmpty());
             assertEquals(PrivacyConfigSchema.ConfigType.LIST, PrivacyConfigSchema.ROUTES.type);
+        }
+
+        @Test
+        @DisplayName("UPDATE_SOURCES should default to GitHub, then Modrinth")
+        void updateSourcesDefault() {
+            assertEquals("update-sources", PrivacyConfigSchema.UPDATE_SOURCES.key);
+            assertEquals(PrivacyConfigSchema.ConfigType.LIST, PrivacyConfigSchema.UPDATE_SOURCES.type);
+            assertEquals(List.of(
+                    Map.of("type", "github", "repository", "Deltik/LibreProtect"),
+                    Map.of("type", "modrinth", "project", "libreprotect")),
+                PrivacyConfigSchema.UPDATE_SOURCES.defaultValue);
+        }
+
+        @Test
+        @DisplayName("UPDATE_SOURCES default should parse into sources without warnings")
+        void updateSourcesDefaultParses() {
+            TestLogger logger = new TestLogger();
+            LibreProtectLogger.reset();
+            LibreProtectLogger.initialize(logger);
+            try {
+                List<UpdateSource> sources =
+                    new UpdateSourceParser().parse((List<?>) PrivacyConfigSchema.UPDATE_SOURCES.defaultValue);
+
+                assertEquals(List.of("github", "modrinth"), sources.stream().map(UpdateSource::type).toList());
+                assertTrue(logger.getRecords().isEmpty(), logger.getMessages().toString());
+            } finally {
+                LibreProtectLogger.reset();
+            }
+        }
+
+        @Test
+        @DisplayName("UPDATE_SOURCES default can't be changed")
+        void updateSourcesDefaultUnmodifiable() {
+            List<?> sources = (List<?>) PrivacyConfigSchema.UPDATE_SOURCES.defaultValue;
+            assertThrows(UnsupportedOperationException.class, sources::clear);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> first = (Map<String, Object>) sources.get(0);
+            assertThrows(UnsupportedOperationException.class, () -> first.put("repository", "Other/Fork"));
         }
 
         @Test
@@ -143,6 +184,7 @@ class PrivacyConfigSchemaTest {
 
             assertEquals(PrivacyConfigSchema.ALL_OPTIONS.length, defaults.size());
             assertTrue(defaults.containsKey("preset"));
+            assertTrue(defaults.containsKey("update-sources"));
             assertTrue(defaults.containsKey("routes"));
             assertTrue(defaults.containsKey("verbose-logging"));
         }
@@ -160,7 +202,7 @@ class PrivacyConfigSchemaTest {
         @Test
         @DisplayName("should keep options in declaration order")
         void keepsOrder() {
-            assertEquals(List.of("preset", "routes", "verbose-logging"),
+            assertEquals(List.of("preset", "update-sources", "routes", "verbose-logging"),
                 new ArrayList<>(PrivacyConfigSchema.getDefaults().keySet()));
         }
     }
@@ -192,6 +234,7 @@ class PrivacyConfigSchemaTest {
             String yaml = PrivacyConfigSchema.generateDefaultFile();
 
             assertTrue(yaml.contains("preset:"));
+            assertTrue(yaml.contains("update-sources:"));
             assertTrue(yaml.contains("routes:"));
             assertTrue(yaml.contains("verbose-logging:"));
         }
@@ -203,7 +246,7 @@ class PrivacyConfigSchemaTest {
 
             assertFalse(yaml.contains("libreprotect:"));
             for (PrivacyConfigSchema.ConfigOption option : PrivacyConfigSchema.ALL_OPTIONS) {
-                assertTrue(yaml.lines().anyMatch(line -> line.startsWith(option.key + ": ")),
+                assertTrue(yaml.lines().anyMatch(line -> line.equals(option.key + ":") || line.startsWith(option.key + ": ")),
                     "No top-level line for " + option.key);
             }
         }
@@ -224,19 +267,85 @@ class PrivacyConfigSchemaTest {
             parsed.loadFromString(PrivacyConfigSchema.generateDefaultFile());
 
             assertEquals("privacy-first", parsed.getString("preset"));
+            assertEquals(PrivacyConfigSchema.UPDATE_SOURCES.defaultValue, parsed.getList("update-sources"));
             assertEquals(List.of(), parsed.getList("routes"));
             assertEquals(Boolean.FALSE, parsed.get("verbose-logging"));
         }
 
         @Test
-        @DisplayName("should only contain comments, blank lines and option lines")
+        @DisplayName("should only contain comments, blank lines, option lines and the items of list options")
         void onlyCommentsAndOptions() {
             Set<String> keys = PrivacyConfigSchema.getDefaults().keySet();
+            boolean inList = false;
             for (String line : PrivacyConfigSchema.generateDefaultFile().split("\n")) {
-                boolean ok = line.isEmpty() || line.startsWith("#")
+                boolean listItem = inList && line.startsWith("  ");
+                inList = keys.stream().anyMatch(key -> line.equals(key + ":")) || listItem;
+                boolean ok = line.isEmpty() || line.startsWith("#") || inList
                     || keys.stream().anyMatch(key -> line.startsWith(key + ": "));
                 assertTrue(ok, "Unexpected line: " + line);
             }
+        }
+
+        @Test
+        @DisplayName("should write populated lists in block style, each item's settings on lines of their own")
+        void populatedList() {
+            assertTrue(PrivacyConfigSchema.generateDefaultFile().contains(String.join("\n",
+                "update-sources:",
+                "  - type: github",
+                "    repository: Deltik/LibreProtect",
+                "  - type: modrinth",
+                "    project: libreprotect",
+                "")));
+        }
+
+        @Test
+        @DisplayName("should document update-sources above it, including how to turn update checks off")
+        void documentsUpdateSources() {
+            String yaml = PrivacyConfigSchema.generateDefaultFile();
+            String before = yaml.substring(0, yaml.indexOf("\nupdate-sources:"));
+            String comments = before.substring(before.lastIndexOf("\n\n"));
+
+            assertTrue(comments.contains("# " + PrivacyConfigSchema.UPDATE_SOURCES.description + "\n"), comments);
+            assertTrue(comments.contains("no version, server port or key"), comments);
+            assertTrue(comments.contains("IP address"), comments);
+            assertTrue(comments.contains("[]"), comments);
+        }
+
+        @Test
+        @DisplayName("commented update source types should be the ones the parser accepts")
+        void updateSourceCommentsWork() throws InvalidConfigurationException {
+            // The documented shape of each type, written the way an operator would
+            YamlConfiguration parsed = new YamlConfiguration();
+            parsed.loadFromString(String.join("\n",
+                "update-sources:",
+                "  - type: github",
+                "    repository: Deltik/LibreProtect",
+                "    api: https://api.github.com",
+                "  - type: modrinth",
+                "    project: libreprotect",
+                "    api: https://api.modrinth.com/v2",
+                ""));
+            TestLogger logger = new TestLogger();
+            LibreProtectLogger.reset();
+            LibreProtectLogger.initialize(logger);
+            try {
+                assertEquals(2, new UpdateSourceParser().parse(parsed.getList("update-sources")).size());
+                assertTrue(logger.getRecords().isEmpty(), logger.getMessages().toString());
+            } finally {
+                LibreProtectLogger.reset();
+            }
+            for (String word : List.of("type", "modrinth", "project", "github", "repository", "api")) {
+                assertTrue(PrivacyConfigSchema.UPDATE_SOURCES.comments.stream().anyMatch(c -> c.contains(word)), word);
+            }
+        }
+
+        @Test
+        @DisplayName("update source types should be documented GitHub first, as the default sources are")
+        void updateSourceCommentsInDefaultOrder() {
+            List<String> documented = PrivacyConfigSchema.UPDATE_SOURCES.comments.stream()
+                .filter(c -> c.startsWith("  type: ")).map(c -> c.split("[ ,]+")[2]).toList();
+
+            assertEquals(List.of("github", "modrinth"), documented);
         }
 
         @Test
@@ -338,6 +447,12 @@ class PrivacyConfigSchemaTest {
         }
 
         @Test
+        @DisplayName("should return update-sources option")
+        void returnsUpdateSourcesOption() {
+            assertSame(PrivacyConfigSchema.UPDATE_SOURCES, PrivacyConfigSchema.getOption("update-sources"));
+        }
+
+        @Test
         @DisplayName("should return routes option")
         void returnsRoutesOption() {
             var option = PrivacyConfigSchema.getOption("routes");
@@ -400,6 +515,15 @@ class PrivacyConfigSchemaTest {
             assertTrue(PrivacyConfigSchema.isValidValue("routes", List.of()));
             assertFalse(PrivacyConfigSchema.isValidValue("routes", "not a list"));
             assertFalse(PrivacyConfigSchema.isValidValue("routes", 123));
+        }
+
+        @Test
+        @DisplayName("should validate update-sources as list")
+        void validatesUpdateSourcesAsList() {
+            assertTrue(PrivacyConfigSchema.isValidValue("update-sources", List.of()));
+            assertTrue(PrivacyConfigSchema.isValidValue("update-sources", PrivacyConfigSchema.UPDATE_SOURCES.defaultValue));
+            assertFalse(PrivacyConfigSchema.isValidValue("update-sources", "modrinth"));
+            assertFalse(PrivacyConfigSchema.isValidValue("update-sources", false));
         }
 
         @Test

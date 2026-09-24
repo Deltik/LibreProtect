@@ -59,8 +59,13 @@ final class Differences {
             .append("Each call below used to open a network connection directly. It now goes through ")
             .append("`net.deltik.mc.libreprotect.Egress`, which applies the network policy in ")
             .append("`plugins/CoreProtect/libreprotect.yml`. By default, that policy sends no web requests: ")
-            .append("LibreProtect answers translation requests itself and blocks every other request. Connections to ")
-            .append("the databases in `config.yml` are outside the network policy.\n\n")
+            .append("LibreProtect answers translation requests itself and blocks every other request. With the ")
+            .append("`allow-updates` preset, LibreProtect answers update checks too: it asks GitHub for LibreProtect's ")
+            .append("latest release, or Modrinth if GitHub fails or names no LibreProtect release, and nothing ")
+            .append("is sent to update.coreprotect.net. ")
+            .append("These requests name LibreProtect, but carry no version, server or key information; GitHub or ")
+            .append("Modrinth still sees the server's IP address, as with any request. Connections to the ")
+            .append("databases in `config.yml` are outside the network policy.\n\n")
             .append("| Class | Method | Call | Origin | Places |\n|---|---|---|---|---|\n");
         Map<String, Long> egress = report.egressSites.stream().collect(Collectors.groupingBy(site ->
                 cellCode(site.className().replace('/', '.')) + " | " + cellCode(readable(site.method())) + " | "

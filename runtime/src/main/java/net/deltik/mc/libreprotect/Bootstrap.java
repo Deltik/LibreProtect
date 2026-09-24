@@ -49,6 +49,9 @@ import java.util.logging.Logger;
  */
 public final class Bootstrap {
 
+    /** CoreProtect's settings file in the data folder, which update checks consult */
+    private static final String CORE_PROTECT_CONFIG = "config.yml";
+
     private static volatile PrivacyConfig activeConfig;
     private static volatile File configFile;
 
@@ -77,7 +80,7 @@ public final class Bootstrap {
             configFile = new File(dataFolder, PrivacyConfig.FILE_NAME);
             PrivacyConfig config = PrivacyConfig.load(configFile);
             LibreProtectLogger.setVerbose(config.isVerboseLogging());
-            Egress.install(config.buildResolver());
+            Egress.install(config.buildResolver(new File(dataFolder, CORE_PROTECT_CONFIG)));
             activeConfig = config;
         } catch (Exception | LinkageError e) {
             failClosed(e);

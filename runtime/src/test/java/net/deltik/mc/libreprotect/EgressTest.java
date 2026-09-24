@@ -66,7 +66,7 @@ class EgressTest {
     }
 
     private static RouteResolver resolver(RoutePreset preset) {
-        return new PrivacyConfig(preset, List.of(), false).buildResolver();
+        return new PrivacyConfig(preset, List.of(), List.of(), false).buildResolver();
     }
 
     private static RouteResolver resolver(Route... routes) {
@@ -489,7 +489,7 @@ class EgressTest {
         void customPassthroughRoute() throws IOException {
             Path file = Files.writeString(dir.resolve("allowed.txt"), "allowed");
             Route allowFiles = new Route("file://.*/allowed\\.txt", RouteActionType.PASSTHROUGH);
-            Egress.install(new PrivacyConfig(RoutePreset.PRIVACY_FIRST, List.of(allowFiles), false).buildResolver());
+            Egress.install(new PrivacyConfig(RoutePreset.PRIVACY_FIRST, List.of(allowFiles), List.of(), false).buildResolver());
 
             assertEquals("allowed", read(Egress.openStream(file.toUri().toURL())));
 

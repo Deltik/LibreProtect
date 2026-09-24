@@ -10,7 +10,7 @@
 <!-- begin store description -->
 **LibreProtect** is a privacy-hardened build of [CoreProtect](https://github.com/PlayPro/CoreProtect), the block logging and rollback plugin for Minecraft servers. It is rebuilt from each CoreProtect release, automatically when possible.
 
-* **No phoning home.** CoreProtect contacts coreprotect.net for update checks, usage statistics, error reports, donation-key checks and translations, and it bundles bStats. LibreProtect sends each of those requests through a [network policy](#configuration). By default, it answers translation requests itself and blocks everything else.
+* **No phoning home.** CoreProtect contacts coreprotect.net for update checks, usage statistics, error reports, donation-key checks and translations, and it bundles bStats. LibreProtect sends each of those requests through a [network policy](#configuration). By default, it answers translation requests itself and blocks everything else. The `allow-updates` preset also answers update checks, by asking GitHub or Modrinth for LibreProtect's latest release, without sending your version number, server port or license key.
 * **Everything unlocked.** Features that CoreProtect reserves for donors work without a donation key.
 * **Drop-in.** LibreProtect keeps CoreProtect's commands, permissions, API, data folder and database. Add-ons that depend on CoreProtect keep working, and you can switch back and forth between the two.
 
@@ -77,9 +77,23 @@ LibreProtect's network policy is in `plugins/CoreProtect/libreprotect.yml`. Libr
 
 # What happens to requests that no route matches
 # privacy-first - Send no web requests: LibreProtect answers translations itself and blocks the rest (default)
-# allow-updates - Like privacy-first, but LibreProtect also answers update checks
+# allow-updates - Like privacy-first, but LibreProtect also answers update checks from update-sources
 # passthrough - Allow every request through unchanged (for debugging)
 preset: privacy-first
+
+# Where update checks go when the preset allows them
+# LibreProtect asks each source in order until one answers.
+# Requests name LibreProtect but carry no version, server port or key. Sources see your server's IP address.
+# Each source has a type and its settings:
+#   type: github, with repository: owner/name
+#   type: modrinth, with project: a Modrinth project ID or slug
+# Either type also takes api: the base URL of the API, for a mirror
+# Set this to [] to turn update checks off
+update-sources:
+  - type: github
+    repository: Deltik/LibreProtect
+  - type: modrinth
+    project: libreprotect
 
 # Custom routes, checked in order before the preset. The first match decides.
 # Each route has: pattern (regex), action (BLOCK/ANSWER/REDIRECT/PASSTHROUGH), target (for REDIRECT)
@@ -105,7 +119,7 @@ The preset decides what happens to CoreProtect's requests that no [route](#route
 
 **privacy-first** (default): Make no web requests. LibreProtect answers translation requests itself and blocks everything else, including update checks. Connections to databases are [outside the network policy](#connections-outside-the-network-policy).
 
-**allow-updates**: Like `privacy-first`, but LibreProtect also answers CoreProtect's update check, with the running version, so no update is announced. When possible, a LibreProtect release for each new CoreProtect release is built automatically. If a CoreProtect release needs changes to LibreProtect first, its LibreProtect release takes longer.
+**allow-updates**: Like `privacy-first`, but LibreProtect also answers CoreProtect's update check by asking the [update sources](#update-sources) for LibreProtect's latest release. When possible, a LibreProtect release for each new CoreProtect release is built automatically. If a CoreProtect release needs changes to LibreProtect first, its LibreProtect release takes longer.
 
 **passthrough**: Allow every request, like stock CoreProtect. This is meant for debugging.
 
@@ -123,9 +137,26 @@ These are the requests that the presets know about:
 
 A blocked request fails the same way it would if the server were offline, and CoreProtect carries on without it. An answered request isn't sent where CoreProtect meant it to go: LibreProtect replies to it itself. See [`ANSWER`](#routes).
 
+### `update-sources`
+
+Where LibreProtect looks for its own new releases when it answers CoreProtect's update check, which the `allow-updates` preset or an `ANSWER` [route](#routes) allows. Nothing is sent to update.coreprotect.net. LibreProtect asks each source in order and uses the first one that names a LibreProtect release, so the default asks GitHub, and Modrinth only if GitHub fails or names none. An empty list, `[]`, turns update checks off.
+
+Each source has these keys:
+
+| Key          | Required       | Value                                                                                                               |
+|--------------|----------------|---------------------------------------------------------------------------------------------------------------------|
+| `type`       | Yes            | `github` or `modrinth`                                                                                              |
+| `repository` | For `github`   | The GitHub repository as `owner/name`, such as `Deltik/LibreProtect`                                                |
+| `project`    | For `modrinth` | The Modrinth project's ID or slug, such as `libreprotect`                                                           |
+| `api`        | No             | The base URL of the API, for a mirror. The defaults are `https://api.github.com` and `https://api.modrinth.com/v2`. |
+
+Requests name LibreProtect in their `User-Agent`, but carry no version, server port or key. Like any request, they show your server's IP address to the source. They only follow redirects to the same scheme, host and port. [Routes](#routes) don't apply to them, since they are LibreProtect's own; `api` sends them to a mirror instead. GitHub's latest release and Modrinth's newest listed release count; prereleases and development builds don't. A development build is only told about releases of a CoreProtect version newer than both the tag that it's named after and the version in its code.
+
+`check-updates: false` in CoreProtect's `config.yml` still turns update checks off, and LibreProtect honors it after `/co reload` too. LibreProtect skips an invalid source and logs a warning about it.
+
 ### `routes`
 
-A list of custom routes that are checked before the preset. The first route that matches a request decides what happens to it. Each route has these keys:
+A list of custom routes that are checked before the preset. The first route that matches a request decides what happens to it. Routes apply to the requests of CoreProtect and the libraries it bundles, not to LibreProtect's own requests to the [update sources](#update-sources). Each route has these keys:
 
 | Key       | Required       | Value                                                                                                                                                                                                                                                                                                                                                 |
 |-----------|----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -142,14 +173,14 @@ A list of custom routes that are checked before the preset. The first route that
 **ANSWER**: LibreProtect answers the request itself, and nothing is sent to CoreProtect's servers. LibreProtect can answer these requests:
 
 * A translation request gets no translations.
-* An update check gets the running version, so no update is announced.
+* Update checks are answered from the [update sources](#update-sources).
 * Usage statistics get an empty reply.
 
 Any other request fails. The donation-key check can't be answered on purpose: CoreProtect would save the answer in `plugins/CoreProtect/.license`, and stock CoreProtect would trust that file if you switched back.
 
 LibreProtect skips an invalid route and logs a warning about it.
 
-For example, to use CoreProtect's translation service, and to send CoreProtect's own update check to a server of yours:
+For example, to use CoreProtect's translation service, and to send CoreProtect's own update check to a server of yours instead of asking the update sources:
 
 ```yaml
 routes:
@@ -172,6 +203,7 @@ routes:
 The network policy covers the requests that CoreProtect and the libraries it bundles make to web addresses. It doesn't cover:
 
 * Connections to the databases in CoreProtect's `config.yml`, such as MySQL or ClickHouse, which CoreProtect makes.
+* LibreProtect's own requests to the [update sources](#update-sources). The policy decides whether LibreProtect answers CoreProtect's update check, and so whether it asks them, but routes can't block or redirect these requests. An empty `update-sources` in `libreprotect.yml`, or `check-updates: false` in CoreProtect's `config.yml`, stops them.
 
 ## Differences from CoreProtect
 

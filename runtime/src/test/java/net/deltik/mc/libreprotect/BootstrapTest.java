@@ -185,6 +185,29 @@ class BootstrapTest {
             assertEquals(RoutePreset.ALLOW_UPDATES, Bootstrap.getActiveConfig().getPreset());
             assertEquals(RoutePreset.ALLOW_UPDATES.getRoutes(), Egress.getResolver().getRegistry().getRoutes());
         }
+
+        @Test
+        @DisplayName("should have update checks read check-updates from CoreProtect's config.yml in the data folder")
+        void updateChecksReadCoreProtectConfig() throws IOException {
+            try (LocalHttpServer server = new LocalHttpServer()) {
+                writeConfig(String.join("\n",
+                    "preset: allow-updates",
+                    "update-sources:",
+                    "  - type: modrinth",
+                    "    project: libreprotect",
+                    "    api: " + server.getBaseUrl(),
+                    ""));
+                Files.writeString(dataFolder.resolve("config.yml"), "check-updates: false\n");
+                Bootstrap.init(testLogger, dataFolder.toFile());
+
+                IOException ex = assertThrows(IOException.class,
+                    () -> Egress.openConnection(MockUrlFactory.updateUrl()).getInputStream());
+
+                assertEquals("Update check skipped: check-updates is off in " + dataFolder.resolve("config.yml"),
+                    ex.getMessage());
+                assertEquals(0, server.getRequests().size());
+            }
+        }
     }
 
     @Nested

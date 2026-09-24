@@ -24,10 +24,13 @@ import net.deltik.mc.libreprotect.routing.RoutePreset;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Schema definition for LibreProtect privacy configuration.
@@ -84,8 +87,23 @@ public class PrivacyConfigSchema {
         "privacy-first",
         "What happens to requests that no route matches",
         "privacy-first - Send no web requests: LibreProtect answers translations itself and blocks the rest (default)",
-        "allow-updates - Like privacy-first, but LibreProtect also answers update checks",
+        "allow-updates - Like privacy-first, but LibreProtect also answers update checks from update-sources",
         "passthrough - Allow every request through unchanged (for debugging)"
+    );
+
+    public static final ConfigOption UPDATE_SOURCES = new ConfigOption(
+        "update-sources",
+        Collections.unmodifiableList(Arrays.asList(
+            item("type", "github", "repository", "Deltik/LibreProtect"),
+            item("type", "modrinth", "project", "libreprotect"))),
+        "Where update checks go when the preset allows them",
+        "LibreProtect asks each source in order until one answers.",
+        "Requests name LibreProtect but carry no version, server port or key. Sources see your server's IP address.",
+        "Each source has a type and its settings:",
+        "  type: github, with repository: owner/name",
+        "  type: modrinth, with project: a Modrinth project ID or slug",
+        "Either type also takes api: the base URL of the API, for a mirror",
+        "Set this to [] to turn update checks off"
     );
 
     public static final ConfigOption ROUTES = new ConfigOption(
@@ -112,9 +130,28 @@ public class PrivacyConfigSchema {
     // All options in order
     public static final ConfigOption[] ALL_OPTIONS = {
         PRESET,
+        UPDATE_SOURCES,
         ROUTES,
         VERBOSE_LOGGING
     };
+
+    /** Strings that YAML reads back as themselves when written without quotes, apart from {@link #YAML_WORDS} */
+    private static final Pattern PLAIN = Pattern.compile("[A-Za-z][A-Za-z0-9._/-]*");
+    /** Words that YAML 1.1 reads as booleans or null */
+    private static final Set<String> YAML_WORDS = Set.of("true", "false", "yes", "no", "on", "off", "y", "n", "null");
+
+    /**
+     * @param keysAndValues alternating keys and values
+     * @return an unmodifiable map that keeps the order of its keys, for a
+     *         list item of a default value
+     */
+    private static Map<String, Object> item(Object... keysAndValues) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        for (int i = 0; i + 1 < keysAndValues.length; i += 2) {
+            item.put(keysAndValues[i].toString(), keysAndValues[i + 1]);
+        }
+        return Collections.unmodifiableMap(item);
+    }
 
     /**
      * Generate the default configuration map
@@ -144,18 +181,55 @@ public class PrivacyConfigSchema {
                 yaml.append("# ").append(comment).append("\n");
             }
 
-            yaml.append(option.key).append(": ");
-            if (option.type == ConfigType.STRING) {
-                yaml.append(option.defaultValue);
-            } else if (option.type == ConfigType.LIST) {
-                yaml.append("[]");
+            yaml.append(option.key).append(":");
+            if (option.type == ConfigType.LIST && !((List<?>) option.defaultValue).isEmpty()) {
+                yaml.append("\n");
+                appendItems(yaml, (List<?>) option.defaultValue);
             } else {
-                yaml.append(option.defaultValue.toString().toLowerCase(Locale.ROOT));
+                yaml.append(" ").append(scalar(option.defaultValue)).append("\n");
             }
-            yaml.append("\n");
         }
 
         return yaml.toString();
+    }
+
+    /**
+     * Append a list in block style, with each map item's entries on lines of
+     * their own
+     */
+    private static void appendItems(StringBuilder yaml, List<?> items) {
+        for (Object item : items) {
+            if (item instanceof Map && !((Map<?, ?>) item).isEmpty()) {
+                String indent = "  - ";
+                for (Map.Entry<?, ?> entry : ((Map<?, ?>) item).entrySet()) {
+                    yaml.append(indent).append(entry.getKey()).append(": ").append(scalar(entry.getValue())).append("\n");
+                    indent = "    ";
+                }
+            } else {
+                yaml.append("  - ").append(scalar(item)).append("\n");
+            }
+        }
+    }
+
+    /**
+     * @return the value as a YAML scalar: plain if YAML reads it back as the
+     *         same string, otherwise quoted
+     */
+    private static String scalar(Object value) {
+        if (value instanceof List) {
+            return "[]";
+        }
+        if (value instanceof Map) {
+            return "{}";
+        }
+        if (!(value instanceof String)) {
+            return value.toString().toLowerCase(Locale.ROOT);
+        }
+        String text = (String) value;
+        if (PLAIN.matcher(text).matches() && !YAML_WORDS.contains(text.toLowerCase(Locale.ROOT))) {
+            return text;
+        }
+        return "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
     }
 
     /**
@@ -188,6 +262,7 @@ public class PrivacyConfigSchema {
                 }
                 return false;
 
+            case "update-sources":
             case "routes":
                 return value instanceof List;
 
