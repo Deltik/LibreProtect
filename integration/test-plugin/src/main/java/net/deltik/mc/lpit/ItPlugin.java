@@ -28,18 +28,32 @@ import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.IOException;
+import java.io.Reader;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.TreeMap;
 
 /**
  * Probes CoreProtect on a live server, then shuts the server down.
  *
- * <p>Timeline, in ticks after this plugin enables:
+ * <p>The harness names the steps for a boot in {@code scenario.properties} in
+ * this plugin's data folder ({@code steps=default,translation}), along with
+ * any values the steps read. Without that file, only the default step runs.
+ * Steps run one after another; each starts once the work that the one before
+ * it scheduled is done. Then this plugin writes {@code results.properties} and
+ * shuts the server down, or after {@code timeout.ticks} (default 3600) if the
+ * steps take longer. A step named {@code feature} or {@code feature.action}
+ * goes to the {@link Scenario} for that feature in {@link #FEATURES}.
+ *
+ * <p>The default step, in ticks after it starts (when this plugin enables,
+ * if it runs first):
  * <ol>
  *   <li>20: record plugin metadata, query the API, count existing rows at the
  *       probe block, log one placement, run {@code /co status},
@@ -47,9 +61,8 @@ import java.util.TreeMap;
  *       from the console, and make CoreProtect file an error report</li>
  *   <li>200: count rows at the probe block again (asynchronously, as the API
  *       recommends)</li>
- *   <li>400: write {@code results.properties} and shut the server down. The
- *       wait gives CoreProtect's network thread time for its startup
- *       requests.</li>
+ *   <li>400: done. The wait gives CoreProtect's network thread time for its
+ *       startup requests.</li>
  * </ol>
  *
  * <p>Markers ({@code [LPIT] ...}) in the server log delimit command output
@@ -59,14 +72,81 @@ public final class ItPlugin extends JavaPlugin {
 
     static final String USER = "lpit";
 
+    /** Scenarios by feature, the part of a step's name before the first dot */
+    private static final Map<String, Scenario> FEATURES = Map.of(
+        "translation", new TranslationScenario(),
+        "update", new UpdateScenario(),
+        "migration", new MigrationScenario(),
+        "auto-purge", new AutoPurgeScenario());
+
     private final Map<String, String> results = new TreeMap<>();
+    private final Deque<String> steps = new ArrayDeque<>();
+    private final Properties scenario = new Properties();
+    private String current;
+    private boolean finished;
 
     @Override
     public void onEnable() {
-        getServer().getScheduler().runTaskLater(this, this::probe, 20L);
-        getServer().getScheduler().runTaskLater(this, () ->
-            getServer().getScheduler().runTaskAsynchronously(this, () -> put("lookup.after", countRows())), 200L);
-        getServer().getScheduler().runTaskLater(this, this::finish, 400L);
+        Path file = getDataFolder().toPath().resolve("scenario.properties");
+        if (Files.exists(file)) {
+            try (Reader in = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+                scenario.load(in);
+            } catch (IOException e) {
+                put("scenario.error", e);
+            }
+        }
+        for (String step : scenario.getProperty("steps", "default").split(",")) {
+            if (!step.isBlank()) {
+                steps.add(step.trim());
+            }
+        }
+        put("scenario.steps", String.join(",", steps));
+
+        long timeout = Long.parseLong(scenario.getProperty("timeout.ticks", "3600"));
+        getServer().getScheduler().runTaskLater(this, () -> {
+            if (!finished) {
+                put("scenario.timeout", "step " + current + " still running after " + timeout + " ticks");
+                finish();
+            }
+        }, timeout);
+        nextStep();
+    }
+
+    /** Start the next step, or finish after the last one. Main thread only. */
+    private void nextStep() {
+        while (!finished) {
+            String step = steps.poll();
+            if (step == null) {
+                finish();
+                return;
+            }
+            String feature = step.contains(".") ? step.substring(0, step.indexOf('.')) : step;
+            Scenario handler = step.equals("default") ? this::defaultStep : FEATURES.get(feature);
+            if (handler == null) {
+                put("scenario.error", "unknown step " + step);
+                continue;
+            }
+            current = step;
+            new ScenarioContext(this, step, scenario).start(handler);
+            return;
+        }
+    }
+
+    /** Called by a step's context once all of the step's work is done */
+    void stepDone() {
+        if (getServer().isPrimaryThread()) {
+            nextStep();
+        } else {
+            getServer().getScheduler().runTask(this, this::nextStep);
+        }
+    }
+
+    private void defaultStep(ScenarioContext ctx) {
+        ctx.later(20, this::probe);
+        ctx.later(200, () -> ctx.async(() -> put("lookup.after", countRows())));
+        // Nothing to do at 400; waiting until then is the point
+        ctx.later(400, () -> {
+        });
     }
 
     private void probe() {
@@ -120,13 +200,21 @@ public final class ItPlugin extends JavaPlugin {
         }
     }
 
-    private void command(String command) {
+    boolean command(String command) {
         getLogger().info("[LPIT] begin " + command);
-        put("command." + command.replace(' ', '.'), getServer().dispatchCommand(getServer().getConsoleSender(), command));
+        boolean dispatched = dispatch(command);
         getLogger().info("[LPIT] end " + command);
+        return dispatched;
     }
 
-    private Object api() throws ReflectiveOperationException {
+    /** Run a console command and record whether it was dispatched */
+    boolean dispatch(String command) {
+        boolean dispatched = getServer().dispatchCommand(getServer().getConsoleSender(), command);
+        put("command." + command.replace(' ', '.'), dispatched);
+        return dispatched;
+    }
+
+    Object api() throws ReflectiveOperationException {
         Plugin coreProtect = getServer().getPluginManager().getPlugin("CoreProtect");
         return coreProtect.getClass().getMethod("getAPI").invoke(coreProtect);
     }
@@ -155,14 +243,19 @@ public final class ItPlugin extends JavaPlugin {
         }
     }
 
-    private synchronized void put(String key, Object value) {
+    synchronized void put(String key, Object value) {
         results.put(key, String.valueOf(value).replace('\n', ' '));
     }
 
     private void finish() {
+        if (finished) {
+            return;
+        }
+        finished = true;
         StringBuilder text = new StringBuilder();
         synchronized (this) {
-            results.forEach((key, value) -> text.append(key).append('=').append(value).append('\n'));
+            results.forEach((key, value) -> text.append(key.replaceAll("[\\\\=: #!]", "\\\\$0")).append('=')
+                .append(value.replace("\\", "\\\\")).append('\n'));
         }
         try {
             Path file = getDataFolder().toPath().resolve("results.properties");
