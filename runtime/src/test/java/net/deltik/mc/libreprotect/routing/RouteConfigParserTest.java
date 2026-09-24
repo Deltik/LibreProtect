@@ -88,7 +88,7 @@ class RouteConfigParserTest {
         void handlesCaseInsensitiveActions() {
             List<Map<String, Object>> configs = List.of(
                 Map.of("pattern", "a", "action", "block"),
-                Map.of("pattern", "b", "action", "MOCK"),
+                Map.of("pattern", "b", "action", "Answer"),
                 Map.of("pattern", "c", "action", "Passthrough")
             );
 
@@ -96,7 +96,7 @@ class RouteConfigParserTest {
 
             assertEquals(3, routes.size());
             assertEquals(RouteActionType.BLOCK, routes.get(0).getActionType());
-            assertEquals(RouteActionType.MOCK, routes.get(1).getActionType());
+            assertEquals(RouteActionType.ANSWER, routes.get(1).getActionType());
             assertEquals(RouteActionType.PASSTHROUGH, routes.get(2).getActionType());
         }
 
@@ -150,7 +150,17 @@ class RouteConfigParserTest {
             List<Route> routes = parser.parseRoutes(configs);
 
             assertTrue(routes.isEmpty());
-            assertTrue(testLogger.hasMessageContaining("its action 'INVALID_ACTION' isn't BLOCK"));
+            assertTrue(testLogger.hasMessageContaining(
+                "its action 'INVALID_ACTION' isn't BLOCK, ANSWER, REDIRECT or PASSTHROUGH"));
+        }
+
+        @Test
+        @DisplayName("should skip a route with the action MOCK")
+        void skipsMock() {
+            List<Route> routes = parser.parseRoutes(List.of(Map.of("pattern", ".*", "action", "mock")));
+
+            assertTrue(routes.isEmpty());
+            assertTrue(testLogger.hasMessageContaining("its action 'MOCK' isn't BLOCK, ANSWER, REDIRECT or PASSTHROUGH"));
         }
 
         @Test
@@ -240,7 +250,7 @@ class RouteConfigParserTest {
         void parsesMultipleRoutes() {
             List<Map<String, Object>> configs = List.of(
                 Map.of("pattern", "p1", "action", "BLOCK"),
-                Map.of("pattern", "p2", "action", "MOCK"),
+                Map.of("pattern", "p2", "action", "ANSWER"),
                 Map.of("pattern", "p3", "action", "PASSTHROUGH")
             );
 

@@ -18,8 +18,9 @@
  * along with LibreProtect.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package net.deltik.mc.libreprotect;
+package net.deltik.mc.libreprotect.routing.answer;
 
+import net.deltik.mc.libreprotect.PrivacyConstants;
 import net.deltik.mc.libreprotect.testutil.MockUrlFactory;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -34,7 +35,7 @@ import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class MockHttpURLConnectionTest {
+class AnswerConnectionTest {
 
     @Nested
     @DisplayName("Connection Type")
@@ -43,7 +44,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("should survive a cast to HttpURLConnection, as CoreProtect does")
         void castsToHttpURLConnection() {
-            URLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            URLConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             HttpURLConnection http = assertInstanceOf(HttpURLConnection.class, conn);
             assertDoesNotThrow(() -> http.setRequestMethod("GET"));
         }
@@ -51,7 +52,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("should survive a cast to HttpsURLConnection, as bStats does")
         void castsToHttpsURLConnection() {
-            URLConnection conn = new MockHttpURLConnection(MockUrlFactory.httpsStatsUrl());
+            URLConnection conn = new AnswerConnection(MockUrlFactory.httpsStatsUrl());
             HttpsURLConnection https = assertInstanceOf(HttpsURLConnection.class, conn);
             assertEquals("NONE", https.getCipherSuite());
         }
@@ -59,7 +60,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("should be an HttpsURLConnection even for http:// URLs")
         void httpsEvenForHttpUrls() {
-            URLConnection conn = new MockHttpURLConnection(MockUrlFactory.statsUrl());
+            URLConnection conn = new AnswerConnection(MockUrlFactory.statsUrl());
             assertInstanceOf(HttpsURLConnection.class, conn);
             assertInstanceOf(HttpURLConnection.class, conn);
         }
@@ -67,7 +68,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("HttpsURLConnection accessors should not throw")
         void httpsAccessorsDoNotThrow() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.httpsStatsUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.httpsStatsUrl());
             assertNull(conn.getLocalCertificates());
             assertEquals(0, conn.getServerCertificates().length);
             assertNotNull(conn.getHostnameVerifier());
@@ -82,23 +83,23 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("should return HTTP 200 OK")
         void returnsHttp200() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             assertEquals(HttpURLConnection.HTTP_OK, conn.getResponseCode());
         }
 
         @Test
-        @DisplayName("should return mocked response message")
-        void returnsMockedResponseMessage() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+        @DisplayName("should say in the response message that LibreProtect answered")
+        void returnsAnsweredResponseMessage() {
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             String message = conn.getResponseMessage();
             assertTrue(message.contains(PrivacyConstants.FORK_NAME));
-            assertTrue(message.contains("Mocked"));
+            assertTrue(message.contains("Answered"));
         }
 
         @Test
         @DisplayName("should return null error stream")
         void returnsNullErrorStream() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             assertNull(conn.getErrorStream());
         }
     }
@@ -107,13 +108,13 @@ class MockHttpURLConnectionTest {
     @DisplayName("License Endpoint")
     class LicenseEndpoint {
 
-        // A mocked license would be saved to plugins/CoreProtect/.license and
-        // trusted by stock CoreProtect later, so the license is never mocked.
+        // An answered license would be saved to plugins/CoreProtect/.license and
+        // trusted by stock CoreProtect later, so the license is never answered.
 
         @Test
-        @DisplayName("should refuse to mock the license endpoint")
+        @DisplayName("should refuse to answer the license endpoint")
         void refusesLicense() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.licenseUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.licenseUrl());
             IOException ex = assertThrows(IOException.class, conn::getInputStream);
             assertTrue(ex.getMessage().contains("coreprotect.net/license/"), ex.getMessage());
         }
@@ -126,14 +127,14 @@ class MockHttpURLConnectionTest {
             "https://CoreProtect.net/license/12345678"
         })
         void refusesAnyLicenseKey(String spec) {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.createUrl(spec));
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.createUrl(spec));
             assertThrows(IOException.class, conn::getInputStream);
         }
 
         @Test
         @DisplayName("should tell the operator to BLOCK the route instead")
         void suggestsBlock() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.httpsLicenseUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.httpsLicenseUrl());
             IOException ex = assertThrows(IOException.class, conn::getInputStream);
             assertTrue(ex.getMessage().contains("BLOCK"), ex.getMessage());
             assertTrue(ex.getMessage().contains(PrivacyConstants.FORK_NAME), ex.getMessage());
@@ -142,28 +143,27 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("should refuse to produce content through getContent()")
         void refusesContent() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.licenseUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.licenseUrl());
             assertThrows(IOException.class, conn::getContent);
         }
     }
 
     @Nested
-    @DisplayName("Translation Endpoint Mocking")
+    @DisplayName("Translation Endpoint")
     class TranslationEndpoint {
 
         @Test
         @DisplayName("should return empty JSON response")
         void returnsEmptyJsonResponse() throws IOException {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.translateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.translateUrl());
             String response = readInputStream(conn.getInputStream());
             assertEquals("{}", response);
-            assertEquals(PrivacyConstants.MOCK_TRANSLATION_RESPONSE, response);
         }
 
         @Test
         @DisplayName("should return JSON content type")
         void returnsJsonContentType() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.translateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.translateUrl());
             String contentType = conn.getHeaderField("Content-Type");
             assertTrue(contentType.contains("application/json"));
         }
@@ -171,20 +171,20 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("should match the host case-insensitively")
         void matchesHostCaseInsensitively() throws IOException {
-            MockHttpURLConnection conn = new MockHttpURLConnection(
+            AnswerConnection conn = new AnswerConnection(
                 MockUrlFactory.createUrl("https://CoreProtect.NET/translate/"));
             assertEquals("{}", readInputStream(conn.getInputStream()));
         }
     }
 
     @Nested
-    @DisplayName("Update Endpoint Mocking")
+    @DisplayName("Update Endpoint")
     class UpdateEndpoint {
 
         @Test
         @DisplayName("should extract version from User-Agent header")
         void extractsVersionFromUserAgent() throws IOException {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             conn.setRequestProperty("User-Agent", "CoreProtect/v21.3 (by Intelli)");
 
             String response = readInputStream(conn.getInputStream());
@@ -194,7 +194,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("should extract version when User-Agent was added rather than set")
         void extractsVersionFromAddedUserAgent() throws IOException {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateEdgeUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateEdgeUrl());
             conn.addRequestProperty("User-Agent", "CoreProtect/v24.1 (by Intelli)");
 
             assertEquals("24.1", readInputStream(conn.getInputStream()));
@@ -203,7 +203,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("should report no newer version when there is no User-Agent")
         void reportsNoUpdateWithoutUserAgent() throws IOException {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             String response = readInputStream(conn.getInputStream());
             assertEquals("0.0", response);
         }
@@ -211,7 +211,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("should report no newer version for a foreign User-Agent")
         void reportsNoUpdateForForeignUserAgent() throws IOException {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             conn.setRequestProperty("User-Agent", "Java/21");
             assertEquals("0.0", readInputStream(conn.getInputStream()));
         }
@@ -219,20 +219,20 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("should work for edge update endpoint")
         void worksForEdgeEndpoint() throws IOException {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateEdgeUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateEdgeUrl());
             String response = readInputStream(conn.getInputStream());
             assertEquals("0.0", response);
         }
     }
 
     @Nested
-    @DisplayName("Stats Endpoint Mocking")
+    @DisplayName("Stats Endpoint")
     class StatsEndpoint {
 
         @Test
         @DisplayName("should return empty response")
         void returnsEmptyResponse() throws IOException {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.statsUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.statsUrl());
             String response = readInputStream(conn.getInputStream());
             assertEquals("", response);
         }
@@ -240,7 +240,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("should accept and discard a request body")
         void acceptsRequestBody() throws IOException {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.httpsStatsUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.httpsStatsUrl());
             conn.setDoOutput(true);
             try (OutputStream os = conn.getOutputStream()) {
                 os.write("{\"players\":1}".getBytes(StandardCharsets.UTF_8));
@@ -257,9 +257,9 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("should throw IOException for unknown endpoint")
         void throwsForUnknownEndpoint() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.unknownUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.unknownUrl());
             IOException ex = assertThrows(IOException.class, () -> conn.getInputStream());
-            assertTrue(ex.getMessage().contains("does not know how to mock"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("can't answer requests to"), ex.getMessage());
             assertTrue(ex.getMessage().contains("unknown.example.com/path"), ex.getMessage());
             assertTrue(ex.getMessage().contains(PrivacyConstants.FORK_NAME));
             assertTrue(ex.getMessage().contains(PrivacyConstants.FORK_ISSUE_URL));
@@ -273,14 +273,14 @@ class MockHttpURLConnectionTest {
             "http://coreprotect.net/somewhere-else/"
         })
         void throwsForOtherEndpoints(String spec) {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.createUrl(spec));
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.createUrl(spec));
             assertThrows(IOException.class, conn::getInputStream);
         }
 
         @Test
         @DisplayName("should not leak user info from the URL into the message")
         void doesNotLeakUserInfo() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(
+            AnswerConnection conn = new AnswerConnection(
                 MockUrlFactory.createUrl("https://user:secret@unknown.example.com/path?q=1#frag"));
             IOException ex = assertThrows(IOException.class, conn::getInputStream);
             assertFalse(ex.getMessage().contains("secret"), ex.getMessage());
@@ -294,7 +294,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("connect() should mark as connected")
         void connectMarksAsConnected() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             conn.connect();
             // Connected connections refuse further configuration
             assertThrows(IllegalStateException.class, () -> conn.setDoOutput(true));
@@ -303,7 +303,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("disconnect() should clean up")
         void disconnectCleansUp() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             conn.connect();
             OutputStream first = conn.getOutputStream();
             conn.disconnect();
@@ -313,14 +313,14 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("usingProxy() should return true")
         void usingProxyReturnsTrue() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             assertTrue(conn.usingProxy());
         }
 
         @Test
         @DisplayName("getPermission() should return null")
         void getPermissionReturnsNull() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             assertNull(conn.getPermission());
         }
     }
@@ -332,7 +332,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("should store and retrieve request properties")
         void storesRequestProperties() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             conn.setRequestProperty("Custom-Header", "custom-value");
             assertEquals("custom-value", conn.getRequestProperty("Custom-Header"));
         }
@@ -340,7 +340,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("addRequestProperty should behave like setRequestProperty")
         void addRequestPropertyWorks() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             conn.addRequestProperty("Header", "value");
             assertEquals("value", conn.getRequestProperty("Header"));
         }
@@ -348,7 +348,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("getRequestProperties() should return map")
         void getRequestPropertiesReturnsMap() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             conn.setRequestProperty("Key", "Value");
             var props = conn.getRequestProperties();
             assertTrue(props.containsKey("Key"));
@@ -363,7 +363,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("should return a Server header naming LibreProtect")
         void returnsServerHeader() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             String server = conn.getHeaderField("Server");
             assertTrue(server.contains(PrivacyConstants.FORK_NAME));
         }
@@ -371,7 +371,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("should return Content-Type header")
         void returnsContentTypeHeader() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             String contentType = conn.getHeaderField("Content-Type");
             assertNotNull(contentType);
             assertTrue(contentType.startsWith("text/plain"));
@@ -380,7 +380,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("should match header names case-insensitively")
         void headerNamesCaseInsensitive() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             assertEquals(conn.getHeaderField("Content-Type"), conn.getHeaderField("content-type"));
             assertNull(conn.getHeaderField("X-Unknown"));
         }
@@ -388,7 +388,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("getHeaderFields() should return map")
         void getHeaderFieldsReturnsMap() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             var headers = conn.getHeaderFields();
             assertNotNull(headers);
             assertTrue(headers.containsKey("Content-Type"));
@@ -398,7 +398,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("getHeaderField(int) should return header by index")
         void getHeaderFieldByIndex() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             assertEquals("HTTP/1.1 200 OK", conn.getHeaderField(0)); // Status line
             assertEquals(conn.getContentType(), conn.getHeaderField(1));
             assertNull(conn.getHeaderField(3));
@@ -407,7 +407,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("getHeaderFieldKey(int) should return key by index")
         void getHeaderFieldKeyByIndex() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             assertNull(conn.getHeaderFieldKey(0)); // Status line has no key
             assertEquals("Content-Type", conn.getHeaderFieldKey(1));
             assertEquals("Server", conn.getHeaderFieldKey(2));
@@ -416,7 +416,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("getContentLength() should be unknown")
         void contentLengthUnknown() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             assertEquals(-1, conn.getContentLength());
         }
     }
@@ -428,7 +428,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("setDoInput should be accepted")
         void setDoInputWorks() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             conn.setDoInput(true);
             assertTrue(conn.getDoInput());
         }
@@ -436,7 +436,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("setDoOutput should be accepted")
         void setDoOutputWorks() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             conn.setDoOutput(true);
             assertTrue(conn.getDoOutput());
         }
@@ -444,7 +444,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("getOutputStream should return writable stream")
         void getOutputStreamReturnsStream() throws IOException {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             OutputStream os = conn.getOutputStream();
             assertNotNull(os);
             os.write("test".getBytes());
@@ -459,7 +459,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("setRequestMethod should be accepted")
         void setRequestMethodWorks() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             conn.setRequestMethod("POST");
             assertEquals("POST", conn.getRequestMethod());
         }
@@ -472,7 +472,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("setInstanceFollowRedirects should be accepted")
         void setFollowRedirectsWorks() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             conn.setInstanceFollowRedirects(false);
             assertFalse(conn.getInstanceFollowRedirects());
         }
@@ -485,7 +485,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("setConnectTimeout should be ignored")
         void connectTimeoutIgnored() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             conn.setConnectTimeout(5000);
             assertEquals(0, conn.getConnectTimeout());
         }
@@ -493,7 +493,7 @@ class MockHttpURLConnectionTest {
         @Test
         @DisplayName("setReadTimeout should be ignored")
         void readTimeoutIgnored() {
-            MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+            AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
             conn.setReadTimeout(5000);
             assertEquals(0, conn.getReadTimeout());
         }
@@ -507,7 +507,7 @@ class MockHttpURLConnectionTest {
         @DisplayName("getURL() should return the requested URL")
         void returnsRequestedUrl() {
             URL url = MockUrlFactory.updateUrl();
-            assertSame(url, new MockHttpURLConnection(url).getURL());
+            assertSame(url, new AnswerConnection(url).getURL());
         }
     }
 

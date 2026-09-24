@@ -29,10 +29,10 @@ import java.util.Locale;
  * Built-in presets: what happens to each of CoreProtect's known endpoints,
  * and to every other request that no custom route matches.
  *
- * <p>Blocking is preferred over mocking. A blocked request fails the way it
- * would offline, so CoreProtect writes nothing. A mocked response can be
- * saved: a mocked translation becomes an empty language cache. The license
- * endpoint can't be mocked at all (see {@link net.deltik.mc.libreprotect.MockHttpURLConnection}).
+ * <p>Blocking is preferred over answering. A blocked request fails the way it
+ * would offline, so CoreProtect writes nothing. An answer can be saved: an
+ * answered translation becomes an empty language cache. The license endpoint
+ * can't be answered at all (see {@link net.deltik.mc.libreprotect.routing.answer.AnswerConnection}).
  */
 public enum RoutePreset {
     /**

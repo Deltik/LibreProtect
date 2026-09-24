@@ -21,11 +21,11 @@
 package net.deltik.mc.libreprotect.routing.action;
 
 import net.deltik.mc.libreprotect.LibreProtectLogger;
-import net.deltik.mc.libreprotect.MockHttpURLConnection;
 import net.deltik.mc.libreprotect.routing.RouteAction;
 import net.deltik.mc.libreprotect.routing.RouteActionType;
 import net.deltik.mc.libreprotect.routing.RouteRegistry;
 import net.deltik.mc.libreprotect.routing.UrlNormalizer;
+import net.deltik.mc.libreprotect.routing.answer.AnswerConnection;
 
 import java.io.IOException;
 import java.net.Proxy;
@@ -35,16 +35,16 @@ import java.net.URLConnection;
 /**
  * Action that answers requests to CoreProtect's endpoints without connecting.
  */
-public class MockAction implements RouteAction {
+public class AnswerAction implements RouteAction {
 
     @Override
     public RouteActionType getType() {
-        return RouteActionType.MOCK;
+        return RouteActionType.ANSWER;
     }
 
     @Override
     public URLConnection createConnection(URL url, Proxy proxy, RouteRegistry.RouteMatch match) throws IOException {
-        LibreProtectLogger.debug("Mocked: " + UrlNormalizer.normalize(url));
-        return new MockHttpURLConnection(url);
+        LibreProtectLogger.debug("Answering: " + UrlNormalizer.normalize(url));
+        return new AnswerConnection(url);
     }
 }

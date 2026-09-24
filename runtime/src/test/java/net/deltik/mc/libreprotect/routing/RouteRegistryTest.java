@@ -72,7 +72,7 @@ class RouteRegistryTest {
         void matchesFirstRoute() {
             RouteRegistry registry = RouteRegistry.builder()
                 .addRoute("https://example\\.com/.*", RouteActionType.BLOCK)
-                .addRoute("https://example\\.com/special", RouteActionType.MOCK)
+                .addRoute("https://example\\.com/special", RouteActionType.ANSWER)
                 .build();
 
             RouteRegistry.RouteMatch match = registry.match("https://example.com/special");
@@ -121,12 +121,12 @@ class RouteRegistryTest {
         void matchesCorrectRouteAmongMultiple() {
             RouteRegistry registry = RouteRegistry.builder()
                 .addRoute("https://stats\\.coreprotect\\.net/.*", RouteActionType.BLOCK)
-                .addRoute("https://coreprotect\\.net/license/.*", RouteActionType.MOCK)
+                .addRoute("https://coreprotect\\.net/license/.*", RouteActionType.ANSWER)
                 .addRoute("https://update\\.coreprotect\\.net/.*", RouteActionType.PASSTHROUGH)
                 .build();
 
             assertEquals(RouteActionType.BLOCK, registry.match("https://stats.coreprotect.net/submit").getActionType());
-            assertEquals(RouteActionType.MOCK, registry.match("https://coreprotect.net/license/KEY").getActionType());
+            assertEquals(RouteActionType.ANSWER, registry.match("https://coreprotect.net/license/KEY").getActionType());
             assertEquals(RouteActionType.PASSTHROUGH, registry.match("https://update.coreprotect.net/check").getActionType());
         }
     }
@@ -151,7 +151,7 @@ class RouteRegistryTest {
         void returnsRoutesInOrder() {
             RouteRegistry registry = RouteRegistry.builder()
                 .addRoute("first", RouteActionType.BLOCK)
-                .addRoute("second", RouteActionType.MOCK)
+                .addRoute("second", RouteActionType.ANSWER)
                 .addRoute("third", RouteActionType.PASSTHROUGH)
                 .build();
 
@@ -178,7 +178,7 @@ class RouteRegistryTest {
         void returnsCorrectCount() {
             RouteRegistry registry = RouteRegistry.builder()
                 .addRoute("a", RouteActionType.BLOCK)
-                .addRoute("b", RouteActionType.MOCK)
+                .addRoute("b", RouteActionType.ANSWER)
                 .addRoute("c", RouteActionType.PASSTHROUGH)
                 .build();
             assertEquals(3, registry.size());
@@ -194,7 +194,7 @@ class RouteRegistryTest {
         void buildsWithFluentApi() {
             RouteRegistry registry = RouteRegistry.builder()
                 .addRoute("pattern1", RouteActionType.BLOCK)
-                .addRoute("pattern2", RouteActionType.MOCK)
+                .addRoute("pattern2", RouteActionType.ANSWER)
                 .addRoute("pattern3", RouteActionType.REDIRECT, "target")
                 .setDefaultAction(RouteActionType.PASSTHROUGH)
                 .build();
@@ -219,7 +219,7 @@ class RouteRegistryTest {
         void addsRoutesFromList() {
             List<Route> routes = List.of(
                 new Route("p1", RouteActionType.BLOCK),
-                new Route("p2", RouteActionType.MOCK)
+                new Route("p2", RouteActionType.ANSWER)
             );
 
             RouteRegistry registry = RouteRegistry.builder()
@@ -241,7 +241,7 @@ class RouteRegistryTest {
         void supportsMethodChaining() {
             RouteRegistry.Builder builder = RouteRegistry.builder();
             assertSame(builder, builder.addRoute("a", RouteActionType.BLOCK));
-            assertSame(builder, builder.setDefaultAction(RouteActionType.MOCK));
+            assertSame(builder, builder.setDefaultAction(RouteActionType.ANSWER));
         }
     }
 
@@ -274,7 +274,7 @@ class RouteRegistryTest {
         @Test
         @DisplayName("getRoute() should return matched route")
         void getRouteReturnsMatchedRoute() {
-            Route route = new Route("test", RouteActionType.MOCK);
+            Route route = new Route("test", RouteActionType.ANSWER);
             RouteRegistry.RouteMatch match = RouteRegistry.RouteMatch.of(route, Map.of());
             assertSame(route, match.getRoute());
         }

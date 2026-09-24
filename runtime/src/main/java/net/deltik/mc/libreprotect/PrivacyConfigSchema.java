@@ -92,7 +92,7 @@ public class PrivacyConfigSchema {
         "routes",
         new ArrayList<>(),
         "Custom routes, checked in order before the preset. The first match decides.",
-        "Each route has: pattern (regex), action (BLOCK/MOCK/REDIRECT/PASSTHROUGH), target (for REDIRECT)",
+        "Each route has: pattern (regex), action (BLOCK/ANSWER/REDIRECT/PASSTHROUGH), target (for REDIRECT)",
         "Patterns match the whole URL with a lowercase scheme and host, without user info or fragment",
         "Patterns support named capture groups: (?<name>...) or (?P<name>...)",
         "Capture substitution in targets: ${name}",

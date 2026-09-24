@@ -39,9 +39,6 @@ public class PrivacyConstants {
     public static final String ORIGINAL_NAME = "CoreProtect";
     public static final String ORIGINAL_AUTHOR = "Intelli";
 
-    /** MOCK's answer to a translation request: no translations */
-    public static final String MOCK_TRANSLATION_RESPONSE = "{}";
-
     private PrivacyConstants() {
         // Prevent instantiation
     }

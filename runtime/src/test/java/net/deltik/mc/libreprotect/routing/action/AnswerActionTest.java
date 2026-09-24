@@ -21,10 +21,10 @@
 package net.deltik.mc.libreprotect.routing.action;
 
 import net.deltik.mc.libreprotect.LibreProtectLogger;
-import net.deltik.mc.libreprotect.MockHttpURLConnection;
 import net.deltik.mc.libreprotect.routing.Route;
 import net.deltik.mc.libreprotect.routing.RouteActionType;
 import net.deltik.mc.libreprotect.routing.RouteRegistry;
+import net.deltik.mc.libreprotect.routing.answer.AnswerConnection;
 import net.deltik.mc.libreprotect.testutil.MockUrlFactory;
 import net.deltik.mc.libreprotect.testutil.TestLogger;
 import org.junit.jupiter.api.*;
@@ -40,16 +40,16 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class MockActionTest {
+class AnswerActionTest {
 
-    private MockAction action;
+    private AnswerAction action;
     private TestLogger testLogger;
     private final RouteRegistry.RouteMatch match =
-        RouteRegistry.RouteMatch.of(new Route(".*", RouteActionType.MOCK), Map.of());
+        RouteRegistry.RouteMatch.of(new Route(".*", RouteActionType.ANSWER), Map.of());
 
     @BeforeEach
     void setUp() {
-        action = new MockAction();
+        action = new AnswerAction();
         testLogger = new TestLogger();
         LibreProtectLogger.reset();
         LibreProtectLogger.initialize(testLogger);
@@ -67,9 +67,9 @@ class MockActionTest {
     }
 
     @Test
-    @DisplayName("getType() should return MOCK")
-    void getTypeReturnsMock() {
-        assertEquals(RouteActionType.MOCK, action.getType());
+    @DisplayName("getType() should return ANSWER")
+    void getTypeReturnsAnswer() {
+        assertEquals(RouteActionType.ANSWER, action.getType());
     }
 
     @Nested
@@ -77,11 +77,11 @@ class MockActionTest {
     class CreateConnection {
 
         @Test
-        @DisplayName("should return MockHttpURLConnection")
-        void returnsMockConnection() throws IOException {
+        @DisplayName("should return an AnswerConnection")
+        void returnsAnswerConnection() throws IOException {
             URLConnection conn = action.createConnection(MockUrlFactory.updateUrl(), null, match);
 
-            assertInstanceOf(MockHttpURLConnection.class, conn);
+            assertInstanceOf(AnswerConnection.class, conn);
         }
 
         @Test
@@ -101,24 +101,24 @@ class MockActionTest {
         }
 
         @Test
-        @DisplayName("should log mocked URL when verbose logging enabled")
-        void logsMockedUrlWhenVerbose() throws IOException {
+        @DisplayName("should log the answered URL when verbose logging enabled")
+        void logsAnsweredUrlWhenVerbose() throws IOException {
             LibreProtectLogger.setVerbose(true);
 
             action.createConnection(MockUrlFactory.updateUrl(), null, match);
 
-            assertTrue(testLogger.hasMessageContaining("Mocked"));
+            assertTrue(testLogger.hasMessageContaining("Answering"));
             assertTrue(testLogger.hasMessageContaining("update.coreprotect.net"));
         }
 
         @Test
-        @DisplayName("should NOT log mocked URL when verbose logging disabled")
-        void doesNotLogMockedUrlWhenNotVerbose() throws IOException {
+        @DisplayName("should NOT log the answered URL when verbose logging disabled")
+        void doesNotLogAnsweredUrlWhenNotVerbose() throws IOException {
             LibreProtectLogger.setVerbose(false);
 
             action.createConnection(MockUrlFactory.updateUrl(), null, match);
 
-            assertFalse(testLogger.hasMessageContaining("Mocked"));
+            assertFalse(testLogger.hasMessageContaining("Answering"));
             assertTrue(testLogger.getRecords().isEmpty());
         }
 
@@ -130,7 +130,7 @@ class MockActionTest {
             action.createConnection(
                 MockUrlFactory.createUrl("http://user:secret@Update.CoreProtect.net/version/#x"), null, match);
 
-            assertTrue(testLogger.hasMessageContaining("Mocked: http://update.coreprotect.net/version/"));
+            assertTrue(testLogger.hasMessageContaining("Answering: http://update.coreprotect.net/version/"));
             assertFalse(testLogger.hasMessageContaining("secret"));
         }
 
@@ -141,7 +141,7 @@ class MockActionTest {
             // that CoreProtect could save to .license
             URLConnection conn = action.createConnection(MockUrlFactory.licenseUrl("TESTKEY"), null, match);
 
-            assertInstanceOf(MockHttpURLConnection.class, conn);
+            assertInstanceOf(AnswerConnection.class, conn);
             assertThrows(IOException.class, conn::getInputStream);
         }
 
@@ -150,7 +150,7 @@ class MockActionTest {
         void worksForTranslateEndpoint() throws IOException {
             URLConnection conn = action.createConnection(MockUrlFactory.translateUrl(), null, match);
 
-            assertInstanceOf(MockHttpURLConnection.class, conn);
+            assertInstanceOf(AnswerConnection.class, conn);
             assertEquals("{}", read(conn));
         }
 
@@ -160,7 +160,7 @@ class MockActionTest {
             URLConnection conn = action.createConnection(MockUrlFactory.updateUrl(), null, match);
             conn.setRequestProperty("User-Agent", "CoreProtect/v23.1 (by Intelli)");
 
-            assertInstanceOf(MockHttpURLConnection.class, conn);
+            assertInstanceOf(AnswerConnection.class, conn);
             assertEquals("23.1", read(conn));
         }
 

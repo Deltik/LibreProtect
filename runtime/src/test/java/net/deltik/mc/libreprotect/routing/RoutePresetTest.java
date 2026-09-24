@@ -78,10 +78,10 @@ class RoutePresetTest {
         }
 
         @Test
-        @DisplayName("should never MOCK or PASSTHROUGH")
-        void neverMocksOrPassesThrough() {
+        @DisplayName("should never ANSWER or PASSTHROUGH")
+        void neverAnswersOrPassesThrough() {
             assertTrue(preset.getRoutes().stream()
-                .noneMatch(r -> r.getActionType() == RouteActionType.MOCK
+                .noneMatch(r -> r.getActionType() == RouteActionType.ANSWER
                     || r.getActionType() == RouteActionType.PASSTHROUGH));
         }
 

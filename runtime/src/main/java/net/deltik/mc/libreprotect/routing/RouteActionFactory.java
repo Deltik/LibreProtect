@@ -20,8 +20,8 @@
 
 package net.deltik.mc.libreprotect.routing;
 
+import net.deltik.mc.libreprotect.routing.action.AnswerAction;
 import net.deltik.mc.libreprotect.routing.action.BlockAction;
-import net.deltik.mc.libreprotect.routing.action.MockAction;
 import net.deltik.mc.libreprotect.routing.action.PassthroughAction;
 import net.deltik.mc.libreprotect.routing.action.RedirectAction;
 
@@ -37,7 +37,7 @@ public class RouteActionFactory {
 
     static {
         ACTIONS.put(RouteActionType.BLOCK, new BlockAction());
-        ACTIONS.put(RouteActionType.MOCK, new MockAction());
+        ACTIONS.put(RouteActionType.ANSWER, new AnswerAction());
         ACTIONS.put(RouteActionType.REDIRECT, new RedirectAction());
         ACTIONS.put(RouteActionType.PASSTHROUGH, new PassthroughAction());
     }

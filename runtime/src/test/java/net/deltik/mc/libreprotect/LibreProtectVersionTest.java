@@ -20,6 +20,7 @@
 
 package net.deltik.mc.libreprotect;
 
+import net.deltik.mc.libreprotect.routing.answer.AnswerConnection;
 import net.deltik.mc.libreprotect.testutil.MockUrlFactory;
 import org.junit.jupiter.api.*;
 
@@ -43,9 +44,9 @@ class LibreProtectVersionTest {
     }
 
     @Test
-    @DisplayName("mock connections should advertise the LibreProtect version")
-    void mockServerHeaderUsesForkVersion() {
-        MockHttpURLConnection conn = new MockHttpURLConnection(MockUrlFactory.updateUrl());
+    @DisplayName("answer connections should advertise the LibreProtect version")
+    void answerServerHeaderUsesForkVersion() {
+        AnswerConnection conn = new AnswerConnection(MockUrlFactory.updateUrl());
         assertEquals(PrivacyConstants.FORK_NAME + "/" + LibreProtectVersion.getForkVersion(),
             conn.getHeaderField("Server"));
     }

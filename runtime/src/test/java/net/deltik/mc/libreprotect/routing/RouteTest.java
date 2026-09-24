@@ -108,7 +108,7 @@ class RouteTest {
         @Test
         @DisplayName("should match http and https with alternation")
         void matchesHttpAndHttps() {
-            Route route = new Route("https?://example\\.com/.*", RouteActionType.MOCK);
+            Route route = new Route("https?://example\\.com/.*", RouteActionType.ANSWER);
             assertTrue(route.getCompiledPattern().matcher("http://example.com/path").matches());
             assertTrue(route.getCompiledPattern().matcher("https://example.com/path").matches());
         }
@@ -127,7 +127,7 @@ class RouteTest {
 
         @ParameterizedTest
         @DisplayName("should return false for non-REDIRECT actions")
-        @EnumSource(value = RouteActionType.class, names = {"BLOCK", "MOCK", "PASSTHROUGH"})
+        @EnumSource(value = RouteActionType.class, names = {"BLOCK", "ANSWER", "PASSTHROUGH"})
         void returnsFalseForNonRedirect(RouteActionType actionType) {
             Route route = new Route(".*", actionType);
             assertFalse(route.isRedirect());
@@ -157,8 +157,8 @@ class RouteTest {
         @Test
         @DisplayName("getActionType should return action type")
         void getActionTypeReturnsAction() {
-            Route route = new Route(".*", RouteActionType.MOCK);
-            assertEquals(RouteActionType.MOCK, route.getActionType());
+            Route route = new Route(".*", RouteActionType.ANSWER);
+            assertEquals(RouteActionType.ANSWER, route.getActionType());
         }
 
         @Test

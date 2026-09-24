@@ -25,6 +25,7 @@ import net.deltik.mc.libreprotect.routing.RouteActionType;
 import net.deltik.mc.libreprotect.routing.RoutePreset;
 import net.deltik.mc.libreprotect.routing.RouteRegistry;
 import net.deltik.mc.libreprotect.routing.RouteResolver;
+import net.deltik.mc.libreprotect.routing.answer.AnswerConnection;
 import net.deltik.mc.libreprotect.testutil.LocalHttpServer;
 import net.deltik.mc.libreprotect.testutil.MockUrlFactory;
 import net.deltik.mc.libreprotect.testutil.TestLogger;
@@ -261,26 +262,26 @@ class EgressTest {
     @DisplayName("Delegation through routing")
     class Delegation {
 
-        private final Route mockUpdates = new Route("https?://update\\.coreprotect\\.net/.*", RouteActionType.MOCK);
+        private final Route answerUpdates = new Route("https?://update\\.coreprotect\\.net/.*", RouteActionType.ANSWER);
 
         @Test
         @DisplayName("openConnection(URL) should return the routed connection")
         void openConnectionRoutes() throws IOException {
-            Egress.install(resolver(mockUpdates));
-            assertInstanceOf(MockHttpURLConnection.class, Egress.openConnection(MockUrlFactory.updateUrl()));
+            Egress.install(resolver(answerUpdates));
+            assertInstanceOf(AnswerConnection.class, Egress.openConnection(MockUrlFactory.updateUrl()));
         }
 
         @Test
         @DisplayName("openStream(URL) should read the routed connection")
         void openStreamRoutes() throws IOException {
-            Egress.install(resolver(mockUpdates));
+            Egress.install(resolver(answerUpdates));
             assertEquals("0.0", read(Egress.openStream(MockUrlFactory.updateUrl())));
         }
 
         @Test
         @DisplayName("getContent(URL) should return the routed connection's content")
         void getContentRoutes() throws IOException {
-            Egress.install(resolver(mockUpdates));
+            Egress.install(resolver(answerUpdates));
             Object content = Egress.getContent(MockUrlFactory.updateUrl());
             assertEquals("0.0", read(assertInstanceOf(InputStream.class, content)));
         }
@@ -288,7 +289,7 @@ class EgressTest {
         @Test
         @DisplayName("getContent(URL, Class[]) should honor the requested classes")
         void getContentClassesRoutes() throws IOException {
-            Egress.install(resolver(mockUpdates));
+            Egress.install(resolver(answerUpdates));
 
             Object stream = Egress.getContent(MockUrlFactory.updateUrl(), new Class<?>[]{InputStream.class});
             assertEquals("0.0", read(assertInstanceOf(InputStream.class, stream)));
@@ -315,9 +316,9 @@ class EgressTest {
         }
 
         @Test
-        @DisplayName("an https mock should be an HttpsURLConnection")
-        void httpsMockIsHttps() throws IOException {
-            Egress.install(resolver(new Route("https://stats\\.coreprotect\\.net/.*", RouteActionType.MOCK)));
+        @DisplayName("an https answer should be an HttpsURLConnection")
+        void httpsAnswerIsHttps() throws IOException {
+            Egress.install(resolver(new Route("https://stats\\.coreprotect\\.net/.*", RouteActionType.ANSWER)));
 
             URLConnection conn = Egress.openConnection(MockUrlFactory.httpsStatsUrl());
 
@@ -367,11 +368,11 @@ class EgressTest {
         @Test
         @DisplayName("a mixed-case scheme and host should match a lowercase custom route")
         void mixedCaseMatchesCustomRoute() throws IOException {
-            Egress.install(resolver(new Route("https?://update\\.coreprotect\\.net/.*", RouteActionType.MOCK)));
+            Egress.install(resolver(new Route("https?://update\\.coreprotect\\.net/.*", RouteActionType.ANSWER)));
 
             URLConnection conn = Egress.openConnection(MockUrlFactory.createUrl("HTTP://Update.CoreProtect.NET/version/"));
 
-            assertInstanceOf(MockHttpURLConnection.class, conn);
+            assertInstanceOf(AnswerConnection.class, conn);
         }
 
         @Test

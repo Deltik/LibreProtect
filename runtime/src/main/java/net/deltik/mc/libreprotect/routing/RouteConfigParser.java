@@ -95,7 +95,7 @@ public class RouteConfigParser {
         try {
             actionType = RouteActionType.valueOf(actionStr);
         } catch (IllegalArgumentException e) {
-            skip(index, "its action '" + actionStr + "' isn't BLOCK, MOCK, REDIRECT or PASSTHROUGH");
+            skip(index, "its action '" + actionStr + "' isn't BLOCK, ANSWER, REDIRECT or PASSTHROUGH");
             return null;
         }
 

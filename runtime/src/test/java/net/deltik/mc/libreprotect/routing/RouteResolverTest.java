@@ -21,6 +21,7 @@
 package net.deltik.mc.libreprotect.routing;
 
 import net.deltik.mc.libreprotect.*;
+import net.deltik.mc.libreprotect.routing.answer.AnswerConnection;
 import net.deltik.mc.libreprotect.testutil.LocalHttpServer;
 import net.deltik.mc.libreprotect.testutil.MockUrlFactory;
 import net.deltik.mc.libreprotect.testutil.TestLogger;
@@ -70,16 +71,16 @@ class RouteResolverTest {
         }
 
         @Test
-        @DisplayName("should return MockHttpURLConnection for MOCK action")
-        void returnsMockConnectionForMockAction() throws IOException {
+        @DisplayName("should return an AnswerConnection for ANSWER action")
+        void returnsAnswerConnectionForAnswerAction() throws IOException {
             RouteRegistry registry = RouteRegistry.builder()
-                .addRoute("https?://update\\.coreprotect\\.net/.*", RouteActionType.MOCK)
+                .addRoute("https?://update\\.coreprotect\\.net/.*", RouteActionType.ANSWER)
                 .build();
             RouteResolver resolver = new RouteResolver(registry);
 
             URLConnection conn = resolver.resolve(MockUrlFactory.updateUrl());
 
-            assertInstanceOf(MockHttpURLConnection.class, conn);
+            assertInstanceOf(AnswerConnection.class, conn);
         }
 
         @Test
@@ -161,17 +162,17 @@ class RouteResolverTest {
         void matchesMultipleUrlsCorrectly() throws IOException {
             RouteRegistry registry = RouteRegistry.builder()
                 .addRoute("https?://stats\\.coreprotect\\.net/.*", RouteActionType.BLOCK)
-                .addRoute("https?://coreprotect\\.net/translate/?", RouteActionType.MOCK)
-                .addRoute("https?://update\\.coreprotect\\.net/.*", RouteActionType.MOCK)
+                .addRoute("https?://coreprotect\\.net/translate/?", RouteActionType.ANSWER)
+                .addRoute("https?://update\\.coreprotect\\.net/.*", RouteActionType.ANSWER)
                 .setDefaultAction(RouteActionType.BLOCK)
                 .build();
             RouteResolver resolver = new RouteResolver(registry);
 
             assertThrows(EgressBlockedException.class,
                 () -> resolver.resolve(url("http://stats.coreprotect.net/submit")));
-            assertInstanceOf(MockHttpURLConnection.class,
+            assertInstanceOf(AnswerConnection.class,
                 resolver.resolve(url("http://coreprotect.net/translate/")));
-            assertInstanceOf(MockHttpURLConnection.class,
+            assertInstanceOf(AnswerConnection.class,
                 resolver.resolve(url("http://update.coreprotect.net/version/")));
             assertThrows(EgressBlockedException.class,
                 () -> resolver.resolve(url("http://coreprotect.net/license/KEY")));
@@ -205,14 +206,14 @@ class RouteResolverTest {
     class NormalizedMatching {
 
         private final RouteResolver resolver = new RouteResolver(RouteRegistry.builder()
-            .addRoute("https://example\\.com/Path", RouteActionType.MOCK)
+            .addRoute("https://example\\.com/Path", RouteActionType.ANSWER)
             .setDefaultAction(RouteActionType.BLOCK)
             .build());
 
         @Test
         @DisplayName("should match a mixed-case scheme and host against a lowercase pattern")
         void mixedCaseHost() throws IOException {
-            assertInstanceOf(MockHttpURLConnection.class, resolver.resolve(url("HTTPS://EXAMPLE.Com/Path")));
+            assertInstanceOf(AnswerConnection.class, resolver.resolve(url("HTTPS://EXAMPLE.Com/Path")));
         }
 
         @Test
@@ -226,13 +227,13 @@ class RouteResolverTest {
         @Test
         @DisplayName("should ignore user info when matching")
         void ignoresUserInfo() throws IOException {
-            assertInstanceOf(MockHttpURLConnection.class, resolver.resolve(url("https://user:pw@example.com/Path")));
+            assertInstanceOf(AnswerConnection.class, resolver.resolve(url("https://user:pw@example.com/Path")));
         }
 
         @Test
         @DisplayName("should ignore the fragment when matching")
         void ignoresFragment() throws IOException {
-            assertInstanceOf(MockHttpURLConnection.class, resolver.resolve(url("https://example.com/Path#anchor")));
+            assertInstanceOf(AnswerConnection.class, resolver.resolve(url("https://example.com/Path#anchor")));
         }
 
         @Test

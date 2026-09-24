@@ -483,7 +483,7 @@ class PrivacyConfigTest {
         @DisplayName("should mention verbose logging when enabled")
         void mentionsVerbose() {
             PrivacyConfig config = new PrivacyConfig(RoutePreset.ALLOW_UPDATES,
-                List.of(new Route("a", RouteActionType.BLOCK), new Route("b", RouteActionType.MOCK)), true);
+                List.of(new Route("a", RouteActionType.BLOCK), new Route("b", RouteActionType.ANSWER)), true);
 
             assertEquals("preset allow-updates, 2 custom routes, default action BLOCK, verbose logging",
                 config.describe());

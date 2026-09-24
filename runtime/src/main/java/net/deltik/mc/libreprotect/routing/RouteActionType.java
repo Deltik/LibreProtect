@@ -30,9 +30,10 @@ public enum RouteActionType {
     BLOCK,
 
     /**
-     * Return synthetic mock responses
+     * LibreProtect answers the request itself; nothing is sent to
+     * CoreProtect's servers.
      */
-    MOCK,
+    ANSWER,
 
     /**
      * Redirect to a different URL (with capture substitution)

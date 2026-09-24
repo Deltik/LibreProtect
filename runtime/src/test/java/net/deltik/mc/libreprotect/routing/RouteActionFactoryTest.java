@@ -42,11 +42,11 @@ class RouteActionFactoryTest {
         }
 
         @Test
-        @DisplayName("should return MockAction for MOCK type")
-        void returnsMockAction() {
-            RouteAction action = RouteActionFactory.getAction(RouteActionType.MOCK);
-            assertInstanceOf(MockAction.class, action);
-            assertEquals(RouteActionType.MOCK, action.getType());
+        @DisplayName("should return AnswerAction for ANSWER type")
+        void returnsAnswerAction() {
+            RouteAction action = RouteActionFactory.getAction(RouteActionType.ANSWER);
+            assertInstanceOf(AnswerAction.class, action);
+            assertEquals(RouteActionType.ANSWER, action.getType());
         }
 
         @Test

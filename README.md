@@ -82,7 +82,7 @@ LibreProtect's network policy is in `plugins/CoreProtect/libreprotect.yml`. Libr
 preset: privacy-first
 
 # Custom routes, checked in order before the preset. The first match decides.
-# Each route has: pattern (regex), action (BLOCK/MOCK/REDIRECT/PASSTHROUGH), target (for REDIRECT)
+# Each route has: pattern (regex), action (BLOCK/ANSWER/REDIRECT/PASSTHROUGH), target (for REDIRECT)
 # Patterns match the whole URL with a lowercase scheme and host, without user info or fragment
 # Patterns support named capture groups: (?<name>...) or (?P<name>...)
 # Capture substitution in targets: ${name}
@@ -130,7 +130,7 @@ A list of custom routes that are checked before the preset. The first route that
 | Key       | Required       | Value                                                                                                                                                                                                                                                                                                                                                 |
 |-----------|----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `pattern` | Yes            | A [Java regular expression](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/regex/Pattern.html) that must match the whole URL. The scheme and host are lowercase, a default port such as `:443` is left out, and so are user info and the `#fragment`. Named groups, `(?<name>…)` or `(?P<name>…)`, can be used in `target`.   |
-| `action`  | Yes            | `BLOCK`, `MOCK`, `REDIRECT` or `PASSTHROUGH`, in any case                                                                                                                                                                                                                                                                                             |
+| `action`  | Yes            | `BLOCK`, `ANSWER`, `REDIRECT` or `PASSTHROUGH`, in any case                                                                                                                                                                                                                                                                                           |
 | `target`  | For `REDIRECT` | The URL to connect to instead. `${name}` is replaced with what the named group `name` matched.                                                                                                                                                                                                                                                        |
 
 **BLOCK**: Fail the request, as if the server were offline.
@@ -139,13 +139,13 @@ A list of custom routes that are checked before the preset. The first route that
 
 **REDIRECT**: Connect to `target` instead. Keep the original scheme (`http` or `https`), because CoreProtect and bStats expect a connection of that type.
 
-**MOCK**: Answer without connecting to anything. LibreProtect can answer three kinds of request:
+**ANSWER**: LibreProtect answers the request itself, and nothing is sent to CoreProtect's servers. LibreProtect can answer these requests:
 
 * A translation request gets no translations.
 * An update check gets the running version, so no update is announced.
-* Usage statistics are accepted and thrown away.
+* Usage statistics get an empty reply.
 
-Any other request fails. The donation-key check can't be mocked on purpose: CoreProtect would save the answer in `plugins/CoreProtect/.license`, and stock CoreProtect would trust that file if you switched back.
+Any other request fails. The donation-key check can't be answered on purpose: CoreProtect would save the answer in `plugins/CoreProtect/.license`, and stock CoreProtect would trust that file if you switched back.
 
 LibreProtect skips an invalid route and logs a warning about it.
 

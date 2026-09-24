@@ -18,7 +18,10 @@
  * along with LibreProtect.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package net.deltik.mc.libreprotect;
+package net.deltik.mc.libreprotect.routing.answer;
+
+import net.deltik.mc.libreprotect.LibreProtectVersion;
+import net.deltik.mc.libreprotect.PrivacyConstants;
 
 import javax.net.ssl.HttpsURLConnection;
 import java.io.ByteArrayInputStream;
@@ -38,23 +41,27 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * A connection that returns mock responses for CoreProtect endpoints.
+ * A connection that LibreProtect answers itself, without connecting to
+ * anything.
  *
  * <p>It extends {@link HttpsURLConnection} rather than {@link HttpURLConnection}
  * so it survives both casts that callers make: CoreProtect casts to
  * {@code HttpURLConnection}, and bStats casts to {@code HttpsURLConnection}.
  *
- * <p>The license endpoint is deliberately not mockable. CoreProtect saves
+ * <p>The license endpoint is deliberately not answerable. CoreProtect saves
  * validated keys to {@code plugins/CoreProtect/.license}, and stock CoreProtect
- * trusts that file when it is offline, so a mocked license would leak out of
- * LibreProtect.
+ * trusts that file when it is offline, so an answered license would leak out
+ * of LibreProtect.
  */
-public class MockHttpURLConnection extends HttpsURLConnection {
+public class AnswerConnection extends HttpsURLConnection {
+
+    /** The answer to a translation request: no translations */
+    private static final String TRANSLATION_ANSWER = "{}";
 
     private ByteArrayOutputStream outputStream;
     private final Map<String, String> requestProperties = new HashMap<>();
 
-    public MockHttpURLConnection(URL url) {
+    public AnswerConnection(URL url) {
         super(url);
     }
 
@@ -81,12 +88,12 @@ public class MockHttpURLConnection extends HttpsURLConnection {
 
     @Override
     public String getResponseMessage() {
-        return "OK (Mocked by " + PrivacyConstants.FORK_NAME + ")";
+        return "OK (Answered by " + PrivacyConstants.FORK_NAME + ")";
     }
 
     @Override
     public InputStream getInputStream() throws IOException {
-        return new ByteArrayInputStream(generateMockResponse().getBytes(StandardCharsets.UTF_8));
+        return new ByteArrayInputStream(generateAnswer().getBytes(StandardCharsets.UTF_8));
     }
 
     @Override
@@ -103,15 +110,15 @@ public class MockHttpURLConnection extends HttpsURLConnection {
     }
 
     /**
-     * Generate appropriate mock response based on the endpoint
+     * Generate the answer for the endpoint
      */
-    private String generateMockResponse() throws IOException {
+    private String generateAnswer() throws IOException {
         String host = url.getHost().toLowerCase(Locale.ROOT);
         String path = url.getPath() != null ? url.getPath().toLowerCase(Locale.ROOT) : "";
 
         // Translation endpoint: no translations
         if (host.equals("coreprotect.net") && (path.equals("/translate/") || path.equals("/translate"))) {
-            return PrivacyConstants.MOCK_TRANSLATION_RESPONSE;
+            return TRANSLATION_ANSWER;
         }
 
         // Version check endpoints: report the running version so no update is announced
@@ -129,9 +136,9 @@ public class MockHttpURLConnection extends HttpsURLConnection {
             return "";
         }
 
-        throw new IOException(PrivacyConstants.FORK_NAME + " does not know how to mock "
+        throw new IOException(PrivacyConstants.FORK_NAME + " can't answer requests to "
             + url.getProtocol() + "://" + url.getHost() + url.getPath()
-            + "; use BLOCK for this route instead. If upstream added this endpoint, please report it at "
+            + "; use BLOCK for it instead. If upstream added this endpoint, please report it at "
             + PrivacyConstants.FORK_ISSUE_URL);
     }
 
@@ -222,7 +229,7 @@ public class MockHttpURLConnection extends HttpsURLConnection {
 
     @Override
     public void setConnectTimeout(int timeout) {
-        // Ignore timeouts for mock connections
+        // Nothing to time out
     }
 
     @Override
@@ -232,7 +239,7 @@ public class MockHttpURLConnection extends HttpsURLConnection {
 
     @Override
     public void setReadTimeout(int timeout) {
-        // Ignore timeouts for mock connections
+        // Nothing to time out
     }
 
     @Override
