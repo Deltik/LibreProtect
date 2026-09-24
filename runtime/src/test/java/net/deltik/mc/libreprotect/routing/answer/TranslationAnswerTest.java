@@ -33,6 +33,7 @@
 package net.deltik.mc.libreprotect.routing.answer;
 
 import net.deltik.mc.libreprotect.LibreProtectLogger;
+import net.deltik.mc.libreprotect.LibreProtectVersion;
 import net.deltik.mc.libreprotect.testutil.MockUrlFactory;
 import net.deltik.mc.libreprotect.testutil.TestLogger;
 import org.json.simple.JSONObject;
@@ -197,6 +198,19 @@ class TranslationAnswerTest {
             String text = new String(response.body(), StandardCharsets.UTF_8);
             assertFalse(text.contains("\n"), text);
             assertEquals(new TreeMap<>(GERMAN_ANSWER), answer(response));
+        }
+
+        @Test
+        @DisplayName("should record that this version's bundle answered, and nothing when it can't answer")
+        void recordsAnswers() throws IOException {
+            List<String> answered = new ArrayList<>();
+            TranslationAnswer recording = new TranslationAnswer(bundle(), answered::add);
+
+            recording.answer(request(body(builtInPhrases("de"))));
+            assertThrows(IOException.class, () -> recording.answer(request(body(builtInPhrases("nl")))));
+            assertThrows(IOException.class, () -> recording.answer(request(new byte[0])));
+
+            assertEquals(List.of(TranslationCache.bundled(LibreProtectVersion.getForkVersion())), answered);
         }
 
         @Test

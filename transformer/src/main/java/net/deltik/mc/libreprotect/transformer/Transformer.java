@@ -166,7 +166,7 @@ final class Transformer {
             output.put(name, runtime.get(name));
             report.injectedEntries.add(name);
         }
-        bundleTranslations();
+        bundleTranslations(upstreamClasses);
 
         String generatedEntry = SubclassGenerator.CLASS_NAME + ".class";
         ContractViolation.require(!output.contains(generatedEntry), "Upstream ships " + generatedEntry);
@@ -373,7 +373,8 @@ final class Transformer {
      * of the enum that the phrase renderer renders, and the built-in English
      * from upstream's code.
      */
-    private void bundleTranslations() throws IOException {
+    private void bundleTranslations(Set<String> upstreamClasses) throws IOException {
+        Translations.checkCacheName(upstream, upstreamClasses);
         Set<String> phraseEnums = phraseRenderers.stream()
             .map(renderer -> renderer.substring(0, renderer.indexOf('.')))
             .collect(Collectors.toCollection(TreeSet::new));

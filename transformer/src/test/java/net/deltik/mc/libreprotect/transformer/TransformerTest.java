@@ -517,6 +517,13 @@ class TransformerTest {
         }
 
         @Test
+        @DisplayName("translation cache renamed")
+        void cacheRenamed() {
+            String message = violation(upstream -> upstream.languageCache = ".translations").getMessage();
+            assertTrue(message.contains("no longer names its translation cache '.language'"), message);
+        }
+
+        @Test
         @DisplayName("upstream ships a translation LibreProtect would overwrite")
         void translationCollision() {
             String message = violation(upstream -> upstream.upstreamExtra.put("META-INF/libreprotect/lang/de.yml",

@@ -33,6 +33,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
+import java.util.function.Consumer;
 
 /**
  * Answers CoreProtect's translation request with CoreProtect's translation
@@ -41,9 +42,11 @@ import java.util.TreeMap;
  * answer, it leaves out the service's translations of phrases that the server
  * customized in {@code language.yml}, which CoreProtect would otherwise show
  * until its next start. If the service fails, the bundled translation answers
- * alone, so allowing the service never loses translations. If neither can
- * answer, the request fails like a failed connection, and CoreProtect saves
- * no cache.
+ * alone, so allowing the service never loses translations.
+ * {@link TranslationCache} records which of them answered, and after a
+ * failure makes the next start ask the service again, as CoreProtect would.
+ * If neither can answer, the request fails like a failed connection, and
+ * CoreProtect saves no cache.
  *
  * <p>The service gets the request exactly as CoreProtect made it: the same
  * URL, method, request properties and body.
@@ -61,6 +64,7 @@ public final class LayeredTranslationAnswer implements Answer {
 
     private final TranslationAnswer bundled;
     private final Proxy proxy;
+    private final Consumer<String> answered;
 
     /**
      * @param bundled answers from the bundled translations
@@ -68,8 +72,17 @@ public final class LayeredTranslationAnswer implements Answer {
      *                the default
      */
     public LayeredTranslationAnswer(TranslationAnswer bundled, Proxy proxy) {
+        this(bundled, proxy, TranslationCache::answered);
+    }
+
+    /**
+     * @param answered takes what gave each answer: the service, or the
+     *                 bundled translations alone because it failed
+     */
+    LayeredTranslationAnswer(TranslationAnswer bundled, Proxy proxy, Consumer<String> answered) {
         this.bundled = Objects.requireNonNull(bundled, "bundled");
         this.proxy = proxy;
+        this.answered = Objects.requireNonNull(answered, "answered");
     }
 
     @Override
@@ -85,10 +98,12 @@ public final class LayeredTranslationAnswer implements Answer {
             }
             LibreProtectLogger.debug("CoreProtect's translation service failed, so the bundled translation answers "
                 + "alone: " + e);
+            answered.accept(TranslationCache.SERVICE_FAILED);
             return Response.json(TranslationAnswer.toJson(translations));
         }
         Map<String, String> layered = translations == null ? new TreeMap<>() : new TreeMap<>(translations);
         layered.putAll(uncustomized(sent, service));
+        answered.accept(TranslationCache.SERVICE);
         return Response.json(TranslationAnswer.toJson(layered));
     }
 

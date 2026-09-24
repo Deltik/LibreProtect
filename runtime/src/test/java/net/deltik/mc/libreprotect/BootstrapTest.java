@@ -376,6 +376,77 @@ class BootstrapTest {
         }
     }
 
+    @Nested
+    @DisplayName("Language cache")
+    class LanguageCache {
+
+        private static final String CACHE = "# CoreProtect v24.1 Language Cache (nl)\n\nHELP_HEADER: \"{0} Hulp\"";
+
+        private Path cache() {
+            return dataFolder.resolve(".language");
+        }
+
+        private void writeCache() throws IOException {
+            Files.writeString(cache(), CACHE, StandardCharsets.UTF_8);
+        }
+
+        @Test
+        @DisplayName("should keep CoreProtect's cache when LibreProtect replaces CoreProtect, and after it writes its "
+            + "default policy")
+        void installOverCoreProtect() throws IOException {
+            writeCache();
+
+            Bootstrap.init(testLogger, dataFolder.toFile());
+            assertEquals(CACHE, Files.readString(cache()), "first start");
+            PrivacyConfig.writeDefaultIfMissing(configFile());
+
+            Bootstrap.init(testLogger, dataFolder.toFile());
+            assertEquals(CACHE, Files.readString(cache()), "second start, with the default policy written");
+        }
+
+        @Test
+        @DisplayName("should keep the cache when a policy edit doesn't change where translations come from")
+        void unrelatedEdit() throws IOException {
+            writeConfig("preset: passthrough\n");
+            Bootstrap.init(testLogger, dataFolder.toFile());
+            writeCache();
+
+            writeConfig("preset: passthrough\nverbose-logging: true\n");
+            Bootstrap.init(testLogger, dataFolder.toFile());
+
+            assertEquals(CACHE, Files.readString(cache()));
+        }
+
+        @Test
+        @DisplayName("should empty the cache when translations come from somewhere else")
+        void sourceChanged() throws IOException {
+            Bootstrap.init(testLogger, dataFolder.toFile());
+            writeCache();
+
+            writeConfig("preset: passthrough\n");
+            Bootstrap.init(testLogger, dataFolder.toFile());
+
+            assertEquals(RoutePreset.PASSTHROUGH, Bootstrap.getActiveConfig().getPreset());
+            assertEquals(0, Files.size(cache()));
+            assertTrue(testLogger.hasMessageContaining(Level.INFO, "Refreshing translations"));
+        }
+
+        @Test
+        @DisplayName("should keep the cache when the policy fails to install")
+        void keptWhenFailingClosed() throws IOException {
+            Bootstrap.init(testLogger, dataFolder.toFile());
+            writeCache();
+
+            // Passthrough would empty the cache, but the invalid routes make loading log a warning, which this
+            // logger throws on, so setup fails
+            writeConfig("preset: passthrough\nroutes: 5\n");
+            Bootstrap.init(new ThrowOnceLogger(), dataFolder.toFile());
+
+            assertNull(Bootstrap.getActiveConfig());
+            assertEquals(CACHE, Files.readString(cache()));
+        }
+    }
+
     /**
      * Throws on the first record it receives, then records normally.
      */

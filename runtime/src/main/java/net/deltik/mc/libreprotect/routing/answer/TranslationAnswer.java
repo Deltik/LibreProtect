@@ -24,6 +24,7 @@ import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonToken;
 import com.google.gson.stream.JsonWriter;
 import net.deltik.mc.libreprotect.LibreProtectLogger;
+import net.deltik.mc.libreprotect.LibreProtectVersion;
 import net.deltik.mc.libreprotect.PrivacyConfig;
 import net.deltik.mc.libreprotect.PrivacyConstants;
 
@@ -38,6 +39,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 
 /**
  * Answers CoreProtect's translation request from the translations that
@@ -71,17 +73,29 @@ public final class TranslationAnswer implements Answer {
     private static final String PLUS_SIGN = "{PLUS_SIGN}";
 
     private final TranslationBundle bundle;
+    private final Consumer<String> answered;
     private final Set<String> warned = ConcurrentHashMap.newKeySet();
 
     /**
-     * Answer with the translations in the plugin JAR.
+     * Answer with the translations in the plugin JAR, and record each answer
+     * with {@link TranslationCache}.
      */
     public TranslationAnswer() {
-        this(TranslationBundle.bundled());
+        this(TranslationBundle.bundled(), TranslationCache::answered);
     }
 
     TranslationAnswer(TranslationBundle bundle) {
+        this(bundle, source -> {
+        });
+    }
+
+    /**
+     * @param answered takes what gave each answer: this LibreProtect
+     *                 version's bundled translations
+     */
+    TranslationAnswer(TranslationBundle bundle, Consumer<String> answered) {
         this.bundle = Objects.requireNonNull(bundle, "bundle");
+        this.answered = Objects.requireNonNull(answered, "answered");
     }
 
     /**
@@ -102,7 +116,9 @@ public final class TranslationAnswer implements Answer {
             }
             throw new IOException(PrivacyConstants.FORK_NAME + " has no translation for '" + language + "'");
         }
-        return Response.json(toJson(translations));
+        Response response = Response.json(toJson(translations));
+        answered.accept(TranslationCache.bundled(LibreProtectVersion.getForkVersion()));
+        return response;
     }
 
     /**

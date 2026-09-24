@@ -47,6 +47,7 @@ final class SyntheticUpstream {
     static final String PLAIN = "net/coreprotect/Plain";
     static final String PHRASE = "net/coreprotect/language/Phrase";
     static final String LANGUAGE = "net/coreprotect/language/Language";
+    static final String CONFIG_FILE = "net/coreprotect/config/ConfigFile";
     static final String CHAT = "net/coreprotect/utility/Chat";
     static final String BSTATS = "net/coreprotect/MetricsBase";
     static final String DRIVER = "com/example/jdbc/Driver";
@@ -84,6 +85,8 @@ final class SyntheticUpstream {
         Map.entry("HELP_HEADER", "{0} Help"),
         Map.entry("LINK_DOWNLOAD", "Download: {0}"),
         Map.entry("NO_PERMISSION", "You do not have permission to do that.")));
+    /** What upstream's code calls its translation cache */
+    String languageCache = ".language";
     /** Files in upstream's lang/ directory, which isn't part of the JARs; without any, there is no directory */
     final Map<String, String> lang = new LinkedHashMap<>(Map.of(
         "en.yml", """
@@ -136,6 +139,7 @@ final class SyntheticUpstream {
         authored.put(PLAIN + ".class", plainClass(PLAIN));
         authored.put(PHRASE + ".class", phraseEnum(phraseRenderer, phrases));
         authored.put(LANGUAGE + ".class", languageClass(defaults));
+        authored.put(CONFIG_FILE + ".class", classWithStrings(CONFIG_FILE, List.of(languageCache)));
         authored.put(CHAT + ".class", chatClass(messageOutput));
         authored.putAll(upstreamExtra);
 

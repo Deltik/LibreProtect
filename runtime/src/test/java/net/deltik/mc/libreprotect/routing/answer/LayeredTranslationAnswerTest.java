@@ -88,6 +88,8 @@ class LayeredTranslationAnswerTest {
         "User-Agent", "CoreProtect");
 
     private final TranslationAnswer bundled = new TranslationAnswer(TranslationAnswerTest.bundle());
+    /** What gave each answer, as the answer records it for TranslationCache */
+    private final List<String> answered = new CopyOnWriteArrayList<>();
     /** CoreProtect's translation service, which gives every request the reply that {@link #reply} sets */
     private LocalHttpServer service;
     private volatile int status = 200;
@@ -120,9 +122,15 @@ class LayeredTranslationAnswerTest {
         return new Request(url, "POST", HEADERS, TranslationAnswerTest.body(TranslationAnswerTest.builtInPhrases(language)));
     }
 
+    /**
+     * @return the layered answer, collecting what gave each answer in {@link #answered}
+     */
+    private LayeredTranslationAnswer layered(Proxy proxy) {
+        return new LayeredTranslationAnswer(bundled, proxy, answered::add);
+    }
+
     private Map<String, String> ask(String language) throws IOException {
-        Response response = new LayeredTranslationAnswer(bundled, null)
-            .answer(request(service.url("/translate/"), language));
+        Response response = layered(null).answer(request(service.url("/translate/"), language));
         assertEquals(200, response.status());
         return TranslationAnswerTest.answer(response);
     }
@@ -141,6 +149,7 @@ class LayeredTranslationAnswerTest {
             expected.put("HELP_HEADER", "{0} Hilfe (Dienst)");
             expected.put("STATUS_AUTO_PURGE", "Auto-Bereinigung: {0}");
             assertEquals(expected, ask("de"));
+            assertEquals(List.of(TranslationCache.SERVICE), answered);
         }
 
         @Test
@@ -154,8 +163,8 @@ class LayeredTranslationAnswerTest {
                 + "\"STATUS_AUTO_PURGE\":\"Bereinigung: {0}\",\"HELP_HEADER\":\"{0} Hilfe (Dienst)\","
                 + "\"WORLD_NOT_FOUND\":\"Welt nicht gefunden\"}");
 
-            Response response = new LayeredTranslationAnswer(bundled, null).answer(new Request(service.url("/translate/"),
-                "POST", HEADERS, TranslationAnswerTest.body(phrases)));
+            Response response = layered(null).answer(new Request(service.url("/translate/"), "POST", HEADERS,
+                TranslationAnswerTest.body(phrases)));
 
             Map<String, String> expected = new TreeMap<>(TranslationAnswerTest.GERMAN_ANSWER);
             expected.remove("HELP_STATUS_COMMAND");
@@ -171,7 +180,7 @@ class LayeredTranslationAnswerTest {
             TranslationAnswer withoutBuiltIn = new TranslationAnswer(TranslationBundleTest.bundle(
                 Map.of("de.yml", TranslationAnswerTest.GERMAN), new ArrayList<>()));
 
-            Response response = new LayeredTranslationAnswer(withoutBuiltIn, null)
+            Response response = new LayeredTranslationAnswer(withoutBuiltIn, null, answered::add)
                 .answer(request(service.url("/translate/"), "de"));
 
             assertEquals(Map.of("HELP_HEADER", "{0} Hilfe (Dienst)"), TranslationAnswerTest.answer(response));
@@ -192,7 +201,7 @@ class LayeredTranslationAnswerTest {
             reply(200, "{}");
             Request request = request(service.url("/translate/"), "de");
 
-            new LayeredTranslationAnswer(bundled, null).answer(request);
+            layered(null).answer(request);
 
             assertEquals(1, service.getReceived().size());
             LocalHttpServer.Received received = service.getReceived().get(0);
@@ -207,7 +216,7 @@ class LayeredTranslationAnswerTest {
         void proxy() throws IOException {
             reply(200, "{}");
 
-            new LayeredTranslationAnswer(bundled, service.asProxy()).answer(request(service.url("/translate/"), "de"));
+            layered(service.asProxy()).answer(request(service.url("/translate/"), "de"));
 
             assertEquals(service.url("/translate/").toString(), service.getReceived().get(0).uri().toString());
         }
@@ -227,7 +236,7 @@ class LayeredTranslationAnswerTest {
             reply(200, "{\"HELP_HEADER\":\"{0} Hilfe\"}");
             byte[] body = "not a translation request".getBytes(StandardCharsets.UTF_8);
 
-            Response response = new LayeredTranslationAnswer(bundled, null)
+            Response response = layered(null)
                 .answer(new Request(service.url("/translate/"), "POST", HEADERS, body));
 
             assertEquals(Map.of("HELP_HEADER", "{0} Hilfe"), TranslationAnswerTest.answer(response));
@@ -256,11 +265,12 @@ class LayeredTranslationAnswerTest {
 
         @ParameterizedTest(name = "{0}")
         @MethodSource("net.deltik.mc.libreprotect.routing.answer.LayeredTranslationAnswerTest#failures")
-        @DisplayName("should answer with the bundled translation alone")
+        @DisplayName("should answer with the bundled translation alone, and record that the service failed")
         void bundledAlone(String description, int status, String reply) throws IOException {
             reply(status, reply);
 
             assertEquals(new TreeMap<>(TranslationAnswerTest.GERMAN_ANSWER), ask("de"));
+            assertEquals(List.of(TranslationCache.SERVICE_FAILED), answered, "so that the next start asks again");
         }
 
         @Test
@@ -269,9 +279,10 @@ class LayeredTranslationAnswerTest {
             URL closed = service.url("/translate/");
             service.close();
 
-            Response response = new LayeredTranslationAnswer(bundled, null).answer(request(closed, "de"));
+            Response response = layered(null).answer(request(closed, "de"));
 
             assertEquals(new TreeMap<>(TranslationAnswerTest.GERMAN_ANSWER), TranslationAnswerTest.answer(response));
+            assertEquals(List.of(TranslationCache.SERVICE_FAILED), answered);
         }
 
         @Test
@@ -289,6 +300,7 @@ class LayeredTranslationAnswerTest {
 
             assertThrows(IOException.class, () -> ask("nl"));
             assertFalse(logger.hasLevel(Level.WARNING));
+            assertEquals(List.of(), answered, "without a cache, CoreProtect asks again anyway");
         }
     }
 
@@ -418,7 +430,7 @@ class LayeredTranslationAnswerTest {
         void lazy() throws IOException {
             reply(200, "{\"STATUS_AUTO_PURGE\":\"Auto-Bereinigung: {0}\"}");
             AnswerConnection connection = new AnswerConnection(service.url("/translate/"),
-                new LayeredTranslationAnswer(bundled, null));
+                layered(null));
             connection.setRequestMethod("POST");
             HEADERS.forEach(connection::setRequestProperty);
             connection.setDoOutput(true);
@@ -438,7 +450,7 @@ class LayeredTranslationAnswerTest {
         void fails() {
             reply(500, "");
             AnswerConnection connection = new AnswerConnection(service.url("/translate/"),
-                new LayeredTranslationAnswer(bundled, null));
+                layered(null));
 
             assertThrows(IOException.class, connection::getResponseCode);
             assertThrows(IOException.class, connection::getInputStream);

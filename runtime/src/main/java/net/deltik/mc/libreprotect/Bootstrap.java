@@ -20,6 +20,7 @@
 
 package net.deltik.mc.libreprotect;
 
+import net.deltik.mc.libreprotect.routing.answer.TranslationCache;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.File;
@@ -84,7 +85,9 @@ public final class Bootstrap {
             activeConfig = config;
         } catch (Exception | LinkageError e) {
             failClosed(e);
+            return;
         }
+        TranslationCache.update(dataFolder, Egress.getResolver());
     }
 
     private static void failClosed(Throwable cause) {

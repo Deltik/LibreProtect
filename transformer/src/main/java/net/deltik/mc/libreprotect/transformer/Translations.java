@@ -79,6 +79,12 @@ final class Translations {
     static final String ENGLISH = "en";
     /** CoreProtect's built-in English phrases, as Java properties */
     static final String DEFAULTS = DIRECTORY + "defaults.properties";
+    /**
+     * CoreProtect's translation cache in its data folder, which LibreProtect's
+     * runtime empties when translations come from somewhere else
+     * ({@code TranslationCache.CACHE})
+     */
+    static final String CACHE = ".language";
 
     /** What the runtime accepts as a language code */
     private static final Pattern CODE = Pattern.compile("[a-z0-9]{1,8}(-[a-z0-9]{1,8}){0,4}");
@@ -289,6 +295,21 @@ final class Translations {
             .map(Map.Entry::getKey)
             .sorted()
             .toList();
+    }
+
+    /**
+     * LibreProtect's runtime empties CoreProtect's translation cache, which
+     * CoreProtect names {@value #CACHE}, when translations come from
+     * somewhere else. Under another name, it would empty nothing.
+     */
+    static void checkCacheName(JarContents upstream, Set<String> upstreamClasses) {
+        boolean named = upstream.names().stream()
+            .filter(name -> JarContents.isClass(name) && !JarContents.isVersioned(name)
+                && upstreamClasses.contains(JarContents.internalName(name)))
+            .anyMatch(name -> ClassScan.of(upstream.get(name)).strings.contains(CACHE));
+        ContractViolation.require(named, "Upstream's code no longer names its translation cache '" + CACHE + "'. "
+            + "LibreProtect empties that file when translations come from somewhere else; update "
+            + "TranslationCache.CACHE in the runtime and Translations.CACHE here.");
     }
 
     private static String packageOf(String internalName) {
