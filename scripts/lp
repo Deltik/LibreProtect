@@ -21,8 +21,10 @@
 #
 #   scripts/lp build                Build the upstream release pinned in upstream.lock
 #   scripts/lp build --ref master   Development build of any upstream branch, tag or commit
-#   scripts/lp it                   Integration test the last build on a real Paper server
-#                                   (downloads Paper once and accepts the Minecraft EULA)
+#   scripts/lp it [--jobs N]        Integration test the last build on real Paper servers
+#                                   (downloads Paper once and accepts the Minecraft EULA),
+#                                   up to N at once: by default, as many as the processors
+#                                   and the available memory allow.
 #   scripts/lp sources              Archive the complete source of the last build (needs a clean commit)
 #   scripts/lp clean                Remove build output
 #   scripts/lp headers [--fix]      Check that Java files and shell scripts begin with the
@@ -379,6 +381,15 @@ cmd_build() {
 }
 
 cmd_it() {
+    local jobs=""
+    while (( $# )); do
+        case "$1" in
+            --jobs) [[ $# -ge 2 && "$2" =~ ^[1-9][0-9]*$ ]] || die "--jobs needs a positive number"; jobs="$2"; shift 2 ;;
+            *) die "Unknown option: $1" ;;
+        esac
+    done
+    # A server takes up to about 1.5 GiB. Past about a dozen, no suite waits for a server anymore.
+    [[ -n "$jobs" ]] || jobs="$(parallelism 1536 12)"
     find_jdk
     local fork upstream_jar
     fork="$(find "$DIST_DIR" -maxdepth 1 -name 'LibreProtect-*.jar' 2>/dev/null | head -n 1)"
@@ -392,7 +403,8 @@ cmd_it() {
         --agent "$ROOT/integration/egress-agent/target/libreprotect-egress-agent.jar" \
         --it-plugin "$ROOT/integration/test-plugin/target/libreprotect-it-plugin.jar" \
         --upstream "$upstream_jar" \
-        --fork "$fork"
+        --fork "$fork" \
+        --jobs "$jobs"
 }
 
 # The complete source of the last build, as the GPL requires for each JAR:

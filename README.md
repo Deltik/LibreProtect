@@ -255,7 +255,7 @@ scripts/lp --help                # Show every command and option
 DRY_RUN=1 scripts/ci/upstream-watch.sh   # Show what the scheduled reconciler would do now
 ```
 
-The build runs each module's unit tests in several JVMs at once, as many as the processors and the available memory allow, up to 8. Set `LP_TEST_FORKS` to choose how many.
+The build runs each module's unit tests in several JVMs at once, as many as the processors and the available memory allow, up to 8. Set `LP_TEST_FORKS` to choose how many. The integration test likewise runs several Paper servers at once; `scripts/lp it --jobs N` runs up to `N`.
 
 A development build's version is what `git describe --tags --long` says about the upstream commit, followed by `-libre-dev`: `<tag>-<commits>-g<commit>-libre-dev`. `<tag>` is upstream's nearest release tag without its `v`, `<commits>` is how many commits the build has that the tag doesn't, and `<commit>` is the start of the commit's ID. For example, `24.0-121-gd5cad31-libre-dev` is upstream's commit `d5cad31`, 121 commits past its release tag `v24.0`. When upstream tags a release on a branch of its own, as it did with 24.1, its default branch keeps the name of the tag before, although its code has the newer version. A release is named after its upstream release tag instead, such as `24.1-libre1`.
 
