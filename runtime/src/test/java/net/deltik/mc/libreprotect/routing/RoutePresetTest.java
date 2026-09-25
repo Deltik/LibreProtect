@@ -381,14 +381,14 @@ class RoutePresetTest {
         }
 
         @Test
-        @DisplayName("should return PRIVACY_FIRST for null")
-        void returnsDefaultForNull() {
+        @DisplayName("should fail closed to PRIVACY_FIRST, not the default preset, for null")
+        void failsClosedForNull() {
             assertEquals(RoutePreset.PRIVACY_FIRST, RoutePreset.fromConfigName(null));
         }
 
         @Test
-        @DisplayName("should return PRIVACY_FIRST for unknown preset")
-        void returnsDefaultForUnknown() {
+        @DisplayName("should fail closed to PRIVACY_FIRST, not the default preset, for an unknown preset")
+        void failsClosedForUnknown() {
             assertEquals(RoutePreset.PRIVACY_FIRST, RoutePreset.fromConfigName("unknown"));
         }
 
@@ -405,8 +405,8 @@ class RoutePresetTest {
         }
 
         @Test
-        @DisplayName("should handle empty string")
-        void handlesEmptyString() {
+        @DisplayName("should fail closed to PRIVACY_FIRST for an empty string")
+        void failsClosedForEmptyString() {
             assertEquals(RoutePreset.PRIVACY_FIRST, RoutePreset.fromConfigName(""));
         }
     }

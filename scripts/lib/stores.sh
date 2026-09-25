@@ -28,7 +28,7 @@ UPSTREAM_SPIGOTMC_RESOURCE="8631"
 
 # Shown on Modrinth under the title. Modrinth asks that it not repeat the title.
 # shellcheck disable=SC2034 # Used by modrinth.sh
-STORE_SUMMARY="A privacy-hardened build of CoreProtect, the block logging and rollback plugin, with no phoning home and every feature unlocked"
+STORE_SUMMARY="A privacy-hardened build of CoreProtect, the block logging and rollback plugin, that sends no telemetry by default and unlocks every feature"
 
 # Call Modrinth's API. Sends MODRINTH_TOKEN if it is set.
 #   modrinth <method> <path under /v2> [curl arguments...]

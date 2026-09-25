@@ -60,9 +60,12 @@ import java.util.stream.Stream;
  *       requests must show up in the egress log. If they don't, the harness
  *       can't see network traffic, and a clean LibreProtect result would
  *       mean nothing.</li>
- *   <li><b>LibreProtect.</b> Must make no network requests, read the data
- *       stock CoreProtect wrote (drop-in replacement), work through the
- *       public API and commands, and show its branding.</li>
+ *   <li><b>LibreProtect</b>, without a {@code libreprotect.yml}. Its only
+ *       network requests must be the default policy's update checks: to
+ *       GitHub, then to Modrinth once GitHub fails, since the egress agent
+ *       blocks both. It must read the data stock CoreProtect wrote (drop-in
+ *       replacement), work through the public API and commands, show its
+ *       branding, and write the default policy.</li>
  *   <li><b>Stock CoreProtect again.</b> Must read everything, including what
  *       LibreProtect wrote (switching back works), and find no license file
  *       planted by LibreProtect.</li>
@@ -98,10 +101,12 @@ public final class Harness {
     private static final String CORE_PROTECT_CONFIG = """
         # Seeded by LibreProtect's integration test. The donation key makes
         # CoreProtect contact its license server, one of the requests the
-        # positive control must see.
+        # positive control must see. Update checks are on, as by default.
         donation-key: LPITKEY1
         check-updates: true
         """;
+    /** Where LibreProtect's default policy asks for updates, in order */
+    private static final List<String> DEFAULT_UPDATE_HOSTS = List.of("api.github.com", "api.modrinth.com");
 
     private final Map<String, String> arguments;
     private final int generation;
@@ -706,9 +711,7 @@ public final class Harness {
 
     private void checkFork(Suite suite, Run run, Run control) throws IOException {
         checkCommon(suite, run);
-        List<Egress> egress = run.pluginEgress();
-        suite.check(egress.isEmpty(), "LibreProtect made no network requests"
-            + (egress.isEmpty() ? "" : ": " + egress));
+        checkDefaultUpdateChecks(suite, run);
         suite.check(run.results().getProperty("coreprotect.class", "").equals("net.deltik.mc.libreprotect.LibreProtectPlugin"),
             "LibreProtect's generated main class is loaded (" + run.results().getProperty("coreprotect.class") + ")");
         suite.check(run.results().getProperty("coreprotect.class.super", "").equals("net.coreprotect.CoreProtect"),
@@ -731,7 +734,8 @@ public final class Harness {
         suite.check(console.contains("[LibreProtect] LibreProtect has been successfully enabled!")
                 && console.contains("[LibreProtect] LibreProtect is a privacy-hardened build of CoreProtect by Intelli."),
             "startup messages name LibreProtect and credit CoreProtect");
-        suite.check(console.contains("[LibreProtect] Network policy: preset privacy-first"), "privacy-first policy is active");
+        suite.check(console.contains("[LibreProtect] Network policy: preset allow-updates, 0 custom routes, default action BLOCK,"
+                + " 2 update sources\n"), "the default allow-updates policy is active");
         suite.check(!console.contains("Community Edition"), "no Community Edition label");
         suite.check(console.contains("----- LibreProtect -----") && console.contains("Version: LibreProtect v" + version + "."),
             "/co status names LibreProtect and its version");
@@ -749,8 +753,41 @@ public final class Harness {
             "no stack traces from CoreProtect or LibreProtect");
 
         Path dataFolder = path("work").resolve("server/plugins/CoreProtect");
-        suite.check(Files.isRegularFile(dataFolder.resolve("libreprotect.yml")), "default libreprotect.yml was written");
+        Path policy = dataFolder.resolve("libreprotect.yml");
+        suite.check(Files.isRegularFile(policy), "default libreprotect.yml was written");
+        String written = Files.isRegularFile(policy) ? Files.readString(policy, StandardCharsets.UTF_8) : "";
+        suite.check(written.contains("\npreset: allow-updates\n"), "the default libreprotect.yml sets preset: allow-updates");
+        suite.check(written.contains("\nupdate-sources:\n  - type: github\n    repository: Deltik/LibreProtect\n"
+                + "  - type: modrinth\n    project: libreprotect\n"),
+            "the default libreprotect.yml lists GitHub's update source, then Modrinth's");
         checkNoLicense(suite, dataFolder, "LibreProtect");
+    }
+
+    /**
+     * LibreProtect answers CoreProtect's update check under its default
+     * policy by asking its update sources, GitHub first. The egress agent
+     * blocks that request, so LibreProtect asks Modrinth next, and that is
+     * blocked too. Nothing else may leave.
+     */
+    private void checkDefaultUpdateChecks(Suite suite, Run run) {
+        List<Egress> egress = run.pluginEgress();
+        suite.note("LibreProtect tried to contact: " + egress.stream().map(Egress::target).toList());
+        List<String> hosts = new ArrayList<>();
+        for (Egress attempt : egress) {
+            // A request shows up as a name lookup, then a connection to the name, both blocked
+            String host = attempt.target().replaceFirst(":\\d+$", "");
+            if (hosts.isEmpty() || !hosts.get(hosts.size() - 1).equals(host)) {
+                hosts.add(host);
+            }
+        }
+        suite.check(hosts.equals(DEFAULT_UPDATE_HOSTS), "LibreProtect's only network requests are update checks to GitHub,"
+            + " then Modrinth once GitHub failed" + (hosts.equals(DEFAULT_UPDATE_HOSTS) ? "" : ": " + egress));
+        List<Egress> other = egress.stream()
+            .filter(attempt -> !attempt.stack().contains("net.deltik.mc.libreprotect.update.UpdateHttp.")
+                || !(attempt.kind().equals("resolve") || attempt.target().endsWith(":443")))
+            .toList();
+        suite.check(other.isEmpty(), "each of them is an HTTPS request from LibreProtect's update check"
+            + (other.isEmpty() ? "" : ": " + other));
     }
 
     private void checkSwitchBack(Suite suite, Run run, Run fork) throws IOException {

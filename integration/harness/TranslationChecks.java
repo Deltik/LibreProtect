@@ -69,9 +69,17 @@ final class TranslationChecks {
         suite.concurrently(parts);
     }
 
+    /**
+     * CoreProtect's config.yml for a language, with update checks off: they
+     * are requests of their own, which {@link UpdateChecks} covers
+     */
+    private static String coreProtectConfig(String language) {
+        return "language: " + language + "\ncheck-updates: false\n";
+    }
+
     private static void german(Harness.Suite suite) throws Exception {
         Harness.Server server = suite.newServer("de");
-        server.coreProtectConfig("language: de\n");
+        server.coreProtectConfig(coreProtectConfig("de"));
         server.write("plugins/CoreProtect/language.yml",
             "# CoreProtect Language File (en)\n\n" + CUSTOMIZED_PHRASE + ": \"" + CUSTOMIZED_TEXT + "\"\n");
         Path cache = server.coreProtectFolder().resolve(".language");
@@ -117,7 +125,7 @@ final class TranslationChecks {
 
     private static void passthrough(Harness.Suite suite) throws Exception {
         Harness.Server server = suite.newServer("passthrough");
-        server.coreProtectConfig("language: de\n");
+        server.coreProtectConfig(coreProtectConfig("de"));
         server.libreProtectConfig("preset: passthrough\n");
 
         Harness.Run first = server.boot(Harness.Variant.FORK, Harness.Scenario.steps("translation"));
@@ -150,7 +158,7 @@ final class TranslationChecks {
 
     private static void notBundled(Harness.Suite suite) throws Exception {
         Harness.Server server = suite.newServer("nl");
-        server.coreProtectConfig("language: nl\n");
+        server.coreProtectConfig(coreProtectConfig("nl"));
 
         Harness.Run run = server.boot(Harness.Variant.FORK, Harness.Scenario.steps("translation")
             .set("translation.wait", "ticks").set("translation.wait.ticks", 200));

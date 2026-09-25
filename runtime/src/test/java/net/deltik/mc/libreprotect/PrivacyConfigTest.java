@@ -40,7 +40,9 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
@@ -49,10 +51,13 @@ import java.net.URLConnection;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.logging.Level;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -93,10 +98,23 @@ class PrivacyConfigTest {
     }
 
     private static void assertIsDefaults(PrivacyConfig config) {
-        assertEquals(RoutePreset.PRIVACY_FIRST, config.getPreset());
+        assertEquals(RoutePreset.ALLOW_UPDATES, config.getPreset());
         assertTrue(config.getCustomRoutes().isEmpty());
         assertEquals(PrivacyConfig.defaultUpdateSources(), config.getUpdateSources());
         assertFalse(config.isVerboseLogging());
+    }
+
+    /** Assert the settings that send nothing, whatever the file said, without verbose logging */
+    private static void assertFailsClosed(PrivacyConfig config) {
+        assertFailsClosed(config, false);
+    }
+
+    /** Assert the settings that send nothing, whatever the file said */
+    private static void assertFailsClosed(PrivacyConfig config, boolean verboseLogging) {
+        assertEquals(RoutePreset.PRIVACY_FIRST, config.getPreset());
+        assertTrue(config.getCustomRoutes().isEmpty());
+        assertEquals(List.of(), config.getUpdateSources());
+        assertEquals(verboseLogging, config.isVerboseLogging());
     }
 
     /** An update source list that asks a Modrinth-like API on the server */
@@ -122,9 +140,9 @@ class PrivacyConfigTest {
     class Defaults {
 
         @Test
-        @DisplayName("should use the privacy-first preset")
-        void usesPrivacyFirst() {
-            assertEquals(RoutePreset.PRIVACY_FIRST, PrivacyConfig.defaults().getPreset());
+        @DisplayName("should use the allow-updates preset")
+        void usesAllowUpdates() {
+            assertEquals(RoutePreset.ALLOW_UPDATES, PrivacyConfig.defaults().getPreset());
         }
 
         @Test
@@ -155,6 +173,16 @@ class PrivacyConfigTest {
         }
 
         @Test
+        @DisplayName("should answer update checks, and nothing else that would send a request")
+        void answersUpdateChecks() {
+            RouteRegistry registry = PrivacyConfig.defaults().buildResolver().getRegistry();
+
+            assertEquals(RouteActionType.ANSWER, registry.match("http://update.coreprotect.net/version/").getActionType());
+            assertEquals(RoutePreset.ALLOW_UPDATES.getRoutes(), registry.getRoutes());
+            assertEquals(RouteActionType.BLOCK, registry.getDefaultAction());
+        }
+
+        @Test
         @DisplayName("should agree with the schema defaults")
         void agreesWithSchema() {
             PrivacyConfig defaults = PrivacyConfig.defaults();
@@ -163,6 +191,27 @@ class PrivacyConfigTest {
             assertEquals(new UpdateSourceParser().parse((List<?>) PrivacyConfigSchema.UPDATE_SOURCES.defaultValue),
                 defaults.getUpdateSources());
             assertEquals(PrivacyConfigSchema.VERBOSE_LOGGING.defaultValue, defaults.isVerboseLogging());
+        }
+    }
+
+    @Nested
+    @DisplayName("failClosed")
+    class FailClosed {
+
+        @Test
+        @DisplayName("should use the privacy-first preset, without custom routes or update sources")
+        void privacyFirstWithoutSources() {
+            assertFailsClosed(PrivacyConfig.failClosed());
+        }
+
+        @Test
+        @DisplayName("should block update checks, and send nothing else")
+        void sendsNothing() {
+            RouteRegistry registry = PrivacyConfig.failClosed().buildResolver().getRegistry();
+
+            assertEquals(RouteActionType.BLOCK, registry.match("http://update.coreprotect.net/version/").getActionType());
+            assertEquals(RoutePreset.PRIVACY_FIRST.getRoutes(), registry.getRoutes());
+            assertEquals(RouteActionType.BLOCK, registry.getDefaultAction());
         }
     }
 
@@ -187,24 +236,187 @@ class PrivacyConfigTest {
         }
 
         @Test
-        @DisplayName("should return defaults when the path is a directory")
-        void directoryGivesDefaults() throws IOException {
+        @DisplayName("should block all network requests and log SEVERE when the path is a directory")
+        void directoryFailsClosed() throws IOException {
             Files.createDirectory(configFile().toPath());
-            assertIsDefaults(PrivacyConfig.load(configFile()));
+
+            assertFailsClosed(PrivacyConfig.load(configFile()));
+            assertTrue(testLogger.hasMessageContaining(Level.SEVERE, configFile().toString()));
+            assertTrue(testLogger.hasMessageContaining(Level.SEVERE, "blocking all network requests"));
+        }
+
+        @ParameterizedTest
+        @DisplayName("should block all network requests and say how to get the default file, for a file without settings")
+        @ValueSource(strings = {
+            "",
+            "\n",
+            "  \n\n",
+            "# LibreProtect network policy\n#\n# Controls the web requests that CoreProtect makes: update checks, usage\n",
+            "---\n",
+            "{}\n",
+            "~\n"
+        })
+        void noSettingsFailsClosed(String yaml) throws IOException {
+            File file = write(yaml);
+
+            assertFailsClosed(PrivacyConfig.load(file));
+            assertTrue(testLogger.hasMessageContaining(Level.WARNING, file + " has no settings, blocking all network"
+                + " requests. Delete it to have LibreProtect write the default file at the next start"),
+                testLogger.getMessages().toString());
         }
 
         @Test
-        @DisplayName("should return defaults for an empty file")
-        void emptyFileGivesDefaults() throws IOException {
-            assertIsDefaults(PrivacyConfig.load(write("")));
-            assertFalse(testLogger.hasLevel(Level.SEVERE));
+        @DisplayName("should block all network requests for a default file cut short before its first setting")
+        void truncatedDefaultFileFailsClosed() throws IOException {
+            String full = PrivacyConfigSchema.generateDefaultFile();
+
+            assertFailsClosed(PrivacyConfig.load(write(full.substring(0, full.indexOf("\npreset:") + 1))));
+            assertTrue(testLogger.hasMessageContaining(Level.WARNING, "has no settings"));
+        }
+
+        static Stream<Arguments> unknownSettings() {
+            return Stream.of(
+                Arguments.of("Preset: privacy-first\n", "Preset"),
+                Arguments.of("PRESET: privacy-first\n", "PRESET"),
+                Arguments.of("presets: privacy-first\n", "presets"),
+                Arguments.of("preset_: privacy-first\n", "preset_"),
+                Arguments.of("\"preset \": privacy-first\n", "preset "),
+                Arguments.of("рreset: privacy-first\n", "рreset"),
+                Arguments.of("network:\n  preset: privacy-first\n", "network"),
+                Arguments.of("libreprotect:\n  preset: privacy-first\n", "libreprotect"),
+                Arguments.of("preset: allow-updates\npreset.x: 1\n", "preset.x"),
+                Arguments.of("preset: allow-updates\nverbose_logging: true\n", "verbose_logging"),
+                Arguments.of("<<: {preset: passthrough}\n", "<<"));
+        }
+
+        @ParameterizedTest
+        @DisplayName("should block all network requests and name a setting it doesn't know, such as a mistyped preset")
+        @MethodSource("unknownSettings")
+        void unknownSettingsFailClosed(String yaml, String key) throws IOException {
+            File file = write(yaml + "verbose-logging: true\n");
+
+            assertFailsClosed(PrivacyConfig.load(file));
+            assertTrue(testLogger.hasMessageContaining(Level.WARNING, file + " has settings LibreProtect doesn't know: '"
+                + key + "'. Blocking all network requests until the file is fixed"), testLogger.getMessages().toString());
+        }
+
+        @Test
+        @DisplayName("should name each setting it doesn't know once, in order, and describe a key that isn't text")
+        void namesUnknownSettings() throws IOException {
+            PrivacyConfig.load(write("Preset: a\npreset: allow-updates\nPRESET: b\nPreset: c\n? [preset]\n: d\n"));
+
+            assertTrue(testLogger.hasMessageContaining(Level.WARNING,
+                "doesn't know: 'Preset', 'PRESET', a key that isn't text on line 5. Blocking"),
+                testLogger.getMessages().toString());
+        }
+
+        @ParameterizedTest
+        @DisplayName("should read the preset however the file writes its key")
+        @ValueSource(strings = {
+            "﻿preset: privacy-first\n",
+            "preset:\tprivacy-first\r\nverbose-logging: true\r\n",
+            "  preset: privacy-first\n",
+            "\"preset\": privacy-first\n",
+            "'preset': privacy-first\n"
+        })
+        void presetKeyWrittenDifferently(String yaml) throws IOException {
+            assertEquals(RoutePreset.PRIVACY_FIRST, PrivacyConfig.load(write(yaml)).getPreset());
+            assertFalse(testLogger.hasLevel(Level.WARNING), testLogger.getMessages().toString());
+        }
+
+        @ParameterizedTest
+        @DisplayName("should never send more than privacy-first for odd presets and documents")
+        @ValueSource(strings = {
+            "preset: !!binary aGVsbG8=\n",
+            "preset: 2024-01-01\n",
+            "preset: &a\n",
+            "preset: *nope\n",
+            "<<: {preset: passthrough}\npreset:\n",
+            "preset: privacy-first\n---\npreset: passthrough\n",
+            "preset: \"privacy-first\\0\"\n",
+            "preset:privacy-first\nverbose-logging: true\n"
+        })
+        void oddFilesSendNothing(String yaml) throws IOException {
+            PrivacyConfig config = PrivacyConfig.load(write(yaml));
+
+            assertEquals(RoutePreset.PRIVACY_FIRST, config.getPreset(), config.describe());
+            assertEquals(RouteActionType.BLOCK,
+                config.buildResolver().getRegistry().match("http://update.coreprotect.net/version/").getActionType());
+        }
+
+        @Test
+        @DisplayName("should follow a link to a file")
+        void followsLink() throws IOException {
+            Path target = Files.writeString(tempDir.resolve("shared.yml"), "preset: passthrough\n");
+            Files.createSymbolicLink(configFile().toPath(), target);
+
+            assertEquals(RoutePreset.PASSTHROUGH, PrivacyConfig.load(configFile()).getPreset());
+        }
+
+        @Test
+        @DisplayName("should block all network requests, and not write the default file, for a link to nothing")
+        void danglingLinkFailsClosed() throws IOException {
+            Path target = tempDir.resolve("shared/libreprotect.yml");
+            Files.createSymbolicLink(configFile().toPath(), target);
+
+            assertFailsClosed(PrivacyConfig.load(configFile()));
+            assertTrue(testLogger.hasMessageContaining(Level.SEVERE, configFile() + ", blocking all network requests:"
+                + " it is a link to a file that doesn't exist"), testLogger.getMessages().toString());
+
+            Files.createDirectories(target.getParent());
+            assertFalse(PrivacyConfig.writeDefaultIfMissing(configFile()));
+            assertFalse(Files.exists(target));
+        }
+
+        @Test
+        @DisplayName("should block all network requests at once for a named pipe, which reading would wait on")
+        void namedPipeFailsClosed() throws Exception {
+            Path pipe = configFile().toPath();
+            Process mkfifo;
+            try {
+                mkfifo = new ProcessBuilder("mkfifo", pipe.toString()).inheritIO().start();
+            } catch (IOException e) {
+                mkfifo = null;
+            }
+            assumeTrue(mkfifo != null && mkfifo.waitFor() == 0, "mkfifo isn't available");
+
+            PrivacyConfig config = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> PrivacyConfig.load(pipe.toFile()));
+
+            assertFailsClosed(config);
+            assertTrue(testLogger.hasMessageContaining(Level.SEVERE, "it isn't a regular file"));
+        }
+
+        @Test
+        @DisplayName("should block all network requests for a link to a device, without reading it")
+        void deviceFailsClosed() throws IOException {
+            Path zero = Path.of("/dev/zero");
+            assumeTrue(Files.exists(zero), "no /dev/zero");
+            Files.createSymbolicLink(configFile().toPath(), zero);
+            try {
+                assertFailsClosed(assertTimeoutPreemptively(Duration.ofSeconds(5), () -> PrivacyConfig.load(configFile())));
+                assertTrue(testLogger.hasMessageContaining(Level.SEVERE, "it isn't a regular file"));
+            } finally {
+                // Keeps @TempDir from warning about a link that leaves it
+                Files.delete(configFile().toPath());
+            }
+        }
+
+        @Test
+        @DisplayName("should read a file of up to 1 MiB, and block all network requests for a larger one")
+        void sizeLimit() throws IOException {
+            String settings = "preset: passthrough\n#";
+            String largest = settings + "x".repeat(PrivacyConfig.MAX_FILE_BYTES - settings.length());
+            assertEquals(RoutePreset.PASSTHROUGH, PrivacyConfig.load(write(largest)).getPreset());
+
+            assertFailsClosed(PrivacyConfig.load(write(largest + "x")));
+            assertTrue(testLogger.hasMessageContaining(Level.SEVERE, "it is larger than 1 MiB"));
         }
 
         @Test
         @DisplayName("should read every setting from the file")
         void readsEverySetting() throws IOException {
             File file = write(String.join("\n",
-                "preset: allow-updates",
+                "preset: privacy-first",
                 "routes:",
                 "  - pattern: \"https://example\\\\.com/.*\"",
                 "    action: BLOCK",
@@ -216,7 +428,7 @@ class PrivacyConfigTest {
 
             PrivacyConfig config = PrivacyConfig.load(file);
 
-            assertEquals(RoutePreset.ALLOW_UPDATES, config.getPreset());
+            assertEquals(RoutePreset.PRIVACY_FIRST, config.getPreset());
             assertTrue(config.isVerboseLogging());
             assertEquals(2, config.getCustomRoutes().size());
             Route first = config.getCustomRoutes().get(0);
@@ -232,7 +444,7 @@ class PrivacyConfigTest {
         void missingSettingsUseDefaults() throws IOException {
             PrivacyConfig config = PrivacyConfig.load(write("verbose-logging: true\n"));
 
-            assertEquals(RoutePreset.PRIVACY_FIRST, config.getPreset());
+            assertEquals(RoutePreset.ALLOW_UPDATES, config.getPreset());
             assertTrue(config.getCustomRoutes().isEmpty());
             assertEquals(PrivacyConfig.defaultUpdateSources(), config.getUpdateSources());
             assertTrue(config.isVerboseLogging());
@@ -288,36 +500,89 @@ class PrivacyConfigTest {
         }
 
         @Test
-        @DisplayName("should return defaults and log SEVERE for invalid YAML")
-        void invalidYamlGivesDefaults() throws IOException {
+        @DisplayName("should block all network requests and log SEVERE for invalid YAML")
+        void invalidYamlFailsClosed() throws IOException {
             File file = write("preset: passthrough\nroutes: [unclosed\n");
 
             PrivacyConfig config = PrivacyConfig.load(file);
 
-            assertIsDefaults(config);
+            assertFailsClosed(config);
             assertTrue(testLogger.hasMessageContaining(Level.SEVERE, file.toString()));
             assertTrue(testLogger.hasMessageContaining(Level.SEVERE, "blocking all network requests"));
         }
 
-        @Test
-        @DisplayName("should return defaults and log SEVERE for a YAML document that is not a mapping")
-        void nonMappingGivesDefaults() throws IOException {
-            assertIsDefaults(PrivacyConfig.load(write("- just\n- a list\n")));
-            assertTrue(testLogger.hasLevel(Level.SEVERE));
+        @ParameterizedTest
+        @DisplayName("should block all network requests and log SEVERE for a YAML document that is not a mapping")
+        @ValueSource(strings = {"- just\n- a list\n", "allow-updates\n"})
+        void nonMappingFailsClosed(String yaml) throws IOException {
+            assertFailsClosed(PrivacyConfig.load(write(yaml)));
+            assertTrue(testLogger.hasMessageContaining(Level.SEVERE, "blocking all network requests"));
         }
 
         @Test
-        @DisplayName("should return defaults and log SEVERE for an unreadable file")
-        void unreadableFileGivesDefaults() throws IOException {
+        @DisplayName("should block all network requests and log SEVERE for an unreadable file")
+        void unreadableFileFailsClosed() throws IOException {
             File file = write("preset: passthrough\n");
             assumeTrue(file.setReadable(false, false) && !Files.isReadable(file.toPath()),
                 "cannot make the file unreadable (running as root?)");
             try {
-                assertIsDefaults(PrivacyConfig.load(file));
+                assertFailsClosed(PrivacyConfig.load(file));
                 assertTrue(testLogger.hasMessageContaining(Level.SEVERE, file.toString()));
             } finally {
                 file.setReadable(true, false);
             }
+        }
+
+        @ParameterizedTest
+        @DisplayName("should block all network requests and warn for a preset without a value")
+        @ValueSource(strings = {
+            "preset:\n",
+            "preset: ~\n",
+            "preset: null\n",
+            "preset:   # allow-updates\nverbose-logging: true\n",
+            "{preset: , verbose-logging: true}\n",
+            "preset: allow-updates\npreset:\n"
+        })
+        void presetWithoutValue(String yaml) throws IOException {
+            assertFailsClosed(PrivacyConfig.load(write(yaml)), yaml.contains("verbose-logging: true"));
+            assertTrue(testLogger.hasMessageContaining(Level.WARNING,
+                "Unknown preset '' in libreprotect.yml, blocking all network requests"),
+                testLogger.getMessages().toString());
+        }
+
+        @Test
+        @DisplayName("should keep a preset that has a value after an entry without one")
+        void presetWithValueAfterNull() throws IOException {
+            assertEquals(RoutePreset.PASSTHROUGH, PrivacyConfig.load(write("preset:\npreset: passthrough\n")).getPreset());
+            assertFalse(testLogger.hasLevel(Level.WARNING));
+        }
+    }
+
+    @Nested
+    @DisplayName("TopLevelKeys")
+    class TopLevel {
+
+        @Test
+        @DisplayName("should list the top-level settings without a value")
+        void withoutValue() throws InvalidConfigurationException {
+            PrivacyConfig.TopLevelKeys keys = PrivacyConfig.TopLevelKeys.of(
+                "preset:\nroutes:\n  - pattern: a\n    action:\nupdate-sources: ~\nverbose-logging: false\n");
+
+            assertEquals(Set.of("preset", "update-sources"), keys.withoutValue);
+            assertFalse(keys.none);
+            assertEquals(Set.of(), keys.unknown);
+        }
+
+        @Test
+        @DisplayName("should see keys that Bukkit splits at dots as they are written")
+        void dottedKeys() throws InvalidConfigurationException {
+            assertEquals(Set.of("'routes.x'"), PrivacyConfig.TopLevelKeys.of("routes.x: 1\n").unknown);
+        }
+
+        @Test
+        @DisplayName("should throw for a document SnakeYAML can't read, so that the file fails closed")
+        void throwsForUnreadable() {
+            assertThrows(InvalidConfigurationException.class, () -> PrivacyConfig.TopLevelKeys.of("routes: [unclosed\n"));
         }
     }
 
@@ -339,12 +604,61 @@ class PrivacyConfigTest {
         }
 
         @Test
-        @DisplayName("should fall back to privacy-first and warn for an unknown preset")
-        void unknownPresetFallsBack() throws InvalidConfigurationException {
+        @DisplayName("should block all network requests and warn for an unknown preset")
+        void unknownPresetFailsClosed() throws InvalidConfigurationException {
             PrivacyConfig config = parse("preset: allow-everything\n");
 
-            assertEquals(RoutePreset.PRIVACY_FIRST, config.getPreset());
-            assertTrue(testLogger.hasMessageContaining(Level.WARNING, "allow-everything"));
+            assertFailsClosed(config);
+            assertTrue(testLogger.hasMessageContaining(Level.WARNING,
+                "Unknown preset 'allow-everything' in libreprotect.yml, blocking all network requests. The presets are"
+                    + " privacy-first, "
+                    + "allow-updates, passthrough"), testLogger.getMessages().toString());
+        }
+
+        @Test
+        @DisplayName("should keep only verbose logging from the file for an unknown preset, to show what is blocked")
+        void unknownPresetIgnoresOtherSettings() throws InvalidConfigurationException {
+            PrivacyConfig config = parse(String.join("\n",
+                "preset: allow-update",
+                "routes:",
+                "  - pattern: \"https?://update\\\\.coreprotect\\\\.net/.*\"",
+                "    action: ANSWER",
+                "  - pattern: \".*\"",
+                "    action: PASSTHROUGH",
+                "update-sources:",
+                "  - type: github",
+                "    repository: Example/Fork",
+                "verbose-logging: true",
+                ""));
+
+            assertFailsClosed(config, true);
+            assertTrue(testLogger.hasMessageContaining(Level.WARNING, "allow-update"));
+        }
+
+        @ParameterizedTest
+        @DisplayName("should block all network requests and warn for a preset that isn't a preset's name")
+        @ValueSource(strings = {"\"\"", "\" \"", "5", "true", "[allow-updates]", "{name: allow-updates}", "allow_updates"})
+        void invalidPresetFailsClosed(String value) throws InvalidConfigurationException {
+            assertFailsClosed(parse("preset: " + value + "\n"));
+            assertTrue(testLogger.hasMessageContaining(Level.WARNING, "blocking all network requests"));
+        }
+
+        static Stream<Arguments> presetsNotScalar() {
+            return Stream.of(
+                Arguments.of("preset: [allow-updates]\n", "a list"),
+                Arguments.of("preset:\n  - allow-updates\n", "a list"),
+                Arguments.of("preset: {name: allow-updates}\n", "a section"),
+                Arguments.of("preset:\n  allow-updates: true\n", "a section"));
+        }
+
+        @ParameterizedTest
+        @DisplayName("should say that the preset must be a preset name when it is a list or a section")
+        @MethodSource("presetsNotScalar")
+        void presetNotScalarFailsClosed(String yaml, String shape) throws InvalidConfigurationException {
+            assertFailsClosed(parse(yaml));
+            assertEquals(List.of(LibreProtectLogger.PREFIX + "'preset' in libreprotect.yml must be a preset name, not "
+                + shape + ", blocking all network requests. The presets are privacy-first, allow-updates, passthrough"),
+                testLogger.getMessages());
         }
 
         @ParameterizedTest
@@ -535,6 +849,18 @@ class PrivacyConfigTest {
         }
 
         @Test
+        @DisplayName("should not write through a link, even one to nothing")
+        void doesNotFollowLinks() throws IOException {
+            Path target = tempDir.resolve("elsewhere.yml");
+            Files.createSymbolicLink(configFile().toPath(), target);
+
+            assertFalse(PrivacyConfig.writeDefaultIfMissing(configFile()));
+
+            assertFalse(Files.exists(target));
+            assertTrue(Files.isSymbolicLink(configFile().toPath()));
+        }
+
+        @Test
         @DisplayName("should not replace a directory")
         void doesNotReplaceDirectory() throws IOException {
             File dir = configFile();
@@ -698,8 +1024,15 @@ class PrivacyConfigTest {
         @Test
         @DisplayName("should summarize the defaults")
         void summarizesDefaults() {
-            assertEquals("preset privacy-first, 0 custom routes, default action BLOCK",
+            assertEquals("preset allow-updates, 0 custom routes, default action BLOCK, 2 update sources",
                 PrivacyConfig.defaults().describe());
+        }
+
+        @Test
+        @DisplayName("should summarize the settings that send nothing")
+        void summarizesFailClosed() {
+            assertEquals("preset privacy-first, 0 custom routes, default action BLOCK",
+                PrivacyConfig.failClosed().describe());
         }
 
         @Test

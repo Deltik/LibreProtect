@@ -44,7 +44,8 @@ public enum RoutePreset {
     PRIVACY_FIRST("privacy-first", RouteActionType.BLOCK),
 
     /**
-     * Allow updates: like privacy-first, but answer update checks too
+     * Allow updates, the default: answer update checks by asking the update
+     * sources, answer translation requests, and block everything else
      */
     ALLOW_UPDATES("allow-updates", RouteActionType.BLOCK),
 
@@ -127,7 +128,8 @@ public enum RoutePreset {
      * Parse a preset from its config name
      *
      * @param name The config name (e.g., "privacy-first")
-     * @return The preset, or PRIVACY_FIRST if not found
+     * @return The preset, or PRIVACY_FIRST if not found. That isn't the
+     *         default preset: a name that isn't a preset's sends nothing.
      */
     public static RoutePreset fromConfigName(String name) {
         if (name == null) {
@@ -141,7 +143,7 @@ public enum RoutePreset {
             }
         }
 
-        // Default to privacy-first for unknown presets
+        // Fail closed
         return PRIVACY_FIRST;
     }
 

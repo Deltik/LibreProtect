@@ -44,8 +44,8 @@ import java.util.zip.ZipFile;
  *
  * <p>The stub answers like GitHub for a repository that doesn't exist (404),
  * and like Modrinth for a project that lists a newer release. One server
- * boots LibreProtect three times with {@code update-sources} pointing at
- * both, GitHub first:
+ * boots LibreProtect three times, with {@code update-sources} pointing at
+ * both, GitHub first, unless noted:
  * <ol>
  *   <li>{@code allow-updates}, {@code check-updates: true}: LibreProtect asks
  *       GitHub, then Modrinth, sending only its name. CoreProtect announces
@@ -53,8 +53,9 @@ import java.util.zip.ZipFile;
  *       and {@code /co status} shows it as the latest version. After
  *       {@code /co reload} turns {@code check-updates} off, update checks
  *       fail without asking anyone.</li>
- *   <li>{@code privacy-first}: CoreProtect's update check is blocked, and the
- *       stub hears nothing.</li>
+ *   <li>{@code privacy-first}, {@code check-updates: true}, and the default
+ *       {@code update-sources} on GitHub and Modrinth: CoreProtect's update
+ *       check is blocked, and nothing is sent.</li>
  *   <li>{@code allow-updates}, {@code check-updates: false}: CoreProtect
  *       doesn't check, and the stub hears nothing.</li>
  * </ol>
@@ -96,17 +97,19 @@ final class UpdateChecks {
             checkAnnounced(suite, announced, stub, release, synthetic);
             checkReloadedOff(suite, announced, stub, synthetic);
 
-            int before = stub.requests().size();
-            server.libreProtectConfig(libreProtectConfig("privacy-first", stub));
+            // The default update sources are real, so any request to them would show as egress
+            server.libreProtectConfig("preset: privacy-first\nverbose-logging: true\n");
             server.coreProtectConfig("check-updates: true\n");
             Harness.Run blocked = server.boot(Harness.Variant.FORK, Harness.Scenario.steps("update.idle"));
             checkQuiet(suite, blocked, "privacy-first");
-            suite.check(stub.requests().size() == before, "privacy-first: the update sources heard nothing");
+            suite.check(blocked.console().contains("[LibreProtect] Network policy: preset privacy-first, 0 custom routes,"
+                    + " default action BLOCK, verbose logging\n"),
+                "privacy-first: the startup log names the policy, which answers no update checks");
             suite.check(blocked.console().lines().anyMatch(line -> line.contains("Blocked by LibreProtect")
                     && line.contains("http://update.coreprotect.net/version/")),
                 "privacy-first: CoreProtect's update check was made and blocked");
 
-            before = stub.requests().size();
+            int before = stub.requests().size();
             server.libreProtectConfig(libreProtectConfig("allow-updates", stub));
             server.coreProtectConfig("check-updates: false\n");
             Harness.Run off = server.boot(Harness.Variant.FORK, Harness.Scenario.steps("update.idle"));

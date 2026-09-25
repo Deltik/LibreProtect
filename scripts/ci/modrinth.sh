@@ -86,7 +86,7 @@ else
     echo "==> Uploading $version"
     download="$REPOSITORY_URL/releases/download/$tag"
     cat > "$work/changelog.md" <<CHANGELOG
-LibreProtect built from [CoreProtect $upstream_ref](https://github.com/PlayPro/CoreProtect/releases/tag/$upstream_ref). It replaces CoreProtect in place, blocks all of CoreProtect's network requests by default, and unlocks every feature.
+LibreProtect built from [CoreProtect $upstream_ref](https://github.com/PlayPro/CoreProtect/releases/tag/$upstream_ref). It replaces CoreProtect in place and unlocks every feature. By default, it sends no telemetry, license checks or error reports, and it only checks GitHub, then Modrinth if GitHub fails or names no LibreProtect release, for LibreProtect updates, without sending a version number, the server's port or a license key.
 
 - [Release notes, checksums and build provenance]($REPOSITORY_URL/releases/tag/$tag)
 - [How this build differs from CoreProtect]($download/DIFFERENCES.md)

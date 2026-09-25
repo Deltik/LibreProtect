@@ -10,7 +10,7 @@
 <!-- begin store description -->
 **LibreProtect** is a privacy-hardened build of [CoreProtect](https://github.com/PlayPro/CoreProtect), the block logging and rollback plugin for Minecraft servers. It is rebuilt from each CoreProtect release, automatically when possible.
 
-* **No phoning home.** CoreProtect contacts coreprotect.net for update checks, usage statistics, error reports, donation-key checks and translations, and it bundles bStats. LibreProtect sends each of those requests through a [network policy](#configuration). By default, it answers translation requests itself, from translations it bundles, and blocks everything else. The `allow-updates` preset also answers update checks, by asking GitHub or Modrinth for LibreProtect's latest release, without sending your version number, server port or license key.
+* **No telemetry.** CoreProtect contacts coreprotect.net for update checks, usage statistics, error reports, donation-key checks and translations, and it bundles bStats. LibreProtect sends each of those requests through a [network policy](#configuration). By default, it answers translation requests itself, from translations it bundles, and blocks everything else except update checks. It answers those by asking GitHub or Modrinth for LibreProtect's latest release, without sending your version number, server port or license key. The `privacy-first` preset blocks update checks too.
 * **Everything unlocked.** Features that CoreProtect reserves for donors work without a donation key.
 * **Drop-in.** LibreProtect keeps CoreProtect's commands, permissions, API, data folder and database. Add-ons that depend on CoreProtect keep working, and you can switch back and forth between the two.
 
@@ -61,7 +61,14 @@ Commands, permissions and the API are CoreProtect's. See [CoreProtect's document
 
 CoreProtect's settings stay in `plugins/CoreProtect/config.yml`.
 
-LibreProtect's network policy is in `plugins/CoreProtect/libreprotect.yml`. LibreProtect creates the file with default values the first time it starts. Changes take effect after a server restart. A setting that the file leaves out has its default value. If the file can't be read, LibreProtect makes no web requests.
+LibreProtect's network policy is in `plugins/CoreProtect/libreprotect.yml`. LibreProtect creates the file with default values the first time it starts. Changes take effect after a server restart. A setting that the file leaves out has its default value.
+
+If the file is there but LibreProtect can't use it, LibreProtect uses the `privacy-first` preset, so that it makes no web requests, and logs a warning that says why. That happens when the file:
+
+* can't be read, isn't a regular file, is larger than 1 MiB, or isn't valid YAML
+* has no settings, such as an empty file. Delete it to have LibreProtect write the default file at the next start.
+* has a key that isn't a setting, such as a mistyped `preset`
+* names no known preset
 
 <details><summary>Default libreprotect.yml</summary>
 
@@ -76,10 +83,10 @@ LibreProtect's network policy is in `plugins/CoreProtect/libreprotect.yml`. Libr
 # https://github.com/Deltik/LibreProtect
 
 # What happens to requests that no route matches
-# privacy-first - Send no web requests: LibreProtect answers translations itself and blocks the rest (default)
-# allow-updates - Like privacy-first, but LibreProtect also answers update checks from update-sources
+# privacy-first - Send no web requests: LibreProtect answers translations itself and blocks the rest
+# allow-updates - Answer update checks from update-sources, and send no other web requests (default)
 # passthrough - Allow every request through unchanged (for debugging). Bundled translations fill any gaps
-preset: privacy-first
+preset: allow-updates
 
 # Where update checks go when the preset allows them
 # LibreProtect asks each source in order until one answers.
@@ -117,17 +124,17 @@ verbose-logging: false
 
 The preset decides what happens to CoreProtect's requests that no [route](#routes) matches.
 
-**privacy-first** (default): Make no web requests. LibreProtect answers translation requests itself and blocks everything else, including update checks. Connections to databases are [outside the network policy](#connections-outside-the-network-policy).
+**allow-updates** (default): LibreProtect answers CoreProtect's update check by asking the [update sources](#update-sources) for LibreProtect's latest release, answers translation requests itself, and blocks everything else. The update notice names the release it found and links to it. When possible, a LibreProtect release for each new CoreProtect release is built automatically. If a CoreProtect release needs changes to LibreProtect first, its LibreProtect release takes longer.
 
-**allow-updates**: Like `privacy-first`, but LibreProtect also answers CoreProtect's update check by asking the [update sources](#update-sources) for LibreProtect's latest release. The update notice names the release it found and links to it. When possible, a LibreProtect release for each new CoreProtect release is built automatically. If a CoreProtect release needs changes to LibreProtect first, its LibreProtect release takes longer.
+**privacy-first**: Make no web requests. LibreProtect answers translation requests itself and blocks everything else, including update checks. Connections to databases are [outside the network policy](#connections-outside-the-network-policy).
 
 **passthrough**: Allow every request, like stock CoreProtect. This is meant for debugging. Translations from coreprotect.net are [layered over the bundled ones](#translations).
 
 These are the requests that the presets know about:
 
-| Destination                       | Purpose            | `privacy-first` (default) | `allow-updates` | `passthrough` |
+| Destination                       | Purpose            | `allow-updates` (default) | `privacy-first` | `passthrough` |
 |-----------------------------------|--------------------|---------------------------|-----------------|---------------|
-| `update.coreprotect.net`          | Update check       | Block                     | Answer          | Allow         |
+| `update.coreprotect.net`          | Update check       | Answer                    | Block           | Allow         |
 | `stats.coreprotect.net`           | Usage statistics   | Block                     | Block           | Allow         |
 | `coreprotect.net/license/`        | Donation-key check | Block                     | Block           | Allow         |
 | `coreprotect.net/translate/`      | Translations       | Answer                    | Answer          | Allow         |
@@ -222,7 +229,7 @@ The network policy covers the requests that CoreProtect and the libraries it bun
 * CoreProtect's Discord link is replaced with a link to LibreProtect, and its Patreon link is left out.
 * The startup log shows which network policy is active.
 * LibreProtect bundles CoreProtect's [translations](#translations) and answers translation requests itself, instead of sending your phrases to coreprotect.net.
-* With the `allow-updates` preset, update checks ask [GitHub or Modrinth](#update-sources) for LibreProtect's releases instead of asking update.coreprotect.net, and the update notice shows LibreProtect's version.
+* Update checks ask [GitHub or Modrinth](#update-sources) for LibreProtect's releases instead of asking update.coreprotect.net, and the update notice shows LibreProtect's version.
 * `/co migrate-db` and automatic purging (`auto-purge`) exist only in CoreProtect's paid builds, and their code isn't public. LibreProtect has placeholders that say so. [Free implementations are welcome.](runtime/src/main/java/net/coreprotect/utility/extensions/)
 
 Each release lists its exact changes in `DIFFERENCES.md`, which is attached to the release and included in the JAR.
@@ -260,7 +267,7 @@ LibreProtect never edits CoreProtect's source code. Each build:
 
    The audit covers upstream's code. LibreProtect's own code makes one kind of network request itself: update checks to the [update sources](#update-sources), and only when the network policy answers update checks.
 5. **Runs integration tests** ([`integration/`](integration/)) on real Paper servers, with a Java agent that records and blocks all outgoing network traffic, and MySQL and ClickHouse in containers:
-   * One server runs on the same data with stock CoreProtect, then LibreProtect, then stock CoreProtect again. Stock CoreProtect must be seen contacting coreprotect.net, which proves that the test can see network traffic at all. LibreProtect must make no requests, read stock CoreProtect's data, and pass API, command and message checks. Stock CoreProtect must then read LibreProtect's data.
+   * One server runs on the same data with stock CoreProtect, then LibreProtect, then stock CoreProtect again. Stock CoreProtect must be seen contacting coreprotect.net, which proves that the test can see network traffic at all. LibreProtect must make no requests but the default policy's update checks, read stock CoreProtect's data, and pass API, command and message checks. Stock CoreProtect must then read LibreProtect's data.
    * More servers test bundled and layered translations, and update checks against stand-ins for GitHub and Modrinth.
 
 Builds are reproducible: the same inputs produce a byte-identical JAR.

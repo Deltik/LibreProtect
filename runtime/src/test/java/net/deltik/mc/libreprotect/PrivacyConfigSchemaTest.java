@@ -76,14 +76,14 @@ class PrivacyConfigSchemaTest {
         @DisplayName("PRESET should have correct defaults")
         void presetHasCorrectDefaults() {
             assertEquals("preset", PrivacyConfigSchema.PRESET.key);
-            assertEquals("privacy-first", PrivacyConfigSchema.PRESET.defaultValue);
+            assertEquals("allow-updates", PrivacyConfigSchema.PRESET.defaultValue);
             assertEquals(PrivacyConfigSchema.ConfigType.STRING, PrivacyConfigSchema.PRESET.type);
         }
 
         @Test
-        @DisplayName("PRESET default should name the privacy-first preset")
-        void presetDefaultIsPrivacyFirst() {
-            assertEquals(RoutePreset.PRIVACY_FIRST.getConfigName(), PrivacyConfigSchema.PRESET.defaultValue);
+        @DisplayName("PRESET default should name the allow-updates preset")
+        void presetDefaultIsAllowUpdates() {
+            assertEquals(RoutePreset.ALLOW_UPDATES.getConfigName(), PrivacyConfigSchema.PRESET.defaultValue);
         }
 
         @Test
@@ -93,6 +93,16 @@ class PrivacyConfigSchemaTest {
                 assertTrue(PrivacyConfigSchema.PRESET.comments.stream().anyMatch(c -> c.startsWith(name + " ")),
                     "Preset '" + name + "' is not documented");
             }
+        }
+
+        @Test
+        @DisplayName("PRESET comments should mark the default preset, and only it, as the default")
+        void presetCommentsMarkDefault() {
+            List<String> marked = PrivacyConfigSchema.PRESET.comments.stream()
+                .filter(c -> c.contains("(default)")).toList();
+
+            assertEquals(1, marked.size(), marked.toString());
+            assertTrue(marked.get(0).startsWith(PrivacyConfigSchema.PRESET.defaultValue + " "), marked.get(0));
         }
 
         @Test
@@ -194,7 +204,7 @@ class PrivacyConfigSchemaTest {
         void returnsCorrectDefaultValues() {
             Map<String, Object> defaults = PrivacyConfigSchema.getDefaults();
 
-            assertEquals("privacy-first", defaults.get("preset"));
+            assertEquals("allow-updates", defaults.get("preset"));
             assertTrue(((List<?>) defaults.get("routes")).isEmpty());
             assertEquals(false, defaults.get("verbose-logging"));
         }
@@ -266,7 +276,7 @@ class PrivacyConfigSchemaTest {
             YamlConfiguration parsed = new YamlConfiguration();
             parsed.loadFromString(PrivacyConfigSchema.generateDefaultFile());
 
-            assertEquals("privacy-first", parsed.getString("preset"));
+            assertEquals("allow-updates", parsed.getString("preset"));
             assertEquals(PrivacyConfigSchema.UPDATE_SOURCES.defaultValue, parsed.getList("update-sources"));
             assertEquals(List.of(), parsed.getList("routes"));
             assertEquals(Boolean.FALSE, parsed.get("verbose-logging"));
@@ -296,6 +306,12 @@ class PrivacyConfigSchemaTest {
                 "  - type: modrinth",
                 "    project: libreprotect",
                 "")));
+        }
+
+        @Test
+        @DisplayName("should write the default preset")
+        void defaultPreset() {
+            assertTrue(PrivacyConfigSchema.generateDefaultFile().contains("\npreset: allow-updates\n"));
         }
 
         @Test

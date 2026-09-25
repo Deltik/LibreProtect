@@ -61,7 +61,7 @@ notes="$(mktemp)"
         echo "LibreProtect build of [CoreProtect $upstream_tag](https://github.com/PlayPro/CoreProtect/releases/tag/$upstream_tag)."
     fi
     echo
-    echo "It's a drop-in replacement for CoreProtect: remove CoreProtect's JAR from \`plugins/\`, add this one, and restart. Your data and settings in \`plugins/CoreProtect/\` stay where they are. The network policy is in \`plugins/CoreProtect/libreprotect.yml\`; by default it blocks all of CoreProtect's network requests."
+    echo "It's a drop-in replacement for CoreProtect: remove CoreProtect's JAR from \`plugins/\`, add this one, and restart. Your data and settings in \`plugins/CoreProtect/\` stay where they are. The network policy is in \`plugins/CoreProtect/libreprotect.yml\`; by default it blocks CoreProtect's telemetry, license checks and error reports, and only lets LibreProtect check GitHub, then Modrinth if GitHub fails or names no LibreProtect release, for its own updates, without sending a version number, the server's port or a license key."
     echo
     echo "Verify the download: \`sha256sum -c LibreProtect-$version.jar.sha256\` or \`gh attestation verify LibreProtect-$version.jar --repo $GITHUB_REPOSITORY\`."
     echo

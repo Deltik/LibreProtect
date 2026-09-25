@@ -44,12 +44,20 @@ import org.yaml.snakeyaml.nodes.Tag;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * LibreProtect's network policy settings, loaded from {@value #FILE_NAME} in
@@ -59,12 +67,16 @@ import java.util.Locale;
  * {@code config.yml}, so CoreProtect's config handling never sees or rewrites
  * them.
  *
- * <p>Any problem reading the file falls back to {@link #defaults()}, which
- * sends nothing.
+ * <p>A missing file or setting means the default ({@link #defaults()}). A
+ * file that doesn't give settings LibreProtect understands means
+ * {@link #failClosed()}, which sends nothing (see {@link #load}).
  */
 public final class PrivacyConfig {
 
     public static final String FILE_NAME = "libreprotect.yml";
+
+    /** Far more than any settings need, so a larger file is a mistake, and isn't read */
+    static final int MAX_FILE_BYTES = 1024 * 1024;
 
     /** CoreProtect's update check, as routes see it */
     private static final String UPDATE_CHECK = "http://update.coreprotect.net/version/";
@@ -83,10 +95,26 @@ public final class PrivacyConfig {
     }
 
     /**
-     * @return the privacy-first settings used when there is no usable config file
+     * @return the settings of {@link PrivacyConfigSchema}'s defaults, used
+     *         when there is no config file yet: the allow-updates preset and
+     *         the default update sources
      */
     public static PrivacyConfig defaults() {
-        return new PrivacyConfig(RoutePreset.PRIVACY_FIRST, Collections.emptyList(), defaultUpdateSources(), false);
+        return new PrivacyConfig(RoutePreset.ALLOW_UPDATES, Collections.emptyList(), defaultUpdateSources(), false);
+    }
+
+    /**
+     * @return the settings used when the config file is there but doesn't
+     *         give settings LibreProtect understands (see {@link #load}): the
+     *         privacy-first preset without update sources, which sends nothing
+     */
+    public static PrivacyConfig failClosed() {
+        return failClosed(false);
+    }
+
+    private static PrivacyConfig failClosed(boolean verboseLogging) {
+        return new PrivacyConfig(RoutePreset.PRIVACY_FIRST, Collections.emptyList(), Collections.emptyList(),
+            verboseLogging);
     }
 
     /**
@@ -99,65 +127,158 @@ public final class PrivacyConfig {
     /**
      * Load settings from a file.
      *
-     * @param file the settings file; a missing file yields {@link #defaults()}
+     * <p>Only a file that isn't there, not even as a link, means
+     * {@link #defaults()}. Once a file is there, anything short of settings
+     * LibreProtect understands means {@link #failClosed()}: a file that can't
+     * be read or isn't a regular file, invalid YAML, a file without settings
+     * (such as a write that was cut short), a setting LibreProtect doesn't
+     * know (such as a mistyped {@code preset}), or an unknown preset.
+     *
+     * @param file the settings file
      */
     public static PrivacyConfig load(File file) {
-        if (!file.isFile()) {
+        Path path = file.toPath();
+        if (Files.notExists(path, LinkOption.NOFOLLOW_LINKS)) {
             return defaults();
         }
 
-        String text;
         YamlConfiguration yaml = new YamlConfiguration();
+        TopLevelKeys keys;
         try {
-            text = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+            String text = read(path);
             yaml.loadFromString(text);
+            keys = TopLevelKeys.of(text);
         } catch (IOException | InvalidConfigurationException e) {
             LibreProtectLogger.severe("Could not read " + file + ", blocking all network requests: " + e.getMessage());
-            return defaults();
+            return failClosed();
         }
-        return fromYaml(yaml, hasNullValue(text, PrivacyConfigSchema.UPDATE_SOURCES.key));
+        if (keys.none) {
+            LibreProtectLogger.warning(file + " has no settings, blocking all network requests. Delete it to have "
+                + PrivacyConstants.FORK_NAME + " write the default file at the next start");
+            return failClosed();
+        }
+        if (!keys.unknown.isEmpty()) {
+            LibreProtectLogger.warning(file + " has settings " + PrivacyConstants.FORK_NAME + " doesn't know: "
+                + String.join(", ", keys.unknown) + ". Blocking all network requests until the file is fixed");
+            return failClosed();
+        }
+        return fromYaml(yaml, keys.withoutValue);
     }
 
     /**
-     * Whether the document's top-level mapping has the key with a null
-     * value, as {@code update-sources:} does once every source is commented
-     * out. Bukkit drops such keys, so this looks at SnakeYAML's node tree,
-     * which builds no objects.
+     * @return the text of a regular file, following links
+     * @throws IOException if it isn't a regular file, such as a directory, a
+     *         link to nothing, or a named pipe that would hold up the server's
+     *         start, or if it is larger than {@value #MAX_FILE_BYTES} bytes
      */
-    static boolean hasNullValue(String text, String key) {
-        try {
-            Node root = new Yaml().compose(new StringReader(text));
-            boolean nullValue = false;
-            if (root instanceof MappingNode) {
-                for (NodeTuple entry : ((MappingNode) root).getValue()) {
-                    Node name = entry.getKeyNode();
-                    if (name instanceof ScalarNode && key.equals(((ScalarNode) name).getValue())) {
-                        // As in YAML, a later entry with the same key wins
-                        Node value = entry.getValueNode();
-                        nullValue = value instanceof ScalarNode && Tag.NULL.equals(value.getTag());
-                    }
+    private static String read(Path path) throws IOException {
+        if (!Files.isRegularFile(path)) {
+            throw new IOException(Files.isDirectory(path) ? "it is a directory"
+                : Files.isSymbolicLink(path) && Files.notExists(path) ? "it is a link to a file that doesn't exist"
+                : "it isn't a regular file");
+        }
+        try (InputStream in = Files.newInputStream(path)) {
+            byte[] bytes = in.readNBytes(MAX_FILE_BYTES + 1);
+            if (bytes.length > MAX_FILE_BYTES) {
+                throw new IOException("it is larger than " + MAX_FILE_BYTES / 1024 / 1024 + " MiB");
+            }
+            return new String(bytes, StandardCharsets.UTF_8);
+        }
+    }
+
+    /**
+     * The keys of a document's top-level mapping, from SnakeYAML's node
+     * tree, which builds no objects. Bukkit's view of the document drops keys
+     * without a value and splits keys at dots, so it can't tell what the file
+     * says.
+     */
+    static final class TopLevelKeys {
+
+        /** Whether the document has no keys at all, like a file of only comments */
+        boolean none = true;
+        /**
+         * The keys that aren't settings in {@link PrivacyConfigSchema},
+         * described for a message, in order: {@code 'Preset'}
+         */
+        final Set<String> unknown = new LinkedHashSet<>();
+        /**
+         * The keys whose last entry has no value, as {@code update-sources:}
+         * once every source is commented out
+         */
+        final Set<String> withoutValue = new HashSet<>();
+
+        private TopLevelKeys() {
+        }
+
+        /**
+         * @throws InvalidConfigurationException if SnakeYAML can't read the
+         *         document with its default limits, which are stricter than
+         *         Bukkit's
+         */
+        static TopLevelKeys of(String text) throws InvalidConfigurationException {
+            Node root;
+            try {
+                root = new Yaml().compose(new StringReader(text));
+            } catch (RuntimeException e) {
+                throw new InvalidConfigurationException(e.getMessage(), e);
+            }
+            TopLevelKeys keys = new TopLevelKeys();
+            if (!(root instanceof MappingNode)) {
+                return keys;
+            }
+            for (NodeTuple entry : ((MappingNode) root).getValue()) {
+                keys.none = false;
+                Node name = entry.getKeyNode();
+                if (!(name instanceof ScalarNode)) {
+                    keys.unknown.add("a key that isn't text on line " + (name.getStartMark().getLine() + 1));
+                    continue;
+                }
+                String key = ((ScalarNode) name).getValue();
+                if (PrivacyConfigSchema.getOption(key) == null) {
+                    keys.unknown.add("'" + key + "'");
+                }
+                // As in YAML, a later entry with the same key wins
+                Node value = entry.getValueNode();
+                if (value instanceof ScalarNode && Tag.NULL.equals(value.getTag())) {
+                    keys.withoutValue.add(key);
+                } else {
+                    keys.withoutValue.remove(key);
                 }
             }
-            return nullValue;
-        } catch (RuntimeException e) {
-            return false;
+            return keys;
         }
     }
 
     static PrivacyConfig fromYaml(ConfigurationSection yaml) {
-        return fromYaml(yaml, false);
+        return fromYaml(yaml, Collections.emptySet());
     }
 
     /**
-     * @param updateSourcesWithoutValue whether the file has
-     *        {@code update-sources:} without a value, which the section
-     *        doesn't show
+     * @param keysWithoutValue the file's top-level keys without a value, such
+     *        as {@code update-sources:}, which the section doesn't show
      */
-    static PrivacyConfig fromYaml(ConfigurationSection yaml, boolean updateSourcesWithoutValue) {
-        String presetName = yaml.getString(PrivacyConfigSchema.PRESET.key, (String) PrivacyConfigSchema.PRESET.defaultValue);
+    static PrivacyConfig fromYaml(ConfigurationSection yaml, Set<String> keysWithoutValue) {
+        boolean verboseLogging = parseBoolean(
+            yaml.get(PrivacyConfigSchema.VERBOSE_LOGGING.key),
+            (Boolean) PrivacyConfigSchema.VERBOSE_LOGGING.defaultValue);
+
+        Object presetValue = yaml.get(PrivacyConfigSchema.PRESET.key);
+        if (presetValue instanceof ConfigurationSection || presetValue instanceof List) {
+            LibreProtectLogger.warning("'" + PrivacyConfigSchema.PRESET.key + "' in " + FILE_NAME
+                + " must be a preset name, not " + (presetValue instanceof List ? "a list" : "a section")
+                + ", blocking all network requests."
+                + " The presets are " + String.join(", ", RoutePreset.getAvailablePresets()));
+            return failClosed(verboseLogging);
+        }
+        // A preset without a value names no preset, as an empty one does, rather than meaning the default
+        String presetName = keysWithoutValue.contains(PrivacyConfigSchema.PRESET.key) ? ""
+            : yaml.getString(PrivacyConfigSchema.PRESET.key, (String) PrivacyConfigSchema.PRESET.defaultValue);
         if (!PrivacyConfigSchema.isValidValue(PrivacyConfigSchema.PRESET.key, presetName)) {
-            LibreProtectLogger.warning("Unknown preset '" + presetName + "' in " + FILE_NAME + ", using "
-                + RoutePreset.PRIVACY_FIRST.getConfigName());
+            LibreProtectLogger.warning("Unknown preset '" + presetName + "' in " + FILE_NAME
+                + ", blocking all network requests."
+                + " The presets are " + String.join(", ", RoutePreset.getAvailablePresets()));
+            // Verbose logging still shows what is blocked while the file is being fixed
+            return failClosed(verboseLogging);
         }
         RoutePreset preset = RoutePreset.fromConfigName(presetName);
 
@@ -168,12 +289,8 @@ public final class PrivacyConfig {
         }
         List<Route> customRoutes = new RouteConfigParser().parseRoutes(yaml.getList(PrivacyConfigSchema.ROUTES.key));
 
-        List<UpdateSource> updateSources =
-            parseUpdateSources(yaml.get(PrivacyConfigSchema.UPDATE_SOURCES.key), updateSourcesWithoutValue);
-
-        boolean verboseLogging = parseBoolean(
-            yaml.get(PrivacyConfigSchema.VERBOSE_LOGGING.key),
-            (Boolean) PrivacyConfigSchema.VERBOSE_LOGGING.defaultValue);
+        List<UpdateSource> updateSources = parseUpdateSources(yaml.get(PrivacyConfigSchema.UPDATE_SOURCES.key),
+            keysWithoutValue.contains(PrivacyConfigSchema.UPDATE_SOURCES.key));
 
         return new PrivacyConfig(preset, customRoutes, updateSources, verboseLogging);
     }
@@ -207,16 +324,20 @@ public final class PrivacyConfig {
     }
 
     /**
-     * Write the commented default settings file if the file does not exist yet.
+     * Write the commented default settings file if nothing is in its place
+     * yet, not even a link. Links aren't followed, so a link to nothing
+     * doesn't get a file written where it points.
      *
      * @return {@code true} if the file was written
      */
     public static boolean writeDefaultIfMissing(File file) throws IOException {
-        if (file.exists()) {
+        try {
+            Files.write(file.toPath(), PrivacyConfigSchema.generateDefaultFile().getBytes(StandardCharsets.UTF_8),
+                StandardOpenOption.CREATE_NEW);
+            return true;
+        } catch (FileAlreadyExistsException e) {
             return false;
         }
-        Files.write(file.toPath(), PrivacyConfigSchema.generateDefaultFile().getBytes(StandardCharsets.UTF_8));
-        return true;
     }
 
     /**

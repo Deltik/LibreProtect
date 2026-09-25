@@ -16,7 +16,8 @@
   <description>
     Test-only Java agent. It records every outbound connection and DNS lookup
     the JVM attempts, with a stack trace, and blocks them. The integration
-    tests use it to prove that LibreProtect makes no network requests.
+    tests use it to prove that LibreProtect makes only the network requests
+    its network policy allows.
   </description>
 
   <properties>

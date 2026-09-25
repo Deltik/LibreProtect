@@ -84,10 +84,10 @@ public class PrivacyConfigSchema {
     // Configuration options
     public static final ConfigOption PRESET = new ConfigOption(
         "preset",
-        "privacy-first",
+        "allow-updates",
         "What happens to requests that no route matches",
-        "privacy-first - Send no web requests: LibreProtect answers translations itself and blocks the rest (default)",
-        "allow-updates - Like privacy-first, but LibreProtect also answers update checks from update-sources",
+        "privacy-first - Send no web requests: LibreProtect answers translations itself and blocks the rest",
+        "allow-updates - Answer update checks from update-sources, and send no other web requests (default)",
         "passthrough - Allow every request through unchanged (for debugging). Bundled translations fill any gaps"
     );
 

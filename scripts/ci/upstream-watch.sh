@@ -157,7 +157,7 @@ else
             --title "Build LibreProtect from CoreProtect $latest_tag" \
             --body "CoreProtect [$latest_tag](https://github.com/$upstream_slug/releases/tag/$latest_tag) was released ([changes](https://github.com/$upstream_slug/compare/$UPSTREAM_TAG...$latest_tag)).
 
-This pull request merges by itself once CI passes. CI passes only if the transformer finds everything it needs, LibreProtect makes no network requests on a real server, and the audit finds nothing unreviewed. If the audit needs review, the job summary lists what changed; accept it by updating \`audit/baseline.json\` in this branch.
+This pull request merges by itself once CI passes. CI passes only if the transformer finds everything it needs, LibreProtect's only network requests on a real server, under its default network policy, are its update checks, and the audit finds nothing unreviewed. If the audit needs review, the job summary lists what changed; accept it by updating \`audit/baseline.json\` in this branch.
 
 Merging releases LibreProtect v$(version_name "$latest_tag")-libre1."
         act gh pr merge "$branch" --auto --squash || echo "::warning::Could not enable auto-merge; merge by hand once CI passes"

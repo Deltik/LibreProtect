@@ -30,12 +30,15 @@ import net.deltik.mc.libreprotect.testutil.MockUrlFactory;
 import net.deltik.mc.libreprotect.testutil.TestLogger;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 
@@ -69,12 +72,20 @@ class BootstrapTest {
         Files.writeString(configFile().toPath(), yaml, StandardCharsets.UTF_8);
     }
 
-    private static void assertPrivacyFirstInstalled() {
+    /** Assert that Egress applies the preset's routes, and no custom ones */
+    private static void assertInstalled(RoutePreset preset) {
         RouteResolver resolver = Egress.getResolver();
         assertNotNull(resolver, "no resolver installed");
         RouteRegistry registry = resolver.getRegistry();
-        assertEquals(RoutePreset.PRIVACY_FIRST.getRoutes(), registry.getRoutes());
+        assertEquals(preset.getRoutes(), registry.getRoutes());
         assertEquals(RouteActionType.BLOCK, registry.getDefaultAction());
+    }
+
+    /** Assert that the installed policy sends nothing */
+    private static void assertFailedClosed() {
+        assertInstalled(RoutePreset.PRIVACY_FIRST);
+        assertEquals(RoutePreset.PRIVACY_FIRST, Bootstrap.getActiveConfig().getPreset());
+        assertEquals(List.of(), Bootstrap.getActiveConfig().getUpdateSources());
     }
 
     @Nested
@@ -82,12 +93,29 @@ class BootstrapTest {
     class MissingFile {
 
         @Test
-        @DisplayName("should install the privacy-first policy")
-        void installsPrivacyFirst() {
+        @DisplayName("should install the default allow-updates policy")
+        void installsDefaults() {
             Bootstrap.init(testLogger, dataFolder.toFile());
 
-            assertPrivacyFirstInstalled();
-            assertEquals(RoutePreset.PRIVACY_FIRST, Bootstrap.getActiveConfig().getPreset());
+            assertInstalled(RoutePreset.ALLOW_UPDATES);
+            assertEquals(RoutePreset.ALLOW_UPDATES, Bootstrap.getActiveConfig().getPreset());
+            assertEquals(PrivacyConfig.defaults().getUpdateSources(), Bootstrap.getActiveConfig().getUpdateSources());
+        }
+
+        @Test
+        @DisplayName("should install the policy that later boots read from the default file")
+        void matchesLaterBoots() throws IOException {
+            Bootstrap.init(testLogger, dataFolder.toFile());
+            PrivacyConfig first = Bootstrap.getActiveConfig();
+            List<Route> firstRoutes = Egress.getResolver().getRegistry().getRoutes();
+
+            assertTrue(PrivacyConfig.writeDefaultIfMissing(configFile()));
+            Bootstrap.init(testLogger, dataFolder.toFile());
+
+            PrivacyConfig later = Bootstrap.getActiveConfig();
+            assertEquals(first.describe(), later.describe());
+            assertEquals(first.getUpdateSources(), later.getUpdateSources());
+            assertEquals(firstRoutes, Egress.getResolver().getRegistry().getRoutes());
         }
 
         @Test
@@ -122,7 +150,7 @@ class BootstrapTest {
         void dataFolderMissing() {
             Bootstrap.init(testLogger, dataFolder.resolve("not-created-yet").toFile());
 
-            assertPrivacyFirstInstalled();
+            assertInstalled(RoutePreset.ALLOW_UPDATES);
             assertFalse(dataFolder.resolve("not-created-yet").toFile().exists());
         }
     }
@@ -178,12 +206,12 @@ class BootstrapTest {
             Bootstrap.init(testLogger, dataFolder.toFile());
             RouteResolver first = Egress.getResolver();
 
-            writeConfig("preset: allow-updates\n");
+            writeConfig("preset: privacy-first\n");
             Bootstrap.init(testLogger, dataFolder.toFile());
 
             assertNotSame(first, Egress.getResolver());
-            assertEquals(RoutePreset.ALLOW_UPDATES, Bootstrap.getActiveConfig().getPreset());
-            assertEquals(RoutePreset.ALLOW_UPDATES.getRoutes(), Egress.getResolver().getRegistry().getRoutes());
+            assertEquals(RoutePreset.PRIVACY_FIRST, Bootstrap.getActiveConfig().getPreset());
+            assertEquals(RoutePreset.PRIVACY_FIRST.getRoutes(), Egress.getResolver().getRegistry().getRoutes());
         }
 
         @Test
@@ -215,15 +243,38 @@ class BootstrapTest {
     class InvalidFile {
 
         @Test
-        @DisplayName("should install the defaults and log SEVERE")
-        void installsDefaults() throws IOException {
+        @DisplayName("should install a policy that sends nothing, and log SEVERE")
+        void failsClosed() throws IOException {
             writeConfig("preset: passthrough\nroutes: [unclosed\n");
 
             Bootstrap.init(testLogger, dataFolder.toFile());
 
-            assertPrivacyFirstInstalled();
-            assertEquals(RoutePreset.PRIVACY_FIRST, Bootstrap.getActiveConfig().getPreset());
+            assertFailedClosed();
             assertTrue(testLogger.hasMessageContaining(Level.SEVERE, PrivacyConfig.FILE_NAME));
+        }
+
+        @Test
+        @DisplayName("should install a policy that sends nothing when a directory is in the file's place")
+        void directoryFailsClosed() throws IOException {
+            Files.createDirectory(configFile().toPath());
+
+            Bootstrap.init(testLogger, dataFolder.toFile());
+
+            assertFailedClosed();
+            assertTrue(testLogger.hasMessageContaining(Level.SEVERE, "blocking all network requests"));
+        }
+
+        @ParameterizedTest
+        @DisplayName("should install a policy that sends nothing for a file without settings or with a mistyped one")
+        @ValueSource(strings = {"", "# LibreProtect network policy\n#\n", "Preset: privacy-first\n"})
+        void unusableFile(String yaml) throws IOException {
+            writeConfig(yaml);
+
+            Bootstrap.init(testLogger, dataFolder.toFile());
+
+            assertFailedClosed();
+            assertTrue(testLogger.hasLevel(Level.WARNING));
+            assertEquals(yaml, Files.readString(configFile().toPath()));
         }
 
         @Test
@@ -237,13 +288,13 @@ class BootstrapTest {
         }
 
         @Test
-        @DisplayName("should fall back to privacy-first for an unknown preset")
+        @DisplayName("should install a policy that sends nothing for an unknown preset")
         void unknownPreset() throws IOException {
             writeConfig("preset: allow-everything\n");
 
             Bootstrap.init(testLogger, dataFolder.toFile());
 
-            assertPrivacyFirstInstalled();
+            assertFailedClosed();
             assertTrue(testLogger.hasMessageContaining(Level.WARNING, "allow-everything"));
         }
     }
