@@ -66,6 +66,7 @@ public final class Main {
                 Path.of(single(arguments, "upstream-jar")),
                 Path.of(single(arguments, "original-jar")),
                 Path.of(single(arguments, "runtime-jar")),
+                arguments.containsKey("extensions-jar") ? Path.of(single(arguments, "extensions-jar")) : null,
                 Path.of(single(arguments, "translations")),
                 Path.of(single(arguments, "output")),
                 single(arguments, "version"),

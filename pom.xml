@@ -48,6 +48,22 @@
     <module>integration/test-plugin</module>
   </modules>
 
+  <profiles>
+    <!-- The extensions depend on the upstream JAR, so they're only built
+         when scripts/lp passes one: -Dupstream.jar=... -->
+    <profile>
+      <id>extensions</id>
+      <activation>
+        <property>
+          <name>upstream.jar</name>
+        </property>
+      </activation>
+      <modules>
+        <module>extensions</module>
+      </modules>
+    </profile>
+  </profiles>
+
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <!-- Overridden by scripts/lp with the upstream commit time for reproducible builds -->

@@ -162,9 +162,9 @@ final class Differences {
                 .append(" | ").append(cell(change.getValue().after())).append(" |\n");
         }
 
-        md.append("\n## Extension Point Placeholders\n\n")
-            .append("Upstream loads these classes by name, but its public source doesn't include them. LibreProtect's ")
-            .append("placeholders explain that the feature isn't available.\n\n");
+        md.append("\n## Extension Points\n\n")
+            .append("Upstream loads these classes by name, but its public source doesn't include them. LibreProtect ")
+            .append("provides them:\n\n");
         for (TransformReport.ExtensionPoint extensionPoint : report.extensionPoints) {
             md.append("- ").append(code(extensionPoint.className())).append(", requested by ")
                 .append(codes(extensionPoint.requestedBy())).append("\n");

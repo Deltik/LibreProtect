@@ -38,7 +38,7 @@ import java.util.TreeSet;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class ExtensionStubsTest {
+class ExtensionEntryPointsTest {
 
     private TestLogger testLogger;
 
@@ -64,7 +64,7 @@ class ExtensionStubsTest {
 
         RecordingSender(Class<? extends CommandSender> type) {
             sender = type.cast(Proxy.newProxyInstance(
-                ExtensionStubsTest.class.getClassLoader(),
+                ExtensionEntryPointsTest.class.getClassLoader(),
                 new Class<?>[]{type},
                 (proxy, method, args) -> {
                     switch (method.getName()) {
@@ -102,7 +102,7 @@ class ExtensionStubsTest {
 
     @Nested
     @DisplayName("DatabaseMigration.runCommand")
-    class DatabaseMigrationStub {
+    class DatabaseMigrationEntryPoint {
 
         @Test
         @DisplayName("should keep the signature that upstream calls reflectively")
@@ -174,7 +174,7 @@ class ExtensionStubsTest {
 
     @Nested
     @DisplayName("BackgroundService")
-    class BackgroundServiceStub {
+    class BackgroundServiceEntryPoint {
 
         @Test
         @DisplayName("should keep the signatures that upstream calls reflectively")

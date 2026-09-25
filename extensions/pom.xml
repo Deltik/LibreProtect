@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>net.deltik.mc</groupId>
+    <artifactId>libreprotect-parent</artifactId>
+    <version>0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>libreprotect-extensions</artifactId>
+  <name>LibreProtect Extensions</name>
+  <description>
+    LibreProtect's implementations of CoreProtect's closed-source extension
+    points: /co migrate-db and automatic purging. They reach CoreProtect only by
+    reflection, so one source tree works with every upstream.
+  </description>
+
+  <properties>
+    <!-- Must not exceed the bytecode level of upstream CoreProtect -->
+    <maven.compiler.release>11</maven.compiler.release>
+    <maven.compiler.testRelease>21</maven.compiler.testRelease>
+  </properties>
+
+  <build>
+    <finalName>libreprotect-extensions</finalName>
+  </build>
+
+  <dependencies>
+    <dependency>
+      <!-- The upstream JAR being built (shaded, as it ships), passed by
+           scripts/lp. The extensions' own classes reach it only by name, which
+           the transformer checks. Provided by the plugin JAR itself at run
+           time. -->
+      <groupId>net.coreprotect</groupId>
+      <artifactId>coreprotect</artifactId>
+      <version>upstream</version>
+      <scope>system</scope>
+      <systemPath>${upstream.jar}</systemPath>
+    </dependency>
+    <dependency>
+      <groupId>net.deltik.mc</groupId>
+      <artifactId>libreprotect-runtime</artifactId>
+      <version>${project.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.destroystokyo.paper</groupId>
+      <artifactId>paper-api</artifactId>
+      <scope>provided</scope>
+      <exclusions>
+        <!-- Pulled in by json-simple. Surefire refuses to run with JUnit 4.10
+             on the test classpath. -->
+        <exclusion>
+          <groupId>junit</groupId>
+          <artifactId>junit</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.platform</groupId>
+      <artifactId>junit-platform-launcher</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>

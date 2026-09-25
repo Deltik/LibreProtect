@@ -49,6 +49,8 @@ import java.util.stream.Collectors;
 final class Transformer {
 
     /**
+     * @param extensionsJar LibreProtect's extension implementations, which reach
+     *                      upstream only by reflection, or {@code null} for none
      * @param translations upstream's {@code lang/} directory, whose translations LibreProtect bundles
      * @param description plugin.yml's description, or {@code null} to derive it from upstream's
      */
@@ -56,6 +58,7 @@ final class Transformer {
         Path upstreamJar,
         Path originalJar,
         Path runtimeJar,
+        Path extensionsJar,
         Path translations,
         Path outputJar,
         String version,
@@ -73,6 +76,8 @@ final class Transformer {
     static final String EXTENSIONS_PACKAGE = "net/coreprotect/utility/extensions/";
     static final String BUILD_PROPERTIES = "libreprotect-build.properties";
     static final String REPORT_DIRECTORY = "META-INF/libreprotect/";
+    /** The extensions' only way to CoreProtect: reflection, through this package */
+    static final String UPSTREAM_ACCESS_PACKAGE = "net.deltik.mc.libreprotect.extension.upstream";
 
     private final Options options;
     private final TransformReport report = new TransformReport();
@@ -106,6 +111,8 @@ final class Transformer {
         upstream = JarContents.read(options.upstreamJar());
         JarContents original = JarContents.read(options.originalJar());
         JarContents runtime = JarContents.read(options.runtimeJar());
+        JarContents extensions = options.extensionsJar() == null ? new JarContents()
+            : JarContents.read(options.extensionsJar());
 
         Set<String> upstreamClasses = original.names().stream()
             .filter(JarContents::isClass)
@@ -156,17 +163,21 @@ final class Transformer {
         checkNoRawEgress(upstreamClasses);
         checkRuntime(runtime);
         checkExtensionPoints(upstream, upstreamClasses, runtime);
+        checkExtensionPoints(upstream, upstreamClasses, extensions);
 
-        for (String name : runtime.names()) {
-            if (name.equals(JarContents.MANIFEST) || name.startsWith("META-INF/maven/")) {
-                continue;
+        for (JarContents injected : List.of(runtime, extensions)) {
+            for (String name : injected.names()) {
+                if (name.equals(JarContents.MANIFEST) || name.startsWith("META-INF/maven/")) {
+                    continue;
+                }
+                ContractViolation.require(!output.contains(name), "LibreProtect's " + name
+                    + " would overwrite a file that upstream now ships, or that LibreProtect adds twice");
+                output.put(name, injected.get(name));
+                report.injectedEntries.add(name);
             }
-            ContractViolation.require(!output.contains(name),
-                "LibreProtect's " + name + " would overwrite a file that upstream now ships");
-            output.put(name, runtime.get(name));
-            report.injectedEntries.add(name);
         }
         bundleTranslations(upstreamClasses);
+        checkIsolation(runtime, extensions);
 
         String generatedEntry = SubclassGenerator.CLASS_NAME + ".class";
         ContractViolation.require(!output.contains(generatedEntry), "Upstream ships " + generatedEntry);
@@ -414,6 +425,38 @@ final class Transformer {
             ContractViolation.require(!ClassScan.of(output.get(name)).hasRawEgress(),
                 name + " still opens java.net.URL connections directly after rewriting");
         }
+    }
+
+    /**
+     * LibreProtect's classes must not reference upstream's: the runtime runs
+     * before CoreProtect initializes, and the extensions, including the
+     * upstream entry points that they implement, reach CoreProtect only by
+     * reflection.
+     */
+    private void checkIsolation(JarContents runtime, JarContents extensions) {
+        Set<String> shipped = upstream.names().stream()
+            .filter(name -> JarContents.isClass(name) && !JarContents.isVersioned(name))
+            .map(JarContents::internalName)
+            .collect(Collectors.toSet());
+        Set<String> own = new HashSet<>();
+        for (JarContents injected : List.of(runtime, extensions)) {
+            injected.names().stream().filter(JarContents::isClass).map(JarContents::internalName).forEach(own::add);
+        }
+        IsolationCheck isolation = new IsolationCheck(shipped, own);
+        for (String name : runtime.names()) {
+            if (JarContents.isClass(name)) {
+                isolation.check(runtime.get(name),
+                    "runtime classes must not touch CoreProtect; move it to the extensions module");
+            }
+        }
+        for (String name : extensions.names()) {
+            if (JarContents.isClass(name)) {
+                isolation.check(extensions.get(name), "extensions reach CoreProtect only by reflection through "
+                    + UPSTREAM_ACCESS_PACKAGE);
+            }
+        }
+        ContractViolation.require(isolation.violations().isEmpty(), "LibreProtect's classes use upstream's classes "
+            + "directly:\n  " + String.join("\n  ", isolation.violations()));
     }
 
     private void checkRuntime(JarContents runtime) {

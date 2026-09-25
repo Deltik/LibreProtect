@@ -14,9 +14,9 @@
   <name>LibreProtect Runtime</name>
   <description>
     Classes added to the CoreProtect plugin JAR: the network egress gate, the
-    network policy, message branding, the bootstrap hook, and placeholders for
-    upstream's closed-source extension points. Depends only on the JDK and the
-    Bukkit API, never on CoreProtect itself.
+    network policy, message branding and the bootstrap hook. Depends only on
+    the JDK and the Bukkit API, never on CoreProtect itself: the bootstrap runs
+    before CoreProtect initializes. The transformer checks this.
   </description>
 
   <properties>
@@ -49,7 +49,9 @@
         <artifactId>maven-surefire-plugin</artifactId>
         <configuration>
           <!-- Only classes that ask for it with @Execution(CONCURRENT) run
-               their tests at the same time. -->
+               their tests at the same time. Not in the extensions, whose
+               tests of CoreProtect's threads slow down when JUnit runs them
+               on its pool's threads. -->
           <properties>
             <configurationParameters>
               junit.jupiter.execution.parallel.enabled = true

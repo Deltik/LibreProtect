@@ -51,6 +51,8 @@ final class SyntheticUpstream {
     static final String CHAT = "net/coreprotect/utility/Chat";
     static final String BSTATS = "net/coreprotect/MetricsBase";
     static final String DRIVER = "com/example/jdbc/Driver";
+    static final String CONFIG_HANDLER = "net/coreprotect/config/ConfigHandler";
+    static final String CONSUMER = "net/coreprotect/consumer/Consumer";
 
     String pluginYml = """
         name: CoreProtect
@@ -75,6 +77,12 @@ final class SyntheticUpstream {
     boolean networkEgress = true;
     boolean phraseRenderer = true;
     boolean messageOutput = true;
+    /** Whether {@code ConfigHandler} has {@code purgeRunning} */
+    boolean purgeRunning = true;
+    boolean loadDatabase = true;
+    /** Whether {@code ConfigHandler.loadDatabase()} clears {@code purgeRunning}, rather than just returning */
+    boolean loadDatabaseClearsPurge = false;
+    boolean consumer = true;
     List<String> extensionStrings = new ArrayList<>(List.of(
         "net.coreprotect.utility.extensions.DatabaseMigration", "runCommand",
         "net.coreprotect.utility.extensions.BackgroundService", "start", "stop"));
@@ -141,6 +149,10 @@ final class SyntheticUpstream {
         authored.put(LANGUAGE + ".class", languageClass(defaults));
         authored.put(CONFIG_FILE + ".class", classWithStrings(CONFIG_FILE, List.of(languageCache)));
         authored.put(CHAT + ".class", chatClass(messageOutput));
+        authored.put(CONFIG_HANDLER + ".class", configHandler(purgeRunning, loadDatabase, loadDatabaseClearsPurge));
+        if (consumer) {
+            authored.put(CONSUMER + ".class", consumerClass());
+        }
         authored.putAll(upstreamExtra);
 
         Map<String, byte[]> shaded = new LinkedHashMap<>(authored);
@@ -325,6 +337,51 @@ final class SyntheticUpstream {
         send.visitInsn(Opcodes.ARETURN);
         send.visitMaxs(0, 0);
         send.visitEnd();
+        writer.visitEnd();
+        return writer.toByteArray();
+    }
+
+    /**
+     * @return a class with some of the internals that LibreProtect's extensions use
+     */
+    static byte[] configHandler(boolean purgeRunning, boolean loadDatabase, boolean clearsPurge) {
+        ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        writer.visit(Opcodes.V11, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, CONFIG_HANDLER, null, "java/lang/Object", null);
+        if (purgeRunning) {
+            writer.visitField(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC | Opcodes.ACC_VOLATILE, "purgeRunning", "Z",
+                null, null).visitEnd();
+        }
+        if (loadDatabase) {
+            MethodVisitor method = writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "loadDatabase", "()V",
+                null, null);
+            method.visitCode();
+            if (clearsPurge) {
+                method.visitInsn(Opcodes.ICONST_0);
+                method.visitFieldInsn(Opcodes.PUTSTATIC, CONFIG_HANDLER, "purgeRunning", "Z");
+            }
+            method.visitInsn(Opcodes.RETURN);
+            method.visitMaxs(0, 0);
+            method.visitEnd();
+        }
+        writer.visitEnd();
+        return writer.toByteArray();
+    }
+
+    /**
+     * @return a class with a protected static flag, like CoreProtect's {@code Consumer.pausedSuccess}
+     */
+    static byte[] consumerClass() {
+        ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        writer.visit(Opcodes.V11, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, CONSUMER, null, "java/lang/Object", null);
+        writer.visitField(Opcodes.ACC_PROTECTED | Opcodes.ACC_STATIC | Opcodes.ACC_VOLATILE, "pausedSuccess", "Z", null,
+            null).visitEnd();
+        MethodVisitor constructor = writer.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
+        constructor.visitCode();
+        constructor.visitVarInsn(Opcodes.ALOAD, 0);
+        constructor.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false);
+        constructor.visitInsn(Opcodes.RETURN);
+        constructor.visitMaxs(0, 0);
+        constructor.visitEnd();
         writer.visitEnd();
         return writer.toByteArray();
     }

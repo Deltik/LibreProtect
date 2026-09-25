@@ -26,7 +26,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.api.io.TempDir;
 import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.ClassNode;
 
 import java.io.ByteArrayInputStream;
@@ -36,6 +39,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -59,9 +63,15 @@ class TransformerTest {
     Path directory;
 
     private TransformReport transform(SyntheticUpstream upstream, Path output) throws IOException {
+        return transform(upstream, new SyntheticExtensions(), TestClasses.runtimeJar(directory), output);
+    }
+
+    private TransformReport transform(SyntheticUpstream upstream, SyntheticExtensions extensions, Path runtimeJar,
+                                      Path output) throws IOException {
         SyntheticUpstream.Jars jars = upstream.write(directory);
         Transformer.Options options = new Transformer.Options(
-            jars.shaded(), jars.original(), TestClasses.runtimeJar(directory), jars.lang(), output,
+            jars.shaded(), jars.original(), runtimeJar, extensions == null ? null : extensions.write(directory),
+            jars.lang(), output,
             "24.1-libre1", "Privacy-hardened build of CoreProtect", "https://github.com/Deltik/LibreProtect",
             "v24.1", "0af209a0a05135216599113c0b5e2638ad3c704b", "abc1234", 1_700_000_000L,
             List.of("com/example/jdbc/"));
@@ -72,9 +82,28 @@ class TransformerTest {
     }
 
     private ContractViolation violation(Consumer<SyntheticUpstream> change) {
+        return violation(change, extensions -> { });
+    }
+
+    private ContractViolation violation(Consumer<SyntheticUpstream> upstreamChange,
+                                        Consumer<SyntheticExtensions> extensionsChange) {
         SyntheticUpstream upstream = new SyntheticUpstream();
-        change.accept(upstream);
-        return assertThrows(ContractViolation.class, () -> transform(upstream, directory.resolve("out.jar")));
+        upstreamChange.accept(upstream);
+        SyntheticExtensions extensions = new SyntheticExtensions();
+        extensionsChange.accept(extensions);
+        return assertThrows(ContractViolation.class, () -> transform(upstream, extensions,
+            TestClasses.runtimeJar(directory), directory.resolve("out.jar")));
+    }
+
+    /**
+     * @return the runtime JAR with one more class, whose {@code run()} consists of the given instructions
+     */
+    private Path runtimeJarWith(String className, List<Consumer<MethodVisitor>> instructions) throws IOException {
+        JarContents runtime = JarContents.read(TestClasses.runtimeJar(directory));
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        runtime.names().forEach(name -> entries.put(name, runtime.get(name)));
+        entries.put(className + ".class", SyntheticExtensions.codeClass(className, "java/lang/Object", instructions));
+        return TestClasses.writeJar(directory.resolve("runtime-with-extra.jar"), entries);
     }
 
     private static ClassNode node(byte[] bytes) {
@@ -135,6 +164,7 @@ class TransformerTest {
 
             assertTrue(jar.contains("net/deltik/mc/libreprotect/Egress.class"));
             assertTrue(jar.contains("net/coreprotect/utility/extensions/DatabaseMigration.class"));
+            assertTrue(jar.contains(SyntheticExtensions.REFLECTOR + ".class"));
             assertTrue(jar.contains("META-INF/libreprotect/DIFFERENCES.md"));
             assertEquals("fork.version=24.1-libre1\nfork.commit=abc1234\nupstream.ref=v24.1\n"
                     + "upstream.commit=0af209a0a05135216599113c0b5e2638ad3c704b\nupstream.version=24.1\n",
@@ -344,6 +374,18 @@ class TransformerTest {
         }
 
         @Test
+        @DisplayName("shows in DIFFERENCES.md which version CoreProtect compares")
+        void pluginVersion() throws IOException {
+            String differences = Differences.render(transform(new SyntheticUpstream(), directory.resolve("out.jar")));
+
+            assertTrue(differences.contains("## CoreProtect's Own Version\n\n"), differences);
+            assertTrue(differences.contains("It now compares the version that upstream's build gave it, `24.1`,"),
+                differences);
+            assertTrue(differences.contains("| `net.coreprotect.utility.VersionUtils` | `getPluginVersion()` | `24.1` |\n"),
+                differences);
+        }
+
+        @Test
         @DisplayName("final onEnable")
         void finalOnEnable() {
             assertTrue(violation(upstream -> upstream.onEnableFinal = true).getMessage().contains("onEnable"));
@@ -362,18 +404,6 @@ class TransformerTest {
             String message = violation(upstream -> upstream.upstreamExtra.put("net/coreprotect/Other.class",
                 SyntheticUpstream.gateClass("net/coreprotect/Other", List.of("validDonationKey")))).getMessage();
             assertTrue(message.contains("found 2"), message);
-        }
-
-        @Test
-        @DisplayName("shows in DIFFERENCES.md which version CoreProtect compares")
-        void pluginVersion() throws IOException {
-            String differences = Differences.render(transform(new SyntheticUpstream(), directory.resolve("out.jar")));
-
-            assertTrue(differences.contains("## CoreProtect's Own Version\n\n"), differences);
-            assertTrue(differences.contains("It now compares the version that upstream's build gave it, `24.1`,"),
-                differences);
-            assertTrue(differences.contains("| `net.coreprotect.utility.VersionUtils` | `getPluginVersion()` | `24.1` |\n"),
-                differences);
         }
 
         @Test
@@ -446,6 +476,83 @@ class TransformerTest {
                 upstream.upstreamExtra.put("paper-plugin.yml", "name: CoreProtect\n".getBytes(StandardCharsets.UTF_8)))
                 .getMessage();
             assertTrue(message.contains("paper-plugin.yml"), message);
+        }
+
+        @Test
+        @DisplayName("runtime class uses upstream")
+        void runtimeUsesUpstream() throws IOException {
+            Path runtime = runtimeJarWith("net/deltik/mc/libreprotect/Leaky", List.of(method -> {
+                method.visitFieldInsn(Opcodes.GETSTATIC, SyntheticUpstream.CONFIG_HANDLER, "purgeRunning", "Z");
+                method.visitInsn(Opcodes.POP);
+            }));
+            ContractViolation violation = assertThrows(ContractViolation.class, () -> transform(
+                new SyntheticUpstream(), new SyntheticExtensions(), runtime, directory.resolve("out.jar")));
+            assertTrue(violation.getMessage().contains("net.deltik.mc.libreprotect.Leaky uses upstream's "
+                + "net.coreprotect.config.ConfigHandler, but runtime classes must not touch CoreProtect"),
+                violation.getMessage());
+        }
+
+        @Test
+        @DisplayName("extension class uses upstream")
+        void extensionUsesUpstream() {
+            String core = "net/deltik/mc/libreprotect/extension/migration/Leaky";
+            String message = violation(upstream -> { }, extensions -> extensions.extra.put(core + ".class",
+                SyntheticExtensions.codeClass(core, "java/lang/Object", List.of(method -> {
+                    method.visitFieldInsn(Opcodes.GETSTATIC, SyntheticUpstream.CONFIG_HANDLER, "purgeRunning", "Z");
+                    method.visitInsn(Opcodes.POP);
+                })))).getMessage();
+            assertTrue(message.contains("net.deltik.mc.libreprotect.extension.migration.Leaky uses upstream's "
+                + "net.coreprotect.config.ConfigHandler, but extensions reach CoreProtect only by reflection through "
+                + "net.deltik.mc.libreprotect.extension.upstream"), message);
+        }
+
+        @Test
+        @DisplayName("upstream entry point that LibreProtect implements uses upstream")
+        void entryPointUsesUpstream() {
+            String message = violation(upstream -> { }, extensions -> extensions.extra.put(
+                SyntheticExtensions.MIGRATION + ".class", SyntheticExtensions.codeClass(SyntheticExtensions.MIGRATION,
+                    "java/lang/Object", List.of(method -> {
+                        method.visitLdcInsn(Type.getObjectType(SyntheticUpstream.CONSUMER));
+                        method.visitInsn(Opcodes.POP);
+                    })))).getMessage();
+            assertTrue(message.contains("net.coreprotect.utility.extensions.DatabaseMigration uses upstream's "
+                + "net.coreprotect.consumer.Consumer, but extensions reach CoreProtect only by reflection"), message);
+        }
+
+        @Test
+        @DisplayName("extension class extends an upstream class")
+        void extensionSubclassesUpstream() {
+            String subclass = "net/deltik/mc/libreprotect/extension/upstream/Pauser";
+            String message = violation(upstream -> { }, extensions -> extensions.extra.put(subclass + ".class",
+                SyntheticExtensions.codeClass(subclass, SyntheticUpstream.CONSUMER, List.of()))).getMessage();
+            assertTrue(message.contains("net.deltik.mc.libreprotect.extension.upstream.Pauser uses upstream's "
+                + "net.coreprotect.consumer.Consumer"), message);
+        }
+
+        @Test
+        @DisplayName("extension method takes an upstream type")
+        void extensionSignatureUsesUpstream() {
+            String name = "net/deltik/mc/libreprotect/extension/upstream/Typed";
+            ClassWriter writer = new ClassWriter(0);
+            writer.visit(Opcodes.V11, Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT, name, null, "java/lang/Object",
+                null);
+            writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT, "pause",
+                "([[L" + SyntheticUpstream.CONSUMER + ";)V", null, null).visitEnd();
+            writer.visitEnd();
+            String message = violation(upstream -> { }, extensions -> extensions.extra.put(name + ".class",
+                writer.toByteArray())).getMessage();
+            assertTrue(message.contains("net.deltik.mc.libreprotect.extension.upstream.Typed uses upstream's "
+                + "net.coreprotect.consumer.Consumer"), message);
+        }
+
+        @Test
+        @DisplayName("extension class uses a class in upstream's package that upstream doesn't ship")
+        void extensionUsesMissingUpstreamClass() {
+            String core = "net/deltik/mc/libreprotect/extension/purge/Leaky";
+            String message = violation(upstream -> { }, extensions -> extensions.extra.put(core + ".class",
+                SyntheticExtensions.codeClass(core, "java/lang/Object", List.of(method -> method.visitMethodInsn(
+                    Opcodes.INVOKESTATIC, "net/coreprotect/Removed", "run", "()V", false))))).getMessage();
+            assertTrue(message.contains("uses upstream's net.coreprotect.Removed"), message);
         }
 
         @Test

@@ -50,7 +50,8 @@
 #   JAVA_HOME        A JDK 25 or newer (with javac). Found automatically if unset.
 #   LP_TEST_FORKS    How many JVMs each module runs its unit test classes in at once.
 #                    By default, as many as the processors and the available memory
-#                    allow, up to 8.
+#                    allow, up to 8. The transformer's and the extensions' tests
+#                    overlap for a few seconds, with up to twice as many JVMs then.
 #
 # The database containers need Docker or Podman. Images are pinned in
 # integration/containers.lock.
@@ -367,12 +368,13 @@ cmd_build() {
     upstream_jar="$(find "$UPSTREAM_DIR/target" -maxdepth 1 -name '*.jar' ! -name 'original-*' ! -name '*-sources.jar' ! -name '*-javadoc.jar' | head -n 1)"
     [[ -f "$original" && -f "$upstream_jar" ]] || die "Upstream build did not produce a shaded and an original JAR"
 
-    # A test JVM takes 250-550 MB
+    # A test JVM takes 250-550 MB. The transformer's and the extensions' tests overlap for a few seconds,
+    # with up to twice as many JVMs then; with 8 each, the whole build took 3.4 GB at most.
     local forks="${LP_TEST_FORKS:-$(parallelism 768 8)}"
     [[ "$forks" =~ ^[1-9][0-9]*$ ]] || die "LP_TEST_FORKS must be a positive number"
 
     log "Building LibreProtect"
-    # The transformer's tests of the upstream being built read this exact upstream JAR.
+    # The extensions are built with this exact upstream JAR.
     # Modules that don't depend on each other build at the same time, and so do test classes, in $forks JVMs.
     local maven_args=(-B -q -T 1C -f "$ROOT/pom.xml" clean verify -Dproject.build.outputTimestamp="$epoch"
         -Dupstream.jar="$upstream_jar" -Dlp.test.forks="$forks")
@@ -388,6 +390,7 @@ cmd_build() {
         --upstream-jar "$upstream_jar" \
         --original-jar "$original" \
         --runtime-jar "$ROOT/runtime/target/libreprotect-runtime.jar" \
+        --extensions-jar "$ROOT/extensions/target/libreprotect-extensions.jar" \
         --translations "$UPSTREAM_DIR/lang" \
         --upstream-dir "$UPSTREAM_DIR" \
         --baseline "$ROOT/audit/baseline.json" \
