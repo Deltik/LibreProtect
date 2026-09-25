@@ -49,8 +49,8 @@
   </modules>
 
   <profiles>
-    <!-- The extensions depend on the upstream JAR, so they're only built
-         when scripts/lp passes one: -Dupstream.jar=... -->
+    <!-- The extensions' tests and capability report need the upstream JAR, so
+         they're only built when scripts/lp passes one: -Dupstream.jar=... -->
     <profile>
       <id>extensions</id>
       <activation>

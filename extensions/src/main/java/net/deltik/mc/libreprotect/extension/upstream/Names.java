@@ -1,0 +1,57 @@
+/*
+ * Copyright (C) 2026 Deltik <https://www.deltik.net/>
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of LibreProtect.
+ *
+ * LibreProtect is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * LibreProtect is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with LibreProtect.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package net.deltik.mc.libreprotect.extension.upstream;
+
+/**
+ * The binary names of the upstream classes that LibreProtect's extensions
+ * use, in one place. They are strings on purpose: the extensions reach
+ * CoreProtect only by reflection, so that the build's check that they never
+ * link to it directly holds, and a missing class is a {@code Missing} with a
+ * reason rather than a {@code NoClassDefFoundError}.
+ */
+public final class Names {
+
+    public static final String CONFIG = "net.coreprotect.config.Config";
+    public static final String CONFIG_HANDLER = "net.coreprotect.config.ConfigHandler";
+    public static final String DATABASE_CONFIG_WRITER = "net.coreprotect.config.DatabaseConfigWriter";
+    public static final String CONSUMER = "net.coreprotect.consumer.Consumer";
+    public static final String OPERATION_START_RESULT = "net.coreprotect.consumer.Consumer$OperationStartResult";
+    public static final String DATABASE = "net.coreprotect.database.Database";
+    /** CoreProtect's enum of database engines, which replaced {@code use-mysql} */
+    public static final String DATABASE_TYPE = "net.coreprotect.database.DatabaseType";
+    public static final String DUCKDB_DATABASE = "net.coreprotect.database.DuckDBDatabase";
+    public static final String DUCKDB_RECOVERY = "net.coreprotect.database.DuckDBRecovery";
+    public static final String PURGE_POLICY = "net.coreprotect.database.PurgePolicy";
+    public static final String CLICKHOUSE_DATABASE = "net.coreprotect.database.clickhouse.ClickHouseDatabase";
+    public static final String CLICKHOUSE_JDBC_CONFIG = "net.coreprotect.database.clickhouse.ClickHouseJdbcConfig";
+    public static final String BLOCK_STATEMENT = "net.coreprotect.database.statement.BlockStatement";
+
+    private Names() {
+    }
+
+    /**
+     * @return the type descriptor of a class, for method descriptors, such as
+     *         {@code Lnet/coreprotect/CoreProtect;}
+     */
+    public static String descriptor(String className) {
+        return "L" + className.replace('.', '/') + ";";
+    }
+}

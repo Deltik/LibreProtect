@@ -15,7 +15,9 @@
   <description>
     LibreProtect's implementations of CoreProtect's closed-source extension
     points: /co migrate-db and automatic purging. They reach CoreProtect only by
-    reflection, so one source tree works with every upstream.
+    reflection, by capability, so one source tree works with every upstream.
+    Packaging probes the exact upstream JAR being built and writes what the
+    extensions do with it to target/capabilities.tsv.
   </description>
 
   <properties>
@@ -26,14 +28,42 @@
 
   <build>
     <finalName>libreprotect-extensions</finalName>
+    <plugins>
+      <plugin>
+        <!-- Probe the upstream JAR the way the extensions do at run time, and
+             write what they found to target/capabilities.tsv. The test class
+             path has the upstream JAR and the server API; it runs with skipped
+             tests too. -->
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.6.4</version>
+        <executions>
+          <execution>
+            <id>capability-report</id>
+            <phase>package</phase>
+            <goals>
+              <goal>java</goal>
+            </goals>
+            <configuration>
+              <mainClass>net.deltik.mc.libreprotect.extension.upstream.CapabilityReport</mainClass>
+              <classpathScope>test</classpathScope>
+              <arguments>
+                <argument>${upstream.jar}</argument>
+                <argument>${project.build.directory}/capabilities.tsv</argument>
+              </arguments>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
   </build>
 
   <dependencies>
     <dependency>
-      <!-- The upstream JAR being built (shaded, as it ships), passed by
-           scripts/lp. The extensions' own classes reach it only by name, which
-           the transformer checks. Provided by the plugin JAR itself at run
-           time. -->
+      <!-- The upstream JAR being built (shaded, as it ships), passed by scripts/lp,
+           for the tests and the capability report. The extensions' own classes
+           reach it only by name, which the transformer checks. Provided by the
+           plugin JAR itself at run time. -->
       <groupId>net.coreprotect</groupId>
       <artifactId>coreprotect</artifactId>
       <version>upstream</version>

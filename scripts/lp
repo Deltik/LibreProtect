@@ -169,7 +169,8 @@ check_version() {
 # CoreProtect generation of the checked-out upstream: 25 once it has the
 # multi-engine database layer (DuckDB, ClickHouse), otherwise 24. Only the
 # integration test and the database containers go by it: which engines to
-# test, and whether ClickHouse is needed.
+# test, and whether ClickHouse is needed. The build adapts to the upstream JAR
+# by capability instead.
 upstream_generation() {
     if [[ -f "$UPSTREAM_DIR/src/main/java/net/coreprotect/database/DatabaseType.java" ]]; then
         printf '25'
@@ -374,7 +375,7 @@ cmd_build() {
     [[ "$forks" =~ ^[1-9][0-9]*$ ]] || die "LP_TEST_FORKS must be a positive number"
 
     log "Building LibreProtect"
-    # The extensions are built with this exact upstream JAR.
+    # The extensions' tests run against this exact upstream JAR, and packaging probes it for their capability report.
     # Modules that don't depend on each other build at the same time, and so do test classes, in $forks JVMs.
     local maven_args=(-B -q -T 1C -f "$ROOT/pom.xml" clean verify -Dproject.build.outputTimestamp="$epoch"
         -Dupstream.jar="$upstream_jar" -Dlp.test.forks="$forks")
