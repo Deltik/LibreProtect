@@ -23,11 +23,10 @@ package net.deltik.mc.libreprotect.testutil;
 import net.deltik.mc.libreprotect.extension.common.Engine;
 import net.deltik.mc.libreprotect.extension.upstream.ActiveDatabase;
 import net.deltik.mc.libreprotect.extension.upstream.Names;
+import net.deltik.mc.libreprotect.extension.upstream.Schema;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.InstanceField;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Missing;
-import net.deltik.mc.libreprotect.extension.upstream.reflect.Shape;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.StaticField;
-import net.deltik.mc.libreprotect.extension.upstream.reflect.StaticMethod;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Upstream;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.UpstreamClass;
 import org.junit.jupiter.api.extension.AfterEachCallback;
@@ -125,26 +124,13 @@ public final class CoreProtectFixture implements AfterEachCallback {
     /**
      * Have CoreProtect create its tables in the database it uses, with its
      * own schema code, which also lists them in
-     * {@code ConfigHandler.databaseTables}, as at startup: through the
-     * overload that takes the engine where CoreProtect has one, and otherwise
-     * through the one that takes {@code use-mysql}.
+     * {@code ConfigHandler.databaseTables}, as at startup.
      */
     public CoreProtectFixture createTables(String prefix) throws Exception {
         Engine engine = ActiveDatabase.CAPABILITY.probe(upstream).require().activeEngine();
-        UpstreamClass database = upstream.type(Names.DATABASE);
-        try (Connection connection = database.staticMethod("getConnection", Connection.class, boolean.class,
-            int.class).call(true, 0)) {
-            if (upstream.has(Names.DATABASE_TYPE)) {
-                StaticMethod<Void, RuntimeException> create = database.staticMethodShaped("createDatabaseTables",
-                    void.class, Shape.exactly(String.class), Shape.exactly(boolean.class),
-                    Shape.exactly(Connection.class), Shape.enumWith("SQLITE", "MYSQL"), Shape.exactly(boolean.class));
-                create.call(prefix, true, connection, upstream.type(create.parameterType(3)).asEnum()
-                    .constant(engine.name()), false);
-            } else {
-                database.staticMethod("createDatabaseTables", void.class, String.class, boolean.class,
-                    Connection.class, boolean.class, boolean.class).call(prefix, true, connection,
-                    engine == Engine.MYSQL, false);
-            }
+        try (Connection connection = upstream.type(Names.DATABASE).staticMethod("getConnection", Connection.class,
+            boolean.class, int.class).call(true, 0)) {
+            Schema.CAPABILITY.probe(upstream).require().creator(engine).create(connection, prefix);
         }
         return this;
     }

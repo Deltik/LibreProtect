@@ -347,19 +347,19 @@ class TransformerTest {
             assertTrue(differences.contains("""
                 | Feature | With this CoreProtect |
                 |---|---|
-                | `hook.lock-heartbeat` | Not available: CoreProtect has no Process.lastLockUpdate |
-                | `migrate-db.protocol` | The flags of CoreProtect |
-                | `migrate-db.target.duckdb` | Not available: DuckDB's driver isn't among plugin.yml's libraries |
+                | `/co migrate-db` | The flags of CoreProtect |
+                | `/co migrate-db` to DuckDB | Not available: DuckDB's driver isn't among plugin.yml's libraries |
                 | `something.new` | Does &lt;b&gt;one&lt;/b&gt; thing \\| or \\`another\\` &amp; \\\\ |
+                | Refreshing CoreProtect's database lock | Not available: CoreProtect has no Process.lastLockUpdate |
 
                 This CoreProtect doesn't have these at all:
 
+                - `/co migrate-db` from ClickHouse, `/co migrate-db` to ClickHouse: CoreProtect has no ClickHouse
                 - `auto-purge` with DuckDB: CoreProtect has no DuckDB
                 - `clickhouse.writes`: This CoreProtect has no ClickHouse support
-                - `migrate-db.source.clickhouse`, `migrate-db.target.clickhouse`: CoreProtect has no ClickHouse
 
-                The features also rest on 2 capabilities that several of them share, such as telling which database \
-                CoreProtect uses. All of those work with this CoreProtect.
+                The features also rest on 3 capabilities that several of them share, such as telling which database \
+                CoreProtect uses. One of those doesn't work with this CoreProtect, as the table shows; the others do.
                 """), differences);
             assertFalse(differences.contains("generation"), differences);
             assertFalse(differences.contains("Writing ClickHouse"), "an absent shared capability isn't shown");

@@ -49,7 +49,7 @@ class NewerDesignTest {
     final CoreProtectFixture coreProtect = new CoreProtectFixture();
 
     private static final List<Capability<?>> WITH_OLDER_WAYS = List.of(ActiveDatabase.CAPABILITY,
-        PurgeTables.CAPABILITY, Leases.CAPABILITY);
+        Schema.CAPABILITY, IncompleteMarks.CAPABILITY, PurgeTables.CAPABILITY, Leases.CAPABILITY);
 
     @Test
     @DisplayName("should know CoreProtect 25 by every one of its traces, and CoreProtect 24 by none")
@@ -70,12 +70,16 @@ class NewerDesignTest {
         Upstream renamed = Upstream.coreProtect().hiding(Names.DATABASE_TYPE, Names.CONFIG_HANDLER + "#databaseType");
         Capabilities capabilities = Capabilities.probe(renamed);
         Choice<ActiveDatabase> selector = capabilities.get(ActiveDatabase.CAPABILITY);
+        Choice<Schema> schema = capabilities.get(Schema.CAPABILITY);
 
         assertEquals("unavailable", selector.strategy(), selector::toString);
         assertEquals("CoreProtect has no ConfigHandler.databaseType", selector.reason());
         assertEquals(List.of("database-type: CoreProtect has no ConfigHandler.databaseType",
             "use-mysql: CoreProtect has Config.DATABASE_TYPE, part of its multi-engine database layer (CoreProtect 25),"
                 + " which replaced use-mysql"), selector.rejected());
+        assertEquals("unavailable", schema.strategy(), schema::toString);
+        assertTrue(schema.rejected().get(1).startsWith("by-use-mysql: CoreProtect has Config.DATABASE_TYPE, part of"
+            + " its multi-engine database layer"), schema.rejected().toString());
         // With DuckDB active, CoreProtect 24's way would have seen SQLite
         coreProtect.useEngine(Engine.DUCKDB);
         assertEquals(Engine.DUCKDB, Capabilities.current().require(ActiveDatabase.CAPABILITY).activeEngine());
@@ -123,6 +127,15 @@ class NewerDesignTest {
         assertEquals("CoreProtect has no Consumer.processConsumerBatch(int, boolean)", Capabilities.probe(
             Upstream.coreProtect().hiding(Names.CONSUMER + "#processConsumerBatch")).get(ConsumerGate.CAPABILITY)
             .reason());
+
+        Capabilities capabilities = Capabilities.probe(Upstream.coreProtect().hiding(
+            Names.DUCKDB_DATABASE + "#createTables"));
+        assertEquals("CoreProtect has no DuckDBDatabase.createTables(String, Connection, boolean)",
+            capabilities.get(CoreProtectMigration.target(Engine.DUCKDB)).reason());
+        // Only DuckDB targets rely on DuckDB's tables, not CoreProtect's schema code for every engine
+        assertEquals("by-engine-type", capabilities.get(Schema.CAPABILITY).strategy());
+        assertEquals("jdbc", capabilities.get(CoreProtectMigration.target(Engine.SQLITE)).strategy());
+        assertEquals("jdbc", capabilities.get(CoreProtectMigration.target(Engine.MYSQL)).strategy());
     }
 
     @Test
@@ -140,6 +153,23 @@ class NewerDesignTest {
             }));
 
         assertEquals(MULTI_ENGINE ? "drain" : "no-drain", choice.strategy(), choice.rejected()::toString);
+    }
+
+    @Test
+    @DisplayName("should not call DuckDB writes absent when CoreProtect 25 renames and moves its DuckDB classes")
+    void movedDuckDB() {
+        AssumeCapability.strategy("migrate-db.duckdb-writes", "appender");
+        // As if DatabaseType became StorageEngine and DuckDB's classes moved to a package of their own
+        Capabilities capabilities = Capabilities.probe(Upstream.coreProtect().hiding(Names.DATABASE_TYPE,
+            Names.DUCKDB_DATABASE, Names.DUCKDB_RECOVERY));
+
+        // Not absent, since CoreProtect still has its multi-engine design; only unavailable with the migrations
+        // that write DuckDB, which need DatabaseType
+        Choice<DuckDBWrites> writes = capabilities.get(DuckDBWrites.CAPABILITY);
+        assertEquals("unavailable", writes.strategy());
+        assertEquals(capabilities.get(MigrationProtocol.CAPABILITY).reason(), writes.reason());
+        assertEquals("CoreProtect has no class DuckDBRecovery", capabilities.get(Hooks.DUCKDB_RECOVERY).reason());
+        assertEquals("unavailable", capabilities.get(Schema.CAPABILITY).strategy());
     }
 
     @Test

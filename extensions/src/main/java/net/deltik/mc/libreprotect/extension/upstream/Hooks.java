@@ -25,6 +25,7 @@ import net.deltik.mc.libreprotect.extension.upstream.reflect.Missing;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.StaticField;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.StaticMethod;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Upstream;
+import net.deltik.mc.libreprotect.extension.upstream.reflect.UpstreamClass;
 
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -32,11 +33,11 @@ import java.util.concurrent.atomic.AtomicLong;
  * Small steps around database maintenance, each a capability of its own,
  * so that one upstream reshaped leaves the others working.
  *
- * <p>The counter of purged rows is in every CoreProtect that LibreProtect
- * knows, so one that lacks it renamed it, and it's unavailable, never
- * absent; its step is harmless to skip. The others belong to CoreProtect
- * 25's multi-engine layer, which needs them: absent before it, and
- * unavailable if it lacks them.
+ * <p>The counter of purged rows and the lock heartbeat are in every
+ * CoreProtect that LibreProtect knows, so one that lacks them renamed them,
+ * and they're unavailable, never absent; their steps are harmless to skip.
+ * The others belong to CoreProtect 25's multi-engine layer, which needs
+ * them: absent before it, and unavailable if it lacks them.
  */
 public final class Hooks {
 
@@ -44,10 +45,17 @@ public final class Hooks {
         Choice.way("rows-purged", "CoreProtect's count of rows that automatic purges removed",
             AutoPurgeCounter::new));
 
+    public static final Capability<LockHeartbeat> LOCK_HEARTBEAT = Capability.of("hook.lock-heartbeat",
+        Choice.way("last-lock-update", "CoreProtect's time of its last database lock update", LockHeartbeat::new));
+
     public static final Capability<EntitySpawnVerification> ENTITY_SPAWN_VERIFICATION = Capability.of(
         "hook.entity-spawn-verification",
         Choice.way("invalidate", "CoreProtect's check of tracked entities against the database",
             EntitySpawnVerification::new));
+
+    public static final Capability<DuckDBRecovery> DUCKDB_RECOVERY = Capability.of("hook.duckdb-recovery",
+        Choice.way("recovery-requests", "CoreProtect's recovery of its DuckDB database after a failure",
+            DuckDBRecovery::new));
 
     public static final Capability<PurgeWorker> PURGE_WORKER = Capability.of("hook.purge-worker",
         Choice.way("worker-running", "CoreProtect's sign of a manual purge still at work", PurgeWorker::new));
@@ -77,6 +85,26 @@ public final class Hooks {
     }
 
     /**
+     * {@code Process.lastLockUpdate}, the time the consumer last wrote the
+     * database lock's heartbeat.
+     */
+    public static final class LockHeartbeat {
+        private final StaticField lastLockUpdate;
+
+        private LockHeartbeat(Upstream upstream) throws Missing {
+            lastLockUpdate = upstream.type(Names.PROCESS).writableStaticField("lastLockUpdate", int.class);
+        }
+
+        /**
+         * Make the consumer write the heartbeat at its next batch, such as to
+         * a database it was just switched to.
+         */
+        public void reset() {
+            lastLockUpdate.setInt(0);
+        }
+    }
+
+    /**
      * {@code EntitySpawnTracking.invalidateDatabaseVerification()}.
      */
     public static final class EntitySpawnVerification {
@@ -94,6 +122,33 @@ public final class Hooks {
          */
         public void invalidate() {
             invalidate.call();
+        }
+    }
+
+    /**
+     * {@code DuckDBRecovery}, which reopens DuckDB after a failure.
+     */
+    public static final class DuckDBRecovery {
+        private final StaticMethod<Boolean, RuntimeException> pending;
+        private final StaticMethod<Void, RuntimeException> reset;
+
+        private DuckDBRecovery(Upstream upstream) throws Missing {
+            Designs.MULTI_ENGINE.requireIn(upstream);
+            UpstreamClass recovery = upstream.type(Names.DUCKDB_RECOVERY);
+            pending = recovery.staticMethod("isPending", boolean.class);
+            reset = recovery.staticMethod("reset", void.class);
+        }
+
+        public boolean pending() {
+            return pending.call();
+        }
+
+        /**
+         * Forget a recovery that was asked for, such as after switching to
+         * another database.
+         */
+        public void reset() {
+            reset.call();
         }
     }
 

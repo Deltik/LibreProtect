@@ -222,7 +222,7 @@ CoreProtect keeps the translations it gets, and only asks for them again after a
 
 The network policy covers the requests that CoreProtect and the libraries it bundles make to web addresses. It doesn't cover:
 
-* Connections to the databases in CoreProtect's `config.yml`, such as MySQL or ClickHouse, which CoreProtect and automatic purging make.
+* Connections to the databases in CoreProtect's `config.yml`, such as MySQL or ClickHouse, which CoreProtect, database migration and automatic purging make.
 * LibreProtect's own requests to the [update sources](#update-sources). The policy decides whether LibreProtect answers CoreProtect's update check, and so whether it asks them, but routes can't block or redirect these requests. An empty `update-sources` in `libreprotect.yml`, or `check-updates: false` in CoreProtect's `config.yml`, stops them.
 
 ## Differences from CoreProtect
@@ -233,7 +233,7 @@ The network policy covers the requests that CoreProtect and the libraries it bun
 * The startup log shows which network policy is active.
 * LibreProtect bundles CoreProtect's [translations](#translations) and answers translation requests itself, instead of sending your phrases to coreprotect.net.
 * Update checks ask [GitHub or Modrinth](#update-sources) for LibreProtect's releases instead of asking update.coreprotect.net, and the update notice shows LibreProtect's version.
-* [Automatic purging](#automatic-purging) (`auto-purge`) works. CoreProtect has it only in its paid builds, whose code isn't public, so LibreProtect has its own implementation. `/co migrate-db` is only in CoreProtect's paid builds too; LibreProtect has a placeholder that says so. [A free implementation is welcome.](extensions/src/main/java/net/coreprotect/utility/extensions/)
+* Database migration (`/co migrate-db`) and [automatic purging](#automatic-purging) (`auto-purge`) work. CoreProtect has them only in its paid builds, whose code isn't public, so LibreProtect has its own implementations.
 
 Each release lists its exact changes in `DIFFERENCES.md`, which is attached to the release and included in the JAR. It also says which of LibreProtect's features work with the CoreProtect that the release was built from.
 
@@ -286,10 +286,10 @@ LibreProtect never edits CoreProtect's source code. Each build:
    * CoreProtect compares its own version with those of its database, its patches and its features. It reads that version from `plugin.yml` in `VersionUtils.getPluginVersion()`, which now reads the version that upstream's build wrote there instead of LibreProtect's. So CoreProtect behaves as upstream's own build of the same commit, whatever LibreProtect's version says. The audit asks for a review of any new upstream method that calls `getVersion()` or `getFullName()` of Bukkit's `PluginDescriptionFile`, or `getVersion()` or `getDisplayName()` of Paper's `PluginMeta`, or that has a string naming `plugin.yml`, as code that reads that file itself does.
    * Text that shows the plugin's name is rewritten to say LibreProtect. CoreProtect's phrases and the calls that print messages go through LibreProtect's branding, which names LibreProtect, points links to LibreProtect, and leaves out donation-key messages.
    * A generated subclass of CoreProtect's main class becomes the plugin's entry point. It loads the network policy before any of CoreProtect's code can open a connection.
-   * LibreProtect's [runtime](runtime/) classes are added. So are its [extensions](extensions/), LibreProtect's own implementations of CoreProtect's closed-source extension points: automatic purging, and a placeholder for database migration.
+   * LibreProtect's [runtime](runtime/) classes are added. So are its [extensions](extensions/), LibreProtect's own implementations of CoreProtect's closed-source extension points: database migration and automatic purging.
    * The translations in CoreProtect's source code, which its JAR leaves out, are added, with CoreProtect's built-in English phrases taken from its code.
 3. **Checks contracts.** The build fails with an explanation if upstream breaks an assumption that the transformation relies on. For example, the main class can't be subclassed, a donation-key check was renamed, or network calls are left over.
-4. **Checks what the extensions can do with this upstream.** The extensions don't link against CoreProtect's classes. They reach CoreProtect only by reflection, and each feature asks for the capabilities it needs, such as pausing CoreProtect's database writes. The build probes the exact upstream JAR that it bundles and records what the extensions found, and the transformer checks that report against the JAR and bundles it. When upstream changes something that a feature needs, only that feature turns off, and it says why. `DIFFERENCES.md` shows how each feature works with that build's CoreProtect.
+4. **Checks what the extensions can do with this upstream.** The extensions don't link against CoreProtect's classes. They reach CoreProtect only by reflection, and each feature asks for the capabilities it needs, such as pausing CoreProtect's database writes or converting its data between database formats. The build probes the exact upstream JAR that it bundles and records what the extensions found, and the transformer checks that report against the JAR and bundles it. When upstream changes something that a feature needs, only that feature turns off, and it says why. `DIFFERENCES.md` shows how each feature works with that build's CoreProtect.
 5. **Audits** upstream's JAR, as upstream built it, against [`audit/baseline.json`](audit/baseline.json), the reviewed state of upstream:
    * **FAIL** stops the build. It means that upstream's code does something that LibreProtect can't keep under the network policy, such as opening a raw socket.
    * **REVIEW** blocks releases, but not development builds, until a maintainer accepts the change. Examples are a new host, a change to upstream's dependencies or license, and a change to how the extensions work with upstream, including a change to the upstream code whose behavior they rely on, which the build fingerprints.

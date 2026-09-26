@@ -46,6 +46,8 @@ final class Differences {
 
     /** Readable names of the capabilities for each database engine, by ID prefix; {@code {}} is the engine */
     private static final Map<String, String> ENGINE_FEATURES = orderedMap(
+        "migrate-db.source.", "`/co migrate-db` from {}",
+        "migrate-db.target.", "`/co migrate-db` to {}",
         "auto-purge.engine.", "`auto-purge` with {}");
 
     /**
@@ -65,12 +67,25 @@ final class Differences {
         "lifecycle.flags", "CoreProtect's state flags",
         "consumer.gate", "Pausing CoreProtect's database writes",
         "consumer.start-result", "CoreProtect's answers when its maintenance starts",
+        "config.lock", "CoreProtect's lock on its settings",
+        "server.thread", "Running tasks on the server's thread",
+        "migrate-db.schema", "Creating CoreProtect's tables",
         "hook.auto-purge-counter", "Counting purged rows for `/co status`",
+        "hook.lock-heartbeat", "Refreshing CoreProtect's database lock",
         "hook.entity-spawn-verification", "Rechecking tracked entities",
+        "hook.duckdb-recovery", "CoreProtect's recovery of its DuckDB database",
         "hook.purge-worker", "Noticing a manual purge at work");
 
     private static Map<String, String> features() {
         Map<String, String> features = new LinkedHashMap<>();
+        features.put("migrate-db.protocol", "`/co migrate-db`");
+        for (String prefix : List.of("migrate-db.source.", "migrate-db.target.")) {
+            ENGINES.forEach((engine, name) -> features.put(prefix + engine, ENGINE_FEATURES.get(prefix)
+                .replace("{}", name)));
+        }
+        features.put("migrate-db.transcoding", "`/co migrate-db` between SQLite or MySQL and DuckDB or ClickHouse");
+        features.put("migrate-db.duckdb-writes", "`/co migrate-db`: writing to DuckDB");
+        features.put("migrate-db.incomplete-mark", "`/co migrate-db`: keeping CoreProtect off an unfinished copy");
         features.put("auto-purge.retention", "`auto-purge`: how much to keep");
         features.put("auto-purge.settings", "`auto-purge`: when to purge, and the table prefix");
         features.put("auto-purge.coordination", "`auto-purge`: taking turns with CoreProtect's database work");
@@ -218,8 +233,8 @@ final class Differences {
 
         md.append("\n## Extension Points\n\n")
             .append("Upstream loads these classes by name, but its public source doesn't include them. LibreProtect ")
-            .append("provides them, with its own implementation of automatic purging (`auto-purge`) and a ")
-            .append("placeholder for `/co migrate-db`:\n\n");
+            .append("provides them, with its own implementations of `/co migrate-db` and automatic purging ")
+            .append("(`auto-purge`):\n\n");
         for (TransformReport.ExtensionPoint extensionPoint : report.extensionPoints) {
             md.append("- ").append(code(extensionPoint.className())).append(", requested by ")
                 .append(codes(extensionPoint.requestedBy())).append("\n");

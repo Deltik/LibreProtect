@@ -21,6 +21,7 @@
 package net.deltik.mc.libreprotect.extension.purge;
 
 import net.deltik.mc.libreprotect.extension.common.Engine;
+import net.deltik.mc.libreprotect.extension.common.PurgeChunkLock;
 
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -141,6 +142,9 @@ final class FakeBridge implements PurgeBridge {
 
     @Override
     public Lease lease(PurgeContext context, boolean exclusive) throws InterruptedException {
+        if (!PurgeChunkLock.isHeldByCurrentThread()) {
+            problems.add("lease requested without the chunk lock");
+        }
         int number = leases.incrementAndGet();
         Lease instead = leasePolicy.apply(number);
         if (instead != null) {
@@ -169,6 +173,9 @@ final class FakeBridge implements PurgeBridge {
         return Lease.granted(connection, () -> {
             if (Thread.currentThread() != owner) {
                 problems.add("lease released on " + Thread.currentThread().getName());
+            }
+            if (!PurgeChunkLock.isHeldByCurrentThread()) {
+                problems.add("lease released after the chunk lock");
             }
             try {
                 if (opened != null) {

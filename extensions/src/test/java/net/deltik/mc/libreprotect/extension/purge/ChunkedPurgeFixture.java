@@ -21,6 +21,7 @@
 package net.deltik.mc.libreprotect.extension.purge;
 
 import net.deltik.mc.libreprotect.extension.common.Engine;
+import net.deltik.mc.libreprotect.extension.common.PurgeChunkLock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -59,6 +60,7 @@ abstract class ChunkedPurgeFixture {
             assertEquals(List.of(), bridge.problems(), "lease problems");
             assertEquals(0, bridge.openLeases.get(), "leases left open");
         }
+        assertFalse(PurgeChunkLock.isHeldByCurrentThread(), "the chunk lock is left held");
         if (database != null) {
             database.close();
         }

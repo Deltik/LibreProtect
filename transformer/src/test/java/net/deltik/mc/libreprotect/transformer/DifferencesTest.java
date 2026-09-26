@@ -35,6 +35,9 @@ class DifferencesTest {
     @Test
     @DisplayName("names known capabilities as features")
     void knownFeatures() {
+        assertEquals("`/co migrate-db`", Differences.feature("migrate-db.protocol"));
+        assertEquals("`/co migrate-db` from MySQL", Differences.feature("migrate-db.source.mysql"));
+        assertEquals("`/co migrate-db` to ClickHouse", Differences.feature("migrate-db.target.clickhouse"));
         assertEquals("`auto-purge`: taking turns with CoreProtect's database work",
             Differences.feature("auto-purge.coordination"));
         assertEquals("`auto-purge` with SQLite", Differences.feature("auto-purge.engine.sqlite"));
@@ -46,6 +49,8 @@ class DifferencesTest {
     @Test
     @DisplayName("shows other capabilities by ID")
     void unknownFeatures() {
+        assertEquals("`/co migrate-db` from `oracle`", Differences.feature("migrate-db.source.oracle"));
+        assertEquals("`migrate-db.source.`", Differences.feature("migrate-db.source."));
         assertEquals("`something.new`", Differences.feature("something.new"));
     }
 
@@ -102,11 +107,11 @@ class DifferencesTest {
         assertEquals("The features also rest on 3 capabilities " + prefix + "One of those doesn't work with this"
             + " CoreProtect, as the table shows; the others do.", sharedSentence(List.of(
                 capability("lifecycle.flags", false), capability("consumer.gate", true),
-                capability("consumer.start-result", true))));
+                capability("server.thread", true))));
         assertEquals("The features also rest on 3 capabilities " + prefix + "2 of those don't work with this"
             + " CoreProtect, as the table shows; the others do.", sharedSentence(List.of(
                 capability("lifecycle.flags", false), capability("consumer.gate", false),
-                capability("consumer.start-result", true))));
+                capability("server.thread", true))));
         assertEquals("The features also rest on 2 capabilities " + prefix + "None of those work with this"
             + " CoreProtect, as the table shows.", sharedSentence(List.of(capability("lifecycle.flags", false),
                 capability("consumer.gate", false))));

@@ -244,6 +244,7 @@ class PurgeFallbackTest {
         Capabilities after = Capabilities.probe(Upstream.coreProtect().hiding(Names.DUCKDB_RECOVERY + "#reset"));
         CoreProtectPurge bridge = CoreProtectPurge.create(after);
 
+        assertEquals("unavailable", after.get(Hooks.DUCKDB_RECOVERY).strategy());
         assertEquals("chunked-deletes", after.get(PurgeEngine.DUCKDB).strategy());
         assertStillPurges(bridge, Engine.DUCKDB);
         assertFalse(bridge.requestRecovery(new SQLException("a failure that needs nothing reopened")));

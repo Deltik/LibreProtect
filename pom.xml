@@ -76,11 +76,12 @@
          LibreProtect's runtime from depending on newer server APIs. -->
     <paper-api.version>1.16.5-R0.1-SNAPSHOT</paper-api.version>
     <!-- Database drivers for the extensions' tests and capability report
-         only (test scope), in place of those that servers bundle
-         (SQLite) or download for CoreProtect 25 (DuckDB). The extensions' own
+         only (test scope), in place of those that servers bundle (SQLite,
+         MySQL) or download for CoreProtect 25 (DuckDB). The extensions' own
          code reaches drivers only through JDBC and reflection. -->
     <sqlite-jdbc.version>3.53.0.0</sqlite-jdbc.version>
     <duckdb.version>1.4.5.0</duckdb.version>
+    <mysql-connector-j.version>9.6.0</mysql-connector-j.version>
 
     <!-- How many JVMs run test classes at once, and their options.
          scripts/lp sets the number by the machine's processors and memory.
@@ -119,6 +120,11 @@
       </dependency>
       <dependency>
         <groupId>org.ow2.asm</groupId>
+        <artifactId>asm-commons</artifactId>
+        <version>${asm.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.ow2.asm</groupId>
         <artifactId>asm-tree</artifactId>
         <version>${asm.version}</version>
       </dependency>
@@ -141,6 +147,11 @@
         <groupId>org.duckdb</groupId>
         <artifactId>duckdb_jdbc</artifactId>
         <version>${duckdb.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.mysql</groupId>
+        <artifactId>mysql-connector-j</artifactId>
+        <version>${mysql-connector-j.version}</version>
       </dependency>
     </dependencies>
   </dependencyManagement>

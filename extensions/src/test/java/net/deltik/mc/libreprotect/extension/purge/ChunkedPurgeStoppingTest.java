@@ -21,6 +21,7 @@
 package net.deltik.mc.libreprotect.extension.purge;
 
 import net.deltik.mc.libreprotect.extension.common.Engine;
+import net.deltik.mc.libreprotect.extension.common.PurgeChunkLock;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -32,6 +33,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -267,6 +269,82 @@ class ChunkedPurgeStoppingTest extends ChunkedPurgeFixture {
         assertEquals(StopReason.DATABASE_BUSY, result.stopReason());
         assertEquals("a rollback is running", result.detail());
         assertEquals(0, result.removed());
+    }
+
+    @Test
+    @DisplayName("should let a migration wait for the chunk that is running, and for no other")
+    void migrationWaitsForChunk() throws Exception {
+        setUp(Engine.SQLITE);
+        seed();
+        CountDownLatch deleting = new CountDownLatch(1);
+        CountDownLatch finish = new CountDownLatch(1);
+        bridge.connections = connection -> StatementHooks.wrap(connection, (sql, parameters) -> {
+            if (sql.startsWith("DELETE") && deleting.getCount() > 0) {
+                deleting.countDown();
+                try {
+                    finish.await(10, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    throw new SQLException(e);
+                }
+            }
+        });
+        AtomicReference<PurgeResult> result = new AtomicReference<>();
+        PurgeContext purgeContext = new PurgeContext();
+        Thread worker = new Thread(() -> result.set(new ChunkedPurge(bridge, purgeContext, log, () -> runChecks.get(),
+            CUTOFF, CUTOFF + 30 * DAY).timing(0, 1, 60_000).run(false)));
+        purgeContext.bind(worker);
+        worker.start();
+        assertTrue(deleting.await(10, TimeUnit.SECONDS));
+
+        // A migration begins: auto-purge stops before its next chunk, but this one is deleting
+        bridge.stopReason = StopReason.MIGRATION;
+        assertFalse(PurgeChunkLock.awaitNoChunk(200), "the migration went on while the chunk was deleting");
+        finish.countDown();
+        assertTrue(PurgeChunkLock.awaitNoChunk(5000));
+        worker.join(5000);
+
+        assertEquals(StopReason.MIGRATION, result.get().stopReason());
+        assertEquals(5000, result.get().removed());
+        assertEquals(2, bridge.leases.get());
+    }
+
+    @Test
+    @DisplayName("should stop while a migration holds the chunk lock")
+    void stopsWhileLocked() throws Exception {
+        setUp(Engine.SQLITE);
+        seed();
+        CountDownLatch holding = new CountDownLatch(1);
+        CountDownLatch finish = new CountDownLatch(1);
+        Thread migration = new Thread(() -> {
+            try {
+                assertTrue(PurgeChunkLock.tryHold(1000));
+                holding.countDown();
+                finish.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                PurgeChunkLock.release();
+            }
+        });
+        migration.start();
+        assertTrue(holding.await(5, TimeUnit.SECONDS));
+        new Thread(() -> {
+            try {
+                Thread.sleep(300);
+            } catch (InterruptedException e) {
+                return;
+            }
+            context.requestStop();
+        }).start();
+
+        long started = System.nanoTime();
+        PurgeResult result = purge(CUTOFF);
+
+        assertEquals(StopReason.SHUTDOWN, result.stopReason());
+        assertEquals(0, bridge.leases.get());
+        assertTrue(System.nanoTime() - started < TimeUnit.SECONDS.toNanos(3));
+        finish.countDown();
+        migration.join(5000);
     }
 
     @Test

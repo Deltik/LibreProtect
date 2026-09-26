@@ -37,7 +37,17 @@ import java.util.concurrent.Future;
  * the same in CoreProtect 24 and 25, but what sets them and what honors
  * them differ; the capabilities that use them say how.
  *
- * <p>The capability only reads the flags.
+ * <p>On CoreProtect 25, a purge is claimed through
+ * {@code Consumer.claimPurge}, which sets {@code purgeRunning} under the
+ * consumer's lock after checking reloads and rollbacks, and its consumer is
+ * paused through database reloads. So there, {@link #setPurgeRunning} and
+ * {@link #setPauseConsumer}, CoreProtect 24's protocol, refuse.
+ * {@code migrationRunning} has no such claim on either: a migration sets it
+ * itself, and CoreProtect's shutdown waits while it's set.
+ *
+ * <p>The capability only reads the flags, which auto-purge needs too. Only
+ * the flags that {@link #forMigrations} gives a migration protocol can be
+ * set, so a flag that CoreProtect made final turns off migrations alone.
  */
 public final class Flags {
 
@@ -53,8 +63,11 @@ public final class Flags {
     private final StaticField activeRollbacks;
     private final StaticField shutdownDrainRunning;
     private final StaticMethod<?, RuntimeException> shutdownSignal;
+    /** How CoreProtect shows that it has its newer design, which rules out writing the flags; or {@code null} */
+    private final String newerDesign;
 
     private Flags(Upstream upstream) throws Missing {
+        newerDesign = Designs.MULTI_ENGINE.evidenceIn(upstream).orElse(null);
         UpstreamClass handler = upstream.type(Names.CONFIG_HANDLER);
         serverRunning = handler.staticField("serverRunning", boolean.class);
         migrationRunning = handler.staticField("migrationRunning", boolean.class);
@@ -70,12 +83,49 @@ public final class Flags {
             "databaseReloadShutdownSignal", CompletableFuture.class);
     }
 
+    private Flags(Flags flags, StaticField migrationRunning, StaticField purgeRunning, StaticField pauseConsumer) {
+        newerDesign = flags.newerDesign;
+        serverRunning = flags.serverRunning;
+        this.migrationRunning = migrationRunning;
+        converterRunning = flags.converterRunning;
+        this.purgeRunning = purgeRunning;
+        this.pauseConsumer = pauseConsumer;
+        activeRollbacks = flags.activeRollbacks;
+        shutdownDrainRunning = flags.shutdownDrainRunning;
+        shutdownSignal = flags.shutdownSignal;
+    }
+
+    /**
+     * For the probe of a migration protocol: these flags, able to set those
+     * that a migration sets, which only migrations need writable. That's
+     * {@code migrationRunning} on every CoreProtect, and {@code purgeRunning}
+     * and {@code pauseConsumer} with CoreProtect 24's protocol.
+     *
+     * @throws Missing if CoreProtect made one of them final
+     */
+    Flags forMigrations(Upstream upstream) throws Missing {
+        UpstreamClass handler = upstream.type(Names.CONFIG_HANDLER);
+        StaticField migration = handler.writableStaticField("migrationRunning", boolean.class);
+        if (newerDesign != null) {
+            return new Flags(this, migration, purgeRunning, pauseConsumer);
+        }
+        return new Flags(this, migration, handler.writableStaticField("purgeRunning", boolean.class),
+            handler.writableStaticField("pauseConsumer", boolean.class));
+    }
+
     public boolean serverRunning() {
         return serverRunning.getBoolean();
     }
 
     public boolean migrationRunning() {
         return migrationRunning.getBoolean();
+    }
+
+    /**
+     * @throws IllegalStateException unless these flags are {@link #forMigrations}'
+     */
+    public void setMigrationRunning(boolean running) {
+        migrationRunning.setBoolean(running);
     }
 
     public boolean converterRunning() {
@@ -86,8 +136,38 @@ public final class Flags {
         return purgeRunning.getBoolean();
     }
 
+    /**
+     * For CoreProtect 24's protocol, where a purge sets it itself.
+     *
+     * @throws IllegalStateException on CoreProtect 25, whose purges are
+     *                               claimed through {@code Consumer.claimPurge}
+     */
+    public void setPurgeRunning(boolean running) {
+        refuseOnNewerDesign("purgeRunning", "claims purges through Consumer.claimPurge, under its lock");
+        purgeRunning.setBoolean(running);
+    }
+
     public boolean pauseConsumer() {
         return pauseConsumer.getBoolean();
+    }
+
+    /**
+     * For CoreProtect 24's protocol, where a migration pauses the consumer
+     * with it.
+     *
+     * @throws IllegalStateException on CoreProtect 25, whose consumer is
+     *                               paused through database reloads
+     */
+    public void setPauseConsumer(boolean pause) {
+        refuseOnNewerDesign("pauseConsumer", "pauses its consumer through database reloads");
+        pauseConsumer.setBoolean(pause);
+    }
+
+    private void refuseOnNewerDesign(String flag, String instead) {
+        if (newerDesign != null) {
+            throw new IllegalStateException("Setting " + flag + " is CoreProtect 24's protocol, but " + newerDesign
+                + ", which " + instead);
+        }
     }
 
     /**

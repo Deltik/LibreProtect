@@ -29,13 +29,18 @@ package net.deltik.mc.libreprotect.extension.upstream;
  */
 public final class Names {
 
+    public static final String CORE_PROTECT = "net.coreprotect.CoreProtect";
     public static final String PURGE_COMMAND = "net.coreprotect.command.PurgeCommand";
+    public static final String RELOAD_COMMAND = "net.coreprotect.command.ReloadCommand";
+    public static final String LOOKUP_COMMAND = "net.coreprotect.command.LookupCommand";
     public static final String ROLLBACK_RESTORE_COMMAND = "net.coreprotect.command.RollbackRestoreCommand";
     public static final String CONFIG = "net.coreprotect.config.Config";
+    public static final String CONFIG_FILE = "net.coreprotect.config.ConfigFile";
     public static final String CONFIG_HANDLER = "net.coreprotect.config.ConfigHandler";
     public static final String DATABASE_CONFIG_WRITER = "net.coreprotect.config.DatabaseConfigWriter";
     public static final String CONSUMER = "net.coreprotect.consumer.Consumer";
     public static final String OPERATION_START_RESULT = "net.coreprotect.consumer.Consumer$OperationStartResult";
+    public static final String PROCESS = "net.coreprotect.consumer.process.Process";
     public static final String DATABASE = "net.coreprotect.database.Database";
     /** CoreProtect's enum of database engines, which replaced {@code use-mysql} */
     public static final String DATABASE_TYPE = "net.coreprotect.database.DatabaseType";
@@ -46,8 +51,17 @@ public final class Names {
     public static final String CLICKHOUSE_JDBC_CONFIG = "net.coreprotect.database.clickhouse.ClickHouseJdbcConfig";
     public static final String CLICKHOUSE_RETENTION = "net.coreprotect.database.clickhouse.ClickHouseRetention";
     public static final String BLOCK_STATEMENT = "net.coreprotect.database.statement.BlockStatement";
+    public static final String ENTITY_STATEMENT = "net.coreprotect.database.statement.EntityStatement";
+    public static final String PLUGIN_INITIALIZATION = "net.coreprotect.services.PluginInitializationService";
     public static final String SHUTDOWN_SERVICE = "net.coreprotect.services.ShutdownService";
+    public static final String SCHEDULER = "net.coreprotect.thread.Scheduler";
     public static final String ENTITY_SPAWN_TRACKING = "net.coreprotect.utility.EntitySpawnTracking";
+    public static final String BLOCK_META_CODEC = "net.coreprotect.utility.serialize.BlockMetaCodec";
+    public static final String ENTITY_DATA_CODEC = "net.coreprotect.utility.serialize.EntityDataCodec";
+    public static final String LEGACY_METADATA_CODEC = "net.coreprotect.utility.serialize.LegacyMetadataCodec";
+
+    /** DuckDB's JDBC connection, from the driver that CoreProtect's plugin libraries bring along */
+    public static final String DUCKDB_CONNECTION = "org.duckdb.DuckDBConnection";
 
     private Names() {
     }

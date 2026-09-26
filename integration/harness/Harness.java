@@ -749,8 +749,10 @@ public final class Harness {
         suite.check(console.contains("----- LibreProtect Help -----") && console.contains("LibreProtect - Command \"/co lpit-unknown\""),
             "/co help and error messages use LibreProtect's header and chat prefix");
         suite.check(!console.contains("﷐"), "no internal markers leak into messages");
-        suite.check(console.contains("LibreProtect - Database migration is not available in LibreProtect"),
-            "/co migrate-db reaches LibreProtect's extension");
+        // CoreProtect uses SQLite here, so the usage names only the databases it can migrate to
+        suite.check(console.contains("LibreProtect - Usage: /co migrate-db <" + (generation >= 25 ? "mysql|duckdb"
+                : "mysql") + "> [--full-validation]\n"),
+            "/co migrate-db reaches LibreProtect's extension, and lists the databases it can migrate to");
         suite.check(!console.contains("\tat net.coreprotect.") && !console.contains("\tat net.deltik.mc.libreprotect."),
             "no stack traces from CoreProtect or LibreProtect");
 

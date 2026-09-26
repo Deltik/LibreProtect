@@ -21,6 +21,7 @@
 package net.deltik.mc.libreprotect.extension.purge;
 
 import net.deltik.mc.libreprotect.extension.common.Engine;
+import net.deltik.mc.libreprotect.extension.common.PurgeChunkLock;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -115,6 +116,7 @@ final class ChunkedPurge {
         new HashSet<>(Arrays.asList("block", "entity", "skull", "entity_spawn")));
     private static final long MAXIMUM_SPAN = 100_000_000L;
     private static final long MAXIMUM_BUSY_PAUSE_MILLIS = 5_000;
+    private static final long CHUNK_LOCK_POLL_MILLIS = 100;
 
     private final PurgeBridge bridge;
     private final PurgeContext context;
@@ -533,6 +535,10 @@ final class ChunkedPurge {
      * retries failed work: every statement is limited to its range and the
      * cutoff, so repeating one is harmless.
      *
+     * <p>The {@link PurgeChunkLock} is held from before the lease checks for
+     * a migration until the lease is given back, so that a migration can
+     * wait for the work to end.
+     *
      * @param attempts how often to try the work before its errors stop the run
      */
     private <T> T withLease(boolean exclusive, int attempts, Work<T> work) throws Stopped, InterruptedException {
@@ -543,46 +549,67 @@ final class ChunkedPurge {
             checkStop();
             // The lease may hold its claim from anywhere in here, so its time counts in full
             long taken = System.nanoTime();
-            Lease lease = bridge.lease(context, exclusive);
-            if (!lease.isGranted()) {
-                if (lease.stopReason() != null) {
-                    throw stopped(lease.stopReason(), lease.stopDetail());
+            holdChunkLock();
+            Lease refused = null;
+            SQLException failure = null;
+            try {
+                Lease lease = bridge.lease(context, exclusive);
+                if (!lease.isGranted()) {
+                    refused = lease;
+                } else {
+                    busy = 0;
+                    try {
+                        checkDatabase();
+                        Connection connection = lease.connection();
+                        if (engine == Engine.MYSQL) {
+                            limitNetworkWait(connection);
+                        }
+                        return work.run(connection);
+                    } catch (SQLException e) {
+                        failure = e;
+                    } finally {
+                        lease.close();
+                        lastHeldNanos = System.nanoTime() - taken;
+                    }
+                }
+            } finally {
+                PurgeChunkLock.release();
+            }
+
+            if (refused != null) {
+                if (refused.stopReason() != null) {
+                    throw stopped(refused.stopReason(), refused.stopDetail());
                 }
                 long waited = System.nanoTime();
                 if (busy == 0) {
                     busySince = waited;
                 } else if (waited - busySince > busyLimitNanos) {
-                    throw new Stopped(StopReason.DATABASE_BUSY, lease.busyReason());
+                    throw new Stopped(StopReason.DATABASE_BUSY, refused.busyReason());
                 }
                 context.pause(Math.min(MAXIMUM_BUSY_PAUSE_MILLIS, 250L << Math.min(busy, 5)));
                 busy++;
                 continue;
             }
-            busy = 0;
-            try {
-                try {
-                    checkDatabase();
-                    Connection connection = lease.connection();
-                    if (engine == Engine.MYSQL) {
-                        limitNetworkWait(connection);
-                    }
-                    return work.run(connection);
-                } finally {
-                    lease.close();
-                    lastHeldNanos = System.nanoTime() - taken;
-                }
-            } catch (SQLException e) {
-                if (context.stopRequested()) {
-                    throw new Stopped(StopReason.SHUTDOWN, null);
-                }
-                if (bridge.requestRecovery(e)) {
-                    throw new Stopped(StopReason.DATABASE_RECOVERY, e.getMessage());
-                }
-                if (++failures >= attempts) {
-                    throw new Stopped(StopReason.ERROR, e.getMessage());
-                }
-                context.pause(retryDelayMillis << failures);
+            if (context.stopRequested()) {
+                throw new Stopped(StopReason.SHUTDOWN, null);
             }
+            if (bridge.requestRecovery(failure)) {
+                throw new Stopped(StopReason.DATABASE_RECOVERY, failure.getMessage());
+            }
+            if (++failures >= attempts) {
+                throw new Stopped(StopReason.ERROR, failure.getMessage());
+            }
+            context.pause(retryDelayMillis << failures);
+        }
+    }
+
+    /**
+     * Wait for the {@link PurgeChunkLock}, which a migration holds only for a
+     * moment, ending the wait if the purge must stop.
+     */
+    private void holdChunkLock() throws Stopped, InterruptedException {
+        while (!PurgeChunkLock.tryHold(CHUNK_LOCK_POLL_MILLIS)) {
+            checkNotStopped();
         }
     }
 

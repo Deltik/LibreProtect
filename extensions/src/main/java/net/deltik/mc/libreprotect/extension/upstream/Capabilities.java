@@ -20,6 +20,8 @@
 
 package net.deltik.mc.libreprotect.extension.upstream;
 
+import net.deltik.mc.libreprotect.LibreProtectLogger;
+import net.deltik.mc.libreprotect.extension.common.Engine;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Choice;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Missing;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Upstream;
@@ -45,10 +47,27 @@ public final class Capabilities {
         ActiveDatabase.CAPABILITY,
         Flags.CAPABILITY,
         ConsumerGate.CAPABILITY,
+        ConfigLock.CAPABILITY,
+        ServerThread.CAPABILITY,
         StartResult.CAPABILITY,
         Hooks.AUTO_PURGE_COUNTER,
+        Hooks.LOCK_HEARTBEAT,
         Hooks.ENTITY_SPAWN_VERIFICATION,
+        Hooks.DUCKDB_RECOVERY,
         Hooks.PURGE_WORKER,
+        IncompleteMarks.CAPABILITY,
+        Schema.CAPABILITY,
+        Codecs.CAPABILITY,
+        DuckDBWrites.CAPABILITY,
+        MigrationProtocol.CAPABILITY,
+        CoreProtectMigration.source(Engine.SQLITE),
+        CoreProtectMigration.source(Engine.MYSQL),
+        CoreProtectMigration.source(Engine.DUCKDB),
+        CoreProtectMigration.source(Engine.CLICKHOUSE),
+        CoreProtectMigration.target(Engine.SQLITE),
+        CoreProtectMigration.target(Engine.MYSQL),
+        CoreProtectMigration.target(Engine.DUCKDB),
+        CoreProtectMigration.target(Engine.CLICKHOUSE),
         PurgeSettings.RETENTION,
         PurgeSettings.CAPABILITY,
         PurgeTables.CAPABILITY,
@@ -68,7 +87,8 @@ public final class Capabilities {
 
     /**
      * @return the capabilities of the CoreProtect that shares LibreProtect's
-     *         class loader, probed on first use
+     *         class loader, probed on first use; each migration they leave
+     *         unavailable is logged as a warning then
      */
     public static Capabilities current() {
         Capabilities capabilities = current;
@@ -77,6 +97,7 @@ public final class Capabilities {
                 capabilities = current;
                 if (capabilities == null) {
                     capabilities = probe(Upstream.coreProtect());
+                    warnAboutUnavailable(capabilities);
                     current = capabilities;
                 }
             }
@@ -140,5 +161,17 @@ public final class Capabilities {
      */
     public Collection<Choice<?>> all() {
         return choices.values();
+    }
+
+    /**
+     * Warn once about each migration that this CoreProtect has but
+     * LibreProtect can't do with it, naming it as users know it and what
+     * CoreProtect lacks. Auto-purge says so itself when it's on (see
+     * {@link CoreProtectPurge#unavailableReason()}), and the steps that do
+     * without a hook say so when they skip it.
+     */
+    private static void warnAboutUnavailable(Capabilities capabilities) {
+        CoreProtectMigration.unavailableFeatures(capabilities).forEach((feature, reason) ->
+            LibreProtectLogger.warning(feature + " won't work with this CoreProtect build: " + reason + "."));
     }
 }

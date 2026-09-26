@@ -21,17 +21,23 @@
 package net.deltik.mc.libreprotect.extension.upstream;
 
 import net.deltik.mc.libreprotect.extension.common.Engine;
+import net.deltik.mc.libreprotect.extension.migration.jdbc.IncompleteMarker;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Choice;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Missing;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Upstream;
 import net.deltik.mc.libreprotect.testutil.AssumeCapability;
+import net.deltik.mc.libreprotect.testutil.ChangedUpstream;
 import net.deltik.mc.libreprotect.testutil.CoreProtectFixture;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
@@ -91,17 +97,35 @@ class CapabilitiesTest {
     }
 
     @Test
-    @DisplayName("should take the ways of this CoreProtect's generation, with none unavailable")
+    @DisplayName("should take the ways of this CoreProtect's generation, with none unavailable but migrations from"
+        + " and to ClickHouse, which have no endpoints")
     void strategies() {
         AssumeCapability.reviewedUpstream();
         Map<String, String> expected = new LinkedHashMap<>();
         expected.put("database.selector", ENGINE_TYPES ? "database-type" : "use-mysql");
         expected.put("lifecycle.flags", "static-flags");
         expected.put("consumer.gate", "pause-flags");
+        expected.put("config.lock", ENGINE_TYPES ? "class-monitor" : "absent");
+        expected.put("server.thread", "scheduler");
         expected.put("consumer.start-result", ENGINE_TYPES ? "named-results" : "absent");
         expected.put("hook.auto-purge-counter", "rows-purged");
+        expected.put("hook.lock-heartbeat", "last-lock-update");
         expected.put("hook.entity-spawn-verification", ENGINE_TYPES ? "invalidate" : "absent");
+        expected.put("hook.duckdb-recovery", ENGINE_TYPES ? "recovery-requests" : "absent");
         expected.put("hook.purge-worker", ENGINE_TYPES ? "worker-running" : "absent");
+        expected.put("migrate-db.incomplete-mark", ENGINE_TYPES ? "dedicated-status" : "locked-forever");
+        expected.put("migrate-db.schema", ENGINE_TYPES ? "by-engine-type" : "by-use-mysql");
+        expected.put("migrate-db.transcoding", ENGINE_TYPES ? "statement-codecs" : "absent");
+        expected.put("migrate-db.duckdb-writes", ENGINE_TYPES ? "appender" : "absent");
+        expected.put("migrate-db.protocol", ENGINE_TYPES ? "reload-lifecycle" : "flag-protocol");
+        expected.put("migrate-db.source.sqlite", "jdbc");
+        expected.put("migrate-db.source.mysql", "jdbc");
+        expected.put("migrate-db.source.duckdb", ENGINE_TYPES ? "coreprotect-connection" : "absent");
+        expected.put("migrate-db.source.clickhouse", ENGINE_TYPES ? Choice.UNAVAILABLE : "absent");
+        expected.put("migrate-db.target.sqlite", "jdbc");
+        expected.put("migrate-db.target.mysql", "jdbc");
+        expected.put("migrate-db.target.duckdb", ENGINE_TYPES ? "jdbc" : "absent");
+        expected.put("migrate-db.target.clickhouse", ENGINE_TYPES ? Choice.UNAVAILABLE : "absent");
         expected.put("auto-purge.retention", "config-field");
         expected.put("auto-purge.settings", "config-fields");
         expected.put("auto-purge.tables", ENGINE_TYPES ? "purge-policy" : "purge-command-list");
@@ -147,9 +171,11 @@ class CapabilitiesTest {
         String reason = "CoreProtect has no ConfigHandler.migrationRunning";
         assertEquals(reason, changed.get(Flags.CAPABILITY).reason());
 
-        List<Capability<?>> features = new ArrayList<>();
+        List<Capability<?>> features = new ArrayList<>(List.of(MigrationProtocol.CAPABILITY,
+            Codecs.CAPABILITY, IncompleteMarks.CAPABILITY, DuckDBWrites.CAPABILITY));
         for (Engine engine : Engine.values()) {
-            features.add(PurgeEngine.capability(engine));
+            features.addAll(List.of(CoreProtectMigration.source(engine), CoreProtectMigration.target(engine),
+                PurgeEngine.capability(engine)));
         }
         for (Capability<?> feature : features) {
             Choice<?> choice = changed.get(feature);
@@ -201,21 +227,89 @@ class CapabilitiesTest {
     class LifecycleFlags {
 
         @Test
-        @DisplayName("should read CoreProtect's flags")
+        @DisplayName("should read CoreProtect's flags, and set them only as a migration's")
         void flags() throws Missing {
-            Flags flags = capabilities.require(Flags.CAPABILITY);
-            coreProtect.set("ConfigHandler.serverRunning", true).set("ConfigHandler.migrationRunning", true)
+            Flags reading = capabilities.require(Flags.CAPABILITY);
+            Flags flags = reading.forMigrations(Upstream.coreProtect());
+            coreProtect.set("ConfigHandler.serverRunning", true).set("ConfigHandler.migrationRunning", false)
                 .set("ConfigHandler.purgeRunning", false).set("ConfigHandler.pauseConsumer", false);
 
+            assertEquals("CoreProtect's ConfigHandler.migrationRunning was found for reading only",
+                assertThrows(IllegalStateException.class, () -> reading.setMigrationRunning(true)).getMessage());
             assertTrue(flags.serverRunning());
             assertFalse(flags.shuttingDown());
+            flags.setMigrationRunning(true);
+            assertEquals(true, coreProtect.get("ConfigHandler.migrationRunning"));
             assertTrue(flags.migrationRunning());
             assertFalse(flags.converterRunning());
-            assertFalse(flags.purgeRunning());
-            assertFalse(flags.pauseConsumer());
             assertFalse(flags.rollbacksRunning());
             coreProtect.set("ConfigHandler.serverRunning", false);
             assertTrue(flags.shuttingDown());
+            // The fixture's reset puts back what the flags changed too
+            coreProtect.reset();
+            assertFalse(flags.migrationRunning());
+        }
+
+        @Test
+        @DisplayName("should turn off migrations alone when CoreProtect makes a flag final that they set, saying so")
+        void finalFlag() throws Exception {
+            Capabilities changed = Capabilities.probe(ChangedUpstream.makingFinal(Names.CONFIG_HANDLER,
+                "migrationRunning"));
+            String reason = "CoreProtect's ConfigHandler.migrationRunning is final, so LibreProtect can't set it";
+
+            // Auto-purge only reads the flags
+            assertTrue(changed.get(Flags.CAPABILITY).isAvailable(), changed.get(Flags.CAPABILITY)::toString);
+            assertEquals(Choice.UNAVAILABLE, changed.get(MigrationProtocol.CAPABILITY).strategy());
+            assertEquals(reason, changed.get(MigrationProtocol.CAPABILITY).reason());
+            assertEquals(Map.of("/co migrate-db", reason), CoreProtectMigration.unavailableFeatures(changed));
+            // Purging an engine needs all that purging needs
+            assertTrue(changed.get(PurgeEngine.SQLITE).isAvailable(), changed.get(PurgeEngine.SQLITE)::toString);
+        }
+
+        @Test
+        @DisplayName("should need purgeRunning writable only where migrations set it, for CoreProtect 24's protocol")
+        void finalPurgeFlag() throws Exception {
+            Capabilities changed = Capabilities.probe(ChangedUpstream.makingFinal(Names.CONFIG_HANDLER,
+                "purgeRunning"));
+            Choice<MigrationProtocol> protocol = changed.get(MigrationProtocol.CAPABILITY);
+
+            assertTrue(changed.get(Flags.CAPABILITY).isAvailable(), changed.get(Flags.CAPABILITY)::toString);
+            if (ENGINE_TYPES) {
+                assertTrue(protocol.isAvailable(), protocol::toString);
+            } else {
+                assertEquals("CoreProtect's ConfigHandler.purgeRunning is final, so LibreProtect can't set it",
+                    protocol.reason());
+                // Every part of a migration is unavailable with it, as DIFFERENCES.md shows
+                for (Capability<?> part : List.of(IncompleteMarks.CAPABILITY, CoreProtectMigration.source(Engine.SQLITE),
+                    CoreProtectMigration.target(Engine.MYSQL))) {
+                    assertEquals(Choice.UNAVAILABLE + ": " + protocol.reason(), changed.get(part).strategy() + ": "
+                        + changed.get(part).reason(), part::id);
+                }
+            }
+            assertTrue(changed.get(PurgeEngine.SQLITE).isAvailable(), changed.get(PurgeEngine.SQLITE)::toString);
+        }
+
+        @Test
+        @DisplayName("should set the purge and pause flags only for CoreProtect 24's protocol")
+        void olderProtocol() throws Missing {
+            Flags flags = capabilities.require(Flags.CAPABILITY).forMigrations(Upstream.coreProtect());
+            coreProtect.set("ConfigHandler.purgeRunning", false).set("ConfigHandler.pauseConsumer", false);
+
+            if (ENGINE_TYPES) {
+                IllegalStateException refused = assertThrows(IllegalStateException.class,
+                    () -> flags.setPurgeRunning(true));
+                assertTrue(refused.getMessage().startsWith("Setting purgeRunning is CoreProtect 24's protocol, but"
+                    + " CoreProtect has class DatabaseType, part of its multi-engine database layer"),
+                    refused.getMessage());
+                assertThrows(IllegalStateException.class, () -> flags.setPauseConsumer(true));
+                assertFalse(flags.purgeRunning());
+                assertFalse(flags.pauseConsumer());
+            } else {
+                flags.setPurgeRunning(true);
+                assertTrue(flags.purgeRunning());
+                flags.setPauseConsumer(true);
+                assertTrue(flags.pauseConsumer());
+            }
         }
 
         @Test
@@ -250,22 +344,76 @@ class CapabilitiesTest {
         }
     }
 
-    @Test
-    @DisplayName("should count purged rows where CoreProtect shows them")
-    void hooks() throws Missing {
-        AtomicLong counter = (AtomicLong) coreProtect.get("ConfigHandler.autoPurgeRowsPurged");
-        long before = counter.get();
+    @Nested
+    @DisplayName("migrate-db")
+    class Migration {
 
-        capabilities.require(Hooks.AUTO_PURGE_COUNTER).add(5);
+        @Test
+        @DisplayName("should mark a target unfinished the way this CoreProtect refuses to start on")
+        void incompleteMark() throws Missing {
+            AssumeCapability.reviewedUpstream();
+            IncompleteMarks marks = capabilities.require(IncompleteMarks.CAPABILITY);
 
-        assertEquals(before + 5, counter.get());
+            IncompleteMarker marker = marks.marker();
+            assertNotNull(marker);
+            assertEquals(0, marks.inactiveStatus());
+            assertEquals(ENGINE_TYPES ? "dedicated-status" : "locked-forever",
+                capabilities.get(IncompleteMarks.CAPABILITY).strategy());
+        }
+
+        @Test
+        @DisplayName("should create CoreProtect's tables with its own schema code")
+        void schema(@TempDir Path folder) throws Exception {
+            Schema schema = capabilities.require(Schema.CAPABILITY);
+            String url = "jdbc:sqlite:" + folder.resolve("target.db");
+
+            assertTrue(schema.engines().containsAll(EnumSet.of(Engine.SQLITE, Engine.MYSQL)));
+            assertFalse(schema.engines().contains(Engine.CLICKHOUSE));
+            schema.creator(Engine.SQLITE).create(DriverManager.getConnection(url), "co_");
+            try (Connection connection = DriverManager.getConnection(url);
+                 ResultSet tables = connection.getMetaData().getTables(null, null, "co_block", null)) {
+                assertTrue(tables.next());
+            }
+            assertThrows(IllegalArgumentException.class, () -> schema.creator(Engine.CLICKHOUSE));
+        }
+
+        @Test
+        @DisplayName("should write DuckDB with SQL when its driver's appender is gone, and say why")
+        void duckDBFallback() throws Missing {
+            AssumeCapability.strategy("migrate-db.duckdb-writes", "appender");
+            assertTrue(capabilities.require(DuckDBWrites.CAPABILITY).usesAppender());
+
+            Choice<DuckDBWrites> choice = Capabilities.probe(Upstream.coreProtect()
+                .hiding(Names.DUCKDB_CONNECTION + "#createAppender")).get(DuckDBWrites.CAPABILITY);
+
+            assertEquals("sql-inserts", choice.strategy());
+            assertTrue(choice.usesFallback());
+            assertNull(choice.require().bulkInsert());
+            assertEquals(List.of("appender: DuckDB's JDBC driver has no DuckDBConnection.createAppender(String,"
+                + " String)"), choice.rejected());
+        }
     }
 
     @Test
-    @DisplayName("should see CoreProtect 25's manual purge worker")
+    @DisplayName("should count purged rows where CoreProtect shows them, and reset the lock's heartbeat")
+    void hooks() throws Missing {
+        AtomicLong counter = (AtomicLong) coreProtect.get("ConfigHandler.autoPurgeRowsPurged");
+        long before = counter.get();
+        coreProtect.set("Process.lastLockUpdate", 12345);
+
+        capabilities.require(Hooks.AUTO_PURGE_COUNTER).add(5);
+        capabilities.require(Hooks.LOCK_HEARTBEAT).reset();
+
+        assertEquals(before + 5, counter.get());
+        assertEquals(0, coreProtect.get("Process.lastLockUpdate"));
+    }
+
+    @Test
+    @DisplayName("should see CoreProtect 25's DuckDB recovery and manual purge worker")
     void newerHooks() throws Missing {
         AssumeCapability.strategy("hook.purge-worker", "worker-running");
 
+        assertFalse(capabilities.require(Hooks.DUCKDB_RECOVERY).pending());
         assertFalse(capabilities.require(Hooks.PURGE_WORKER).running());
     }
 

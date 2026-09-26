@@ -114,18 +114,16 @@ class ExtensionEntryPointsTest {
         }
 
         @Test
-        @DisplayName("should tell the sender that migration is unavailable")
-        void explainsUnavailable() {
+        @DisplayName("should show the console its usage")
+        void usage() {
             RecordingSender recorder = new RecordingSender(ConsoleCommandSender.class);
 
-            DatabaseMigration.runCommand(recorder.sender, new String[]{"migrate-db", "mysql"});
+            DatabaseMigration.runCommand(recorder.sender, new String[]{"migrate-db"});
 
             List<String> plain = recorder.plainMessages();
-            assertEquals(3, plain.size(), plain::toString);
-            assertEquals(PrivacyConstants.FORK_NAME + " - Database migration is not available in "
-                + PrivacyConstants.FORK_NAME + ".", plain.get(0));
-            assertTrue(plain.get(1).contains("No free implementation of /co migrate-db"), plain.get(1));
-            assertTrue(plain.get(2).contains(PrivacyConstants.FORK_URL), plain.get(2));
+            assertTrue(plain.get(0).startsWith(PrivacyConstants.FORK_NAME + " - Usage: /co migrate-db <"),
+                plain.toString());
+            assertTrue(plain.get(0).endsWith("> [--full-validation]"), plain.toString());
         }
 
         @Test
@@ -140,8 +138,8 @@ class ExtensionEntryPointsTest {
         }
 
         @Test
-        @DisplayName("should only send messages, whatever the arguments")
-        void onlySendsMessages() {
+        @DisplayName("should only take the command from the console, and only send messages to anyone else")
+        void consoleOnly() {
             for (String[] args : new String[][]{
                 {"migrate-db", "sqlite"},
                 {"migrate-db", "mysql"},
@@ -153,14 +151,33 @@ class ExtensionEntryPointsTest {
                 assertDoesNotThrow(() -> DatabaseMigration.runCommand(recorder.sender, args));
 
                 assertEquals(Set.of("sendMessage"), recorder.methodsCalled, String.join(" ", args));
-                assertEquals(3, recorder.messages.size());
+                assertEquals(List.of(PrivacyConstants.FORK_NAME + " - Only the server console can run /co migrate-db."),
+                    recorder.plainMessages());
             }
         }
 
         @Test
-        @DisplayName("should not log anything")
+        @DisplayName("should never throw, even where CoreProtect isn't running")
+        void neverThrows() {
+            boolean running = net.coreprotect.config.ConfigHandler.serverRunning;
+            net.coreprotect.config.ConfigHandler.serverRunning = false;
+            try {
+                for (String[] args : new String[][]{{"migrate-db", "sqlite"}, {"migrate-db", "mysql", "--full-validation"}}) {
+                    RecordingSender recorder = new RecordingSender(ConsoleCommandSender.class);
+
+                    assertDoesNotThrow(() -> DatabaseMigration.runCommand(recorder.sender, args));
+
+                    assertFalse(recorder.messages.isEmpty(), String.join(" ", args));
+                }
+            } finally {
+                net.coreprotect.config.ConfigHandler.serverRunning = running;
+            }
+        }
+
+        @Test
+        @DisplayName("should not log anything for its usage")
         void logsNothing() {
-            DatabaseMigration.runCommand(new RecordingSender(CommandSender.class).sender, new String[]{"migrate-db"});
+            DatabaseMigration.runCommand(new RecordingSender(ConsoleCommandSender.class).sender, new String[]{"migrate-db"});
             assertTrue(testLogger.getRecords().isEmpty());
         }
 

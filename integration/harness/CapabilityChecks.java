@@ -67,7 +67,15 @@ final class CapabilityChecks {
             + (onlyLive.isEmpty() ? "" : "; only on the server: " + readable(onlyLive))
             + (!live.isEmpty() && onlyBundled.isEmpty() && onlyLive.isEmpty() && !live.equals(bundled)
                 ? "; the same lines in another order" : ""));
-        suite.check(!run.console().contains("won't work with this CoreProtect build"),
+        String console = run.console();
+        if (suite.generation() >= 25) {
+            // Migrations from and to ClickHouse aren't available yet, which CoreProtect 25 warns about
+            for (String direction : new String[]{"from", "to"}) {
+                console = console.replace("/co migrate-db " + direction + " ClickHouse won't work with this CoreProtect"
+                    + " build", "");
+            }
+        }
+        suite.check(!console.contains("won't work with this CoreProtect build"),
             "the server warns about no feature that won't work");
         suite.check(run.console().contains("[LibreProtect] Auto-purge keeps 30 days of data. Next run: "),
             "auto-purge is on, and announces its next run");
