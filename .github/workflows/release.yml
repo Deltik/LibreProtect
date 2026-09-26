@@ -23,7 +23,8 @@ jobs:
     name: Build, test and audit
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # As long as CI's, plus the source archive and SBOM
+    timeout-minutes: 50
     outputs:
       version: ${{ steps.meta.outputs.version }}
     steps:

@@ -1,7 +1,8 @@
 name: CI
 
-# Builds the upstream release pinned in upstream.lock, transforms and audits
-# it, and integration tests the result on a real Paper server.
+# Builds the upstream release pinned in upstream.lock, and the tip of
+# upstream's master branch (CoreProtect's next release), transforms and
+# audits each, and integration tests the results on a real Paper server.
 #
 # upstream-watch dispatches this workflow on bump branches, because pull
 # requests opened with GITHUB_TOKEN don't trigger workflows by themselves.
@@ -21,10 +22,29 @@ concurrency:
 
 jobs:
   build:
-    # Branch protection requires this job by name
-    name: Build, test and audit
+    # Branch protection requires the job for upstream.lock by name. The job
+    # for upstream master shows early what CoreProtect's next release breaks;
+    # as in development builds, its audit findings that need review don't
+    # fail it. Its build, tests and integration test do, but the workflow
+    # still passes, since upstream's master can break without a change here.
+    name: ${{ matrix.name }}
+    continue-on-error: ${{ matrix.ref != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Build, test and audit
+            ref: ''
+            artifact: dist
+            logs: integration-logs
+          - name: Build, test and audit (upstream master)
+            ref: master
+            artifact: dist-upstream-master
+            logs: integration-logs-upstream-master
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A CoreProtect 25 build and integration test took 21 minutes on a
+    # developer's machine that other builds kept busy
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -49,7 +69,9 @@ jobs:
         run: scripts/lp db up --all
 
       - name: Build
-        run: scripts/lp build
+        run: scripts/lp build ${REF:+--ref "$REF"}
+        env:
+          REF: ${{ matrix.ref }}
 
       - name: Integration test
         run: scripts/lp it
@@ -60,19 +82,22 @@ jobs:
 
       - name: Summarize
         if: always()
-        run: scripts/ci/summary.sh >> "$GITHUB_STEP_SUMMARY"
+        # The summary names the artifact that this job uploads
+        run: scripts/ci/summary.sh | sed "s/(in the \`dist\` artifact)/(in the \`$ARTIFACT\` artifact)/" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: dist
+          name: ${{ matrix.artifact }}
           path: dist/
           if-no-files-found: ignore
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
-          name: integration-logs
+          name: ${{ matrix.logs }}
           path: |
             build/it/*/console-*.log
             build/it/*/egress-*.log
@@ -80,6 +105,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Require a reviewed audit baseline
+        if: matrix.ref == ''
         run: scripts/ci/require-reviewed.sh dist/audit-report.json
 
   license-notices:
