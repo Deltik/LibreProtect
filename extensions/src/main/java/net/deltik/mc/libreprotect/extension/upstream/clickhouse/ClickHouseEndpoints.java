@@ -48,8 +48,9 @@ import java.sql.SQLNonTransientConnectionException;
  * prepared, and CoreProtect takes it over at activation.
  *
  * <p>Sources need {@link ClickHouseApi#READS}, sinks
- * {@link ClickHouseApi#WRITES}; a CoreProtect whose writer changed can still
- * be migrated away from. {@link #WAYS} registers them for migrations.
+ * {@link ClickHouseApi#WRITES} and {@link ClickHouseServerVersion}; a
+ * CoreProtect whose writer changed can still be migrated away from.
+ * {@link #WAYS} registers them for migrations.
  */
 public final class ClickHouseEndpoints implements EngineEndpoints {
 
@@ -60,14 +61,17 @@ public final class ClickHouseEndpoints implements EngineEndpoints {
      */
     public static final CoreProtectMigration.EndpointWays WAYS = CoreProtectMigration.EndpointWays.of(Engine.CLICKHOUSE)
         .source("migration-reads", "CoreProtect's ClickHouse views, read over LibreProtect's own connections",
-            upstream -> new ClickHouseEndpoints(need(upstream, ClickHouseApi.READS), null))
+            upstream -> new ClickHouseEndpoints(need(upstream, ClickHouseApi.READS), null, null))
         .target("compatibility-rows", "CoreProtect's ClickHouse writer, whose prepared database CoreProtect takes over"
-            + " as it is", upstream -> new ClickHouseEndpoints(null, need(upstream, ClickHouseApi.WRITES)));
+            + " as it is", upstream -> new ClickHouseEndpoints(null, need(upstream, ClickHouseApi.WRITES),
+            need(upstream, ClickHouseServerVersion.CAPABILITY)));
 
     /** How to read ClickHouse, or {@code null} for endpoints that only write */
     private final Choice<ClickHouseApi> reads;
     /** How to write ClickHouse, or {@code null} for endpoints that only read */
     private final Choice<ClickHouseApi> writes;
+    /** Which servers CoreProtect's writer takes, or {@code null} for endpoints that only read */
+    private final Choice<ClickHouseServerVersion> serverVersion;
 
     /**
      * For tests: endpoints that both read and write, with these
@@ -75,12 +79,15 @@ public final class ClickHouseEndpoints implements EngineEndpoints {
      * Migrations get theirs through {@link #WAYS}.
      */
     ClickHouseEndpoints(Capabilities capabilities) {
-        this(capabilities.get(ClickHouseApi.READS), capabilities.get(ClickHouseApi.WRITES));
+        this(capabilities.get(ClickHouseApi.READS), capabilities.get(ClickHouseApi.WRITES),
+            capabilities.get(ClickHouseServerVersion.CAPABILITY));
     }
 
-    private ClickHouseEndpoints(Choice<ClickHouseApi> reads, Choice<ClickHouseApi> writes) {
+    private ClickHouseEndpoints(Choice<ClickHouseApi> reads, Choice<ClickHouseApi> writes,
+                                Choice<ClickHouseServerVersion> serverVersion) {
         this.reads = reads;
         this.writes = writes;
+        this.serverVersion = serverVersion;
     }
 
     /**
@@ -89,9 +96,8 @@ public final class ClickHouseEndpoints implements EngineEndpoints {
      * @throws Missing why it's unavailable, never as an absent feature: the
      *                 way needs it, so the way isn't possible
      */
-    private static Choice<ClickHouseApi> need(Upstream upstream, Capability<ClickHouseApi> capability)
-        throws Missing {
-        Choice<ClickHouseApi> choice = capability.probe(upstream);
+    private static <T> Choice<T> need(Upstream upstream, Capability<T> capability) throws Missing {
+        Choice<T> choice = capability.probe(upstream);
         if (!choice.isAvailable()) {
             throw new Missing(choice.reason());
         }
@@ -128,13 +134,27 @@ public final class ClickHouseEndpoints implements EngineEndpoints {
      */
     @Override
     public RowSink openSink(DatabaseSettings settings) throws SQLException {
+        return openSink(settings, null);
+    }
+
+    /**
+     * As {@link #openSink(DatabaseSettings)}, for tests too, which have no
+     * running CoreProtect to tell its database version.
+     *
+     * @param coreVersion CoreProtect's internal database version, such as
+     *                    {@code 2.24.1}, or {@code null} for the running
+     *                    CoreProtect's
+     */
+    ClickHouseRowSink openSink(DatabaseSettings settings, String coreVersion) throws SQLException {
         if (writes == null) {
             throw new IllegalStateException("These ClickHouse endpoints only read");
         }
         ClickHouseApi api = require(writes, "write");
+        ClickHouseServerVersion version = require(serverVersion, "write");
         return new ClickHouseRowSink(api, config(api, settings), settings.prefix(), api.controlDirectory(),
-            api.coreVersion(), IdentifierAssignments.coreProtect(api),
-            new PublishDeadline(ClickHouseRowSink.PUBLISH_LIMIT, PublishDeadline.serverShuttingDown(api.flags())));
+            coreVersion != null ? coreVersion : api.coreVersion(), IdentifierAssignments.coreProtect(api),
+            new PublishDeadline(ClickHouseRowSink.PUBLISH_LIMIT, PublishDeadline.serverShuttingDown(api.flags())),
+            version);
     }
 
     /**
@@ -184,8 +204,7 @@ public final class ClickHouseEndpoints implements EngineEndpoints {
     /**
      * @param action what the capability is for, as in "can't read"
      */
-    private static ClickHouseApi require(Choice<ClickHouseApi> capability, String action)
-        throws SQLFeatureNotSupportedException {
+    private static <T> T require(Choice<T> capability, String action) throws SQLFeatureNotSupportedException {
         if (!capability.isAvailable()) {
             throw new SQLFeatureNotSupportedException("LibreProtect can't " + action + " this CoreProtect's"
                 + " ClickHouse storage: " + capability.reason());

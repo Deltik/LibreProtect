@@ -88,7 +88,8 @@ class ClickHouseAbortTest {
 
     private ClickHouseRowSink sink(Config config, String prefix) throws SQLException {
         return closing(new ClickHouseRowSink(api, config, prefix, controlDirectory, "2.24.1",
-            (map, floor, candidates) -> List.of(), new PublishDeadline(ClickHouseRowSink.PUBLISH_LIMIT, () -> false)));
+            (map, floor, candidates) -> List.of(), new PublishDeadline(ClickHouseRowSink.PUBLISH_LIMIT, () -> false),
+            ClickHouseTestServer.serverVersion()));
     }
 
     /**
@@ -146,6 +147,18 @@ class ClickHouseAbortTest {
         }
 
         @Test
+        @DisplayName("should end a sink's check of the server's version waiting on a server that doesn't answer, as a"
+            + " failure rather than a refusal")
+        void sinkVersionCheck() throws Exception {
+            UnresponsiveClickHouse clickHouse = closing(new UnresponsiveClickHouse());
+            ClickHouseRowSink sink = sink(clickHouse.config(api), "co_");
+
+            abortWhileWaiting(sink::unsupportedReason, sink::abort);
+
+            assertAborted(sink::unsupportedReason);
+        }
+
+        @Test
         @DisplayName("should end a sink's query waiting on a server that doesn't answer, and every call after")
         void sinkQuery() throws Exception {
             UnresponsiveClickHouse clickHouse = closing(new UnresponsiveClickHouse());
@@ -176,6 +189,7 @@ class ClickHouseAbortTest {
             assertDoesNotThrow(sink::abort);
 
             assertAborted(source::tables);
+            assertAborted(sink::unsupportedReason);
             assertAborted(() -> sink.columns("block"));
             assertAborted(() -> {
                 sink.markIncomplete();

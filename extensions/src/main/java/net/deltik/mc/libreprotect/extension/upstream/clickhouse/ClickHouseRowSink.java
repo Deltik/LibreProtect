@@ -62,6 +62,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
  *
  * <p>Differences from the relational engines:
  * <ul>
+ *   <li>{@link #unsupportedReason} refuses a server that CoreProtect's
+ *       writer doesn't take, by its version (see
+ *       {@link ClickHouseServerVersion}).</li>
  *   <li>{@link #prepare} opens the database as CoreProtect's single
  *       ClickHouse writer for this data directory, which the running server
  *       can take over at activation (see {@link ClickHouseEndpoints#handOver}).</li>
@@ -117,6 +120,7 @@ final class ClickHouseRowSink implements RowSink {
     private final String coreVersion;
     private final IdentifierAssignments identifiers;
     private final PublishDeadline deadline;
+    private final ClickHouseServerVersion serverVersion;
     private final Pool jdbc;
     private final List<ClickHouseRowSource> readers = new CopyOnWriteArrayList<>();
     /** Guards the prepared database between {@link #abort()} and the threads preparing and handing it over */
@@ -134,9 +138,11 @@ final class ClickHouseRowSink implements RowSink {
      * @param coreVersion      CoreProtect's internal database version, e.g. {@code 2.24.1}
      * @param deadline         what stops publications that keep retrying,
      *                         which the sink closes with itself
+     * @param serverVersion    which servers CoreProtect's writer takes
      */
     ClickHouseRowSink(ClickHouseApi api, Config config, String prefix, Path controlDirectory, String coreVersion,
-                      IdentifierAssignments identifiers, PublishDeadline deadline) throws SQLException {
+                      IdentifierAssignments identifiers, PublishDeadline deadline,
+                      ClickHouseServerVersion serverVersion) throws SQLException {
         if (!prefix.isEmpty()) {
             ClickHouseColumns.quote(prefix);
         }
@@ -151,12 +157,33 @@ final class ClickHouseRowSink implements RowSink {
         this.coreVersion = Objects.requireNonNull(coreVersion, "coreVersion");
         this.identifiers = Objects.requireNonNull(identifiers, "identifiers");
         this.deadline = Objects.requireNonNull(deadline, "deadline");
+        this.serverVersion = Objects.requireNonNull(serverVersion, "serverVersion");
         this.jdbc = api.pool(config);
     }
 
     @Override
     public Engine engine() {
         return Engine.CLICKHOUSE;
+    }
+
+    /**
+     * Whether CoreProtect's writer takes the server, which the migration
+     * writes through (see {@link ClickHouseServerVersion}), by its version.
+     */
+    @Override
+    public Optional<String> unsupportedReason() throws SQLException {
+        requireOpen();
+        try (Connection connection = connection()) {
+            return serverVersion.refusal(connection).map(why -> "CoreProtect can't write to this ClickHouse server: "
+                + why);
+        }
+    }
+
+    /**
+     * @return how {@link #unsupportedReason()} checks the server
+     */
+    ClickHouseServerVersion serverVersion() {
+        return serverVersion;
     }
 
     /**

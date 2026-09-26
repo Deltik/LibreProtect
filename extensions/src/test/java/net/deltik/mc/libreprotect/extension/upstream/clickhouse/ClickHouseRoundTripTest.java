@@ -259,7 +259,8 @@ class ClickHouseRoundTripTest {
 
     private ClickHouseRowSink sink() throws SQLException {
         ClickHouseRowSink sink = new ClickHouseRowSink(api, server.config(), prefix, controlDirectory, CORE_VERSION,
-            assignments, new PublishDeadline(ClickHouseRowSink.PUBLISH_LIMIT, () -> false));
+            assignments, new PublishDeadline(ClickHouseRowSink.PUBLISH_LIMIT, () -> false),
+            ClickHouseTestServer.serverVersion());
         closeables.add(sink);
         return sink;
     }

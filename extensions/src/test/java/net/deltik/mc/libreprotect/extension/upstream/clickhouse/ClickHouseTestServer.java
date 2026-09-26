@@ -94,8 +94,17 @@ final class ClickHouseTestServer implements AutoCloseable {
         return require(ClickHouseApi.READS);
     }
 
-    private static ClickHouseApi require(Capability<ClickHouseApi> capability) {
-        Choice<ClickHouseApi> choice = Capabilities.current().get(capability);
+    /**
+     * @return which servers this CoreProtect's ClickHouse writer takes, as a
+     *         migration to ClickHouse checks, or skip the test on a
+     *         CoreProtect without ClickHouse
+     */
+    static ClickHouseServerVersion serverVersion() {
+        return require(ClickHouseServerVersion.CAPABILITY);
+    }
+
+    private static <T> T require(Capability<T> capability) {
+        Choice<T> choice = Capabilities.current().get(capability);
         Assumptions.assumeTrue(choice.isAvailable(), () -> "This CoreProtect's " + choice.id() + " is "
             + choice.strategy() + ": " + choice.reason());
         return choice.orElse(null);

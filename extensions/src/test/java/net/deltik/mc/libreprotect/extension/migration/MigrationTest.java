@@ -50,6 +50,7 @@ import java.sql.SQLTransientConnectionException;
 import java.sql.Statement;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -407,6 +408,34 @@ class MigrationTest {
         migrate(session, false);
 
         assertFailed(session, "config.yml is not a regular file.");
+        assertEquals(0, session.pauses.get());
+        assertFalse(file("target.db").exists());
+    }
+
+    @Test
+    @DisplayName("should refuse a target that CoreProtect can't write to before anything else, without pausing")
+    void unsupportedTarget() throws Exception {
+        TestDatabases.createLegacySqlite(file("source.db"), 10);
+        FakeSession session = session(Engine.SQLITE, "source.db", Engine.SQLITE, "target.db");
+        AtomicInteger emptinessChecks = new AtomicInteger();
+        // Such as a ClickHouse server older than CoreProtect's writer takes
+        session.sinkWrapper = sink -> new ForwardingSink(sink) {
+            @Override
+            public Optional<String> unsupportedReason() {
+                return Optional.of("CoreProtect can't write to this server: it's too old");
+            }
+
+            @Override
+            public Optional<String> nonEmptyReason() throws SQLException {
+                emptinessChecks.incrementAndGet();
+                return super.nonEmptyReason();
+            }
+        };
+
+        migrate(session, false);
+
+        assertFailed(session, "Migration failed. CoreProtect can't write to this server: it's too old.");
+        assertEquals(0, emptinessChecks.get());
         assertEquals(0, session.pauses.get());
         assertFalse(file("target.db").exists());
     }

@@ -129,6 +129,10 @@ final class Migration implements Runnable {
         try (RowSink sink = session.openSink(targetSettings)) {
             watchdog.watch(sink::abort);
             // The target is checked while CoreProtect keeps working
+            Optional<String> unsupported = sink.unsupportedReason();
+            if (unsupported.isPresent()) {
+                throw new MigrationException(unsupported.get() + ".");
+            }
             Optional<String> occupied = sink.nonEmptyReason();
             if (occupied.isPresent()) {
                 throw new MigrationException("The target already holds CoreProtect data: " + occupied.get() + ".",

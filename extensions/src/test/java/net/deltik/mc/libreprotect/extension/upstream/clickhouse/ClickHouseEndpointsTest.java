@@ -28,6 +28,7 @@ import net.deltik.mc.libreprotect.extension.migration.RowSource;
 import net.deltik.mc.libreprotect.extension.upstream.Capabilities;
 import net.deltik.mc.libreprotect.extension.upstream.clickhouse.ClickHouseApi.Family;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.UpstreamChanged;
+import net.deltik.mc.libreprotect.testutil.AssumeCapability;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -71,6 +72,22 @@ class ClickHouseEndpointsTest {
 
     private Family family(String table) {
         return api.family(table);
+    }
+
+    @Test
+    @DisplayName("should have its sinks check the server as this CoreProtect's capability says: with its own check")
+    void sinkServerVersion() throws SQLException {
+        ClickHouseServerVersion capability = Capabilities.current().get(ClickHouseServerVersion.CAPABILITY)
+            .orElse(null);
+        DatabaseSettings settings = DatabaseSettings.server(Engine.CLICKHOUSE, "127.0.0.1", 1, "coreprotect",
+            "coreprotect", "", false, "co_");
+
+        try (ClickHouseRowSink sink = endpoints.openSink(settings, "2.24.1")) {
+            assertNotNull(capability);
+            assertSame(capability, sink.serverVersion());
+        }
+        AssumeCapability.reviewedUpstream();
+        assertTrue(capability.isCoreProtectCheck());
     }
 
     @Nested
@@ -176,7 +193,8 @@ class ClickHouseEndpointsTest {
         private ClickHouseRowSink unreachableSink(Path controlDirectory) throws SQLException {
             return new ClickHouseRowSink(api, api.config("127.0.0.1", 1, "coreprotect", "coreprotect", "", false),
                 "co_", controlDirectory, "2.24.1", (map, floor, candidates) -> List.of(),
-                new PublishDeadline(ClickHouseRowSink.PUBLISH_LIMIT, () -> false));
+                new PublishDeadline(ClickHouseRowSink.PUBLISH_LIMIT, () -> false),
+                ClickHouseTestServer.serverVersion());
         }
     }
 

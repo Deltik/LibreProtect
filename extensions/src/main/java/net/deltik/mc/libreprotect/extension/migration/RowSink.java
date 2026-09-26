@@ -29,9 +29,10 @@ import java.util.Optional;
 
 /**
  * Writes a migration's target database. Used in this order:
- * {@link #nonEmptyReason()}, {@link #prepare}, {@link #markIncomplete()},
- * {@link #write} for every batch, {@link #finish}, validation through
- * {@link #readBack()}, and finally {@link #markComplete()} during activation.
+ * {@link #unsupportedReason()}, {@link #nonEmptyReason()}, {@link #prepare},
+ * {@link #markIncomplete()}, {@link #write} for every batch, {@link #finish},
+ * validation through {@link #readBack()}, and finally {@link #markComplete()}
+ * during activation.
  *
  * <p>Rows keep their row IDs. Values arrive already converted to this
  * engine's encoding.
@@ -39,6 +40,17 @@ import java.util.Optional;
 public interface RowSink extends AutoCloseable {
 
     Engine engine();
+
+    /**
+     * Checked before anything else, while CoreProtect keeps working. The
+     * default finds nothing, for sinks that write any server of their engine.
+     *
+     * @return why CoreProtect can't write to the target's server at all, such
+     *         as a version that it doesn't support, or empty if it can
+     */
+    default Optional<String> unsupportedReason() throws SQLException {
+        return Optional.empty();
+    }
 
     /**
      * @return why the target can't be used because it already holds

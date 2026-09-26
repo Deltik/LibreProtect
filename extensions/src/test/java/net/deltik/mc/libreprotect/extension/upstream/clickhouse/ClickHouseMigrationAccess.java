@@ -71,7 +71,7 @@ final class ClickHouseMigrationAccess implements AutoCloseable {
         ClickHouseApi api = server.api();
         return new ClickHouseRowSink(api, ClickHouseEndpoints.config(api, settings), settings.prefix(),
             controlDirectory, ClickHouseFixture.CORE_VERSION, new ClickHouseRowSinkTest.RecordingAssignments(),
-            new PublishDeadline(ClickHouseRowSink.PUBLISH_LIMIT, () -> false));
+            new PublishDeadline(ClickHouseRowSink.PUBLISH_LIMIT, () -> false), ClickHouseTestServer.serverVersion());
     }
 
     /**

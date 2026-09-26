@@ -23,6 +23,7 @@ package net.deltik.mc.libreprotect.extension.upstream;
 import net.deltik.mc.libreprotect.LibreProtectLogger;
 import net.deltik.mc.libreprotect.extension.common.Engine;
 import net.deltik.mc.libreprotect.extension.upstream.clickhouse.ClickHouseApi;
+import net.deltik.mc.libreprotect.extension.upstream.clickhouse.ClickHouseServerVersion;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Choice;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Missing;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Upstream;
@@ -62,6 +63,7 @@ public final class Capabilities {
         DuckDBWrites.CAPABILITY,
         ClickHouseApi.READS,
         ClickHouseApi.WRITES,
+        ClickHouseServerVersion.CAPABILITY,
         MigrationProtocol.CAPABILITY,
         CoreProtectMigration.source(Engine.SQLITE),
         CoreProtectMigration.source(Engine.MYSQL),

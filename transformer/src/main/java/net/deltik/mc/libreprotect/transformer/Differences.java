@@ -87,6 +87,7 @@ final class Differences {
         }
         features.put("migrate-db.transcoding", "`/co migrate-db` between SQLite or MySQL and DuckDB or ClickHouse");
         features.put("migrate-db.duckdb-writes", "`/co migrate-db`: writing to DuckDB");
+        features.put("migrate-db.clickhouse-version", "`/co migrate-db`: checking a ClickHouse server's version");
         features.put("migrate-db.incomplete-mark", "`/co migrate-db`: keeping CoreProtect off an unfinished copy");
         features.put("auto-purge.retention", "`auto-purge`: how much to keep");
         features.put("auto-purge.settings", "`auto-purge`: when to purge, and the table prefix");

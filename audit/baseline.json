@@ -153,6 +153,7 @@
     "capability hook.lock-heartbeat=last-lock-update",
     "capability hook.purge-worker=absent",
     "capability lifecycle.flags=static-flags",
+    "capability migrate-db.clickhouse-version=absent",
     "capability migrate-db.duckdb-writes=absent",
     "capability migrate-db.incomplete-mark=locked-forever",
     "capability migrate-db.protocol=flag-protocol",

@@ -103,10 +103,49 @@ class ClickHouseRowSinkTest {
 
     private ClickHouseRowSink sink(Config config, String prefix, Path controlDirectory,
                                    IdentifierAssignments identifiers, Duration publishLimit) throws SQLException {
+        return sink(config, prefix, controlDirectory, identifiers, publishLimit, ClickHouseTestServer.serverVersion());
+    }
+
+    private ClickHouseRowSink sink(Config config, String prefix, Path controlDirectory,
+                                   IdentifierAssignments identifiers, Duration publishLimit,
+                                   ClickHouseServerVersion serverVersion) throws SQLException {
         ClickHouseRowSink sink = new ClickHouseRowSink(api, config, prefix, controlDirectory, "2.24.1", identifiers,
-            new PublishDeadline(publishLimit, () -> false));
+            new PublishDeadline(publishLimit, () -> false), serverVersion);
         closeables.add(sink);
         return sink;
+    }
+
+    @Nested
+    @DisplayName("The server's version")
+    class Version {
+
+        private long tables() throws SQLException {
+            return server.queryLong("SELECT count() FROM system.tables WHERE database = '" + server.database()
+                + "' AND startsWith(name, '" + prefix + "')");
+        }
+
+        @Test
+        @DisplayName("should take a server that CoreProtect's writer takes, and create nothing")
+        void taken() throws SQLException {
+            server.assumeWriterSupported();
+
+            assertEquals(Optional.empty(), sink(prefix, controlDirectory).unsupportedReason());
+            assertEquals(0, tables());
+        }
+
+        @Test
+        @DisplayName("should refuse a server that the check refuses, saying why, and create nothing")
+        void refused() throws SQLException {
+            String version = server.queryString("SELECT version()");
+            ClickHouseRowSink sink = sink(server.config(), prefix, controlDirectory, assignments,
+                ClickHouseRowSink.PUBLISH_LIMIT, ClickHouseServerVersion.checking(connection -> {
+                    throw new SQLException("ClickHouse 999.0 or newer is required; found " + version);
+                }));
+
+            assertEquals(Optional.of("CoreProtect can't write to this ClickHouse server: ClickHouse 999.0 or newer is"
+                + " required; found " + version), sink.unsupportedReason());
+            assertEquals(0, tables());
+        }
     }
 
     @Nested

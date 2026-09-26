@@ -44,6 +44,11 @@ public class ForwardingSink implements RowSink {
     }
 
     @Override
+    public Optional<String> unsupportedReason() throws SQLException {
+        return delegate.unsupportedReason();
+    }
+
+    @Override
     public Optional<String> nonEmptyReason() throws SQLException {
         return delegate.nonEmptyReason();
     }

@@ -224,7 +224,8 @@ class ClickHouseApiTest {
         assertThrows(IllegalStateException.class, () -> reads.initialize(config, "co_", controlDirectory));
         assertThrows(IllegalArgumentException.class, () -> new ClickHouseRowSink(reads, config, "co_",
             controlDirectory, "2.24.1", (map, floor, candidates) -> List.of(),
-            new PublishDeadline(ClickHouseRowSink.PUBLISH_LIMIT, () -> false)));
+            new PublishDeadline(ClickHouseRowSink.PUBLISH_LIMIT, () -> false),
+            ClickHouseServerVersion.checking(connection -> { })));
     }
 
     @Test

@@ -23,6 +23,7 @@ package net.deltik.mc.libreprotect.extension.upstream;
 import net.deltik.mc.libreprotect.extension.common.Engine;
 import net.deltik.mc.libreprotect.extension.migration.jdbc.IncompleteMarker;
 import net.deltik.mc.libreprotect.extension.upstream.clickhouse.ClickHouseApi;
+import net.deltik.mc.libreprotect.extension.upstream.clickhouse.ClickHouseServerVersion;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Choice;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Missing;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Upstream;
@@ -119,6 +120,7 @@ class CapabilitiesTest {
         expected.put("migrate-db.duckdb-writes", ENGINE_TYPES ? "appender" : "absent");
         expected.put("clickhouse.reads", ENGINE_TYPES ? "migration-reads" : "absent");
         expected.put("clickhouse.writes", ENGINE_TYPES ? "compatibility-rows" : "absent");
+        expected.put("migrate-db.clickhouse-version", ENGINE_TYPES ? "coreprotect-check" : "absent");
         expected.put("migrate-db.protocol", ENGINE_TYPES ? "reload-lifecycle" : "flag-protocol");
         expected.put("migrate-db.source.sqlite", "jdbc");
         expected.put("migrate-db.source.mysql", "jdbc");
@@ -174,7 +176,8 @@ class CapabilitiesTest {
         assertEquals(reason, changed.get(Flags.CAPABILITY).reason());
 
         List<Capability<?>> features = new ArrayList<>(List.of(MigrationProtocol.CAPABILITY,
-            Codecs.CAPABILITY, IncompleteMarks.CAPABILITY, DuckDBWrites.CAPABILITY));
+            Codecs.CAPABILITY, IncompleteMarks.CAPABILITY, DuckDBWrites.CAPABILITY,
+            ClickHouseServerVersion.CAPABILITY));
         for (Engine engine : Engine.values()) {
             features.addAll(List.of(CoreProtectMigration.source(engine), CoreProtectMigration.target(engine),
                 PurgeEngine.capability(engine)));
