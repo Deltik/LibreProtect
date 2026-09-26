@@ -42,11 +42,21 @@ jobs:
           path: build/it/paper-*
           key: paper-${{ hashFiles('integration/paper.lock') }}
 
+      - name: Start database containers
+        # MySQL and ClickHouse, for the unit tests of the database code and the
+        # integration test. Without --all, ClickHouse would start only if an
+        # upstream checkout of CoreProtect 25 existed already, which it doesn't yet.
+        run: scripts/lp db up --all
+
       - name: Build
         run: scripts/lp build
 
       - name: Integration test
         run: scripts/lp it
+
+      - name: Remove database containers
+        if: always()
+        run: scripts/lp db down
 
       - name: Require a reviewed audit baseline
         run: scripts/ci/require-reviewed.sh dist/audit-report.json
