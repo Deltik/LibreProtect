@@ -349,7 +349,7 @@ A bump pull request merges by itself only when CI passes: the build, the contrac
 
 Modrinth gets the Minecraft versions and server software that upstream declares for the same CoreProtect release on Modrinth, as well as upstream's categories. The Modrinth description is the part of this README between `begin store description` and `end store description` comments.
 
-To accept upstream changes that need review, open the failing CI run's summary and review what changed. Then update `audit/baseline.json` in the pull request with the reviewed values from `audit-observed.json`, which the `dist` artifact includes, and merge it. Changes under `audit/` need a code owner's approval. To release changes to LibreProtect alone, increase `FORK_REVISION` in `upstream.lock`.
+To accept upstream changes that need review, open the failing CI run's summary and review what changed. Then update `audit/baseline.json` in the pull request with the reviewed values from `audit-observed.json`, which the `dist` artifact includes, and merge it. For `capabilities`, add the reviewed values and keep the other upstream line's, rather than copying the list, since the baseline accepts both lines. Changes under `audit/` need a code owner's approval. To release changes to LibreProtect alone, increase `FORK_REVISION` in `upstream.lock`.
 
 </details>
 
