@@ -25,6 +25,19 @@ body:
     validations:
       required: true
 
+  - type: dropdown
+    id: database
+    attributes:
+      label: Database
+      description: The database CoreProtect uses, set in `plugins/CoreProtect/config.yml`
+      options:
+        - SQLite
+        - MySQL or MariaDB
+        - DuckDB
+        - ClickHouse
+    validations:
+      required: true
+
   - type: textarea
     id: problem
     attributes:
