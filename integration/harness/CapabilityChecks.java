@@ -50,8 +50,9 @@ final class CapabilityChecks {
         suite.check(!bundled.isEmpty(), "the JAR bundles the capability report of its build");
 
         Harness.Server server = suite.newServer("server");
-        // Update checks are requests of their own, which UpdateChecks covers
-        server.coreProtectConfig("check-updates: false\n");
+        // Update checks are requests of their own, which UpdateChecks covers. Auto-purge warns for itself when
+        // it's on and won't work, so it's on, with its run hours away
+        server.coreProtectConfig("check-updates: false\nauto-purge: 30d\nauto-purge-time: 3:30\n");
         Harness.Run run = server.boot(Harness.Variant.FORK, Harness.Scenario.steps("capability"));
         String error = run.result("capability.error");
         suite.check(error == null, "the scenario ran without errors" + (error == null ? "" : ": " + error));
@@ -66,6 +67,10 @@ final class CapabilityChecks {
             + (onlyLive.isEmpty() ? "" : "; only on the server: " + readable(onlyLive))
             + (!live.isEmpty() && onlyBundled.isEmpty() && onlyLive.isEmpty() && !live.equals(bundled)
                 ? "; the same lines in another order" : ""));
+        suite.check(!run.console().contains("won't work with this CoreProtect build"),
+            "the server warns about no feature that won't work");
+        suite.check(run.console().contains("[LibreProtect] Auto-purge keeps 30 days of data. Next run: "),
+            "auto-purge is on, and announces its next run");
         suite.check(run.exitCode() == 0, "the server stopped cleanly (exit code " + run.exitCode() + ")");
     }
 
