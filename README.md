@@ -269,7 +269,7 @@ LibreProtect never edits CoreProtect's source code. Each build:
    The audit covers upstream's code. LibreProtect's own code makes one kind of network request itself: update checks to the [update sources](#update-sources), and only when the network policy answers update checks.
 6. **Runs integration tests** ([`integration/`](integration/)) on real Paper servers, with a Java agent that records and blocks all outgoing network traffic, and MySQL and ClickHouse in containers:
    * One server runs on the same data with stock CoreProtect, then LibreProtect, then stock CoreProtect again. Stock CoreProtect must be seen contacting coreprotect.net, which proves that the test can see network traffic at all. LibreProtect must make no requests but the default policy's update checks, read stock CoreProtect's data, and pass API, command and message checks. Stock CoreProtect must then read LibreProtect's data.
-   * More servers test bundled and layered translations, and update checks against stand-ins for GitHub and Modrinth.
+   * More servers check that the capabilities on a running server match the report in the JAR, and test bundled and layered translations, and update checks against stand-ins for GitHub and Modrinth.
 
 Builds are reproducible: the same inputs produce a byte-identical JAR.
 

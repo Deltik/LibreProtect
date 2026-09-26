@@ -77,7 +77,8 @@ public final class ItPlugin extends JavaPlugin {
         "translation", new TranslationScenario(),
         "update", new UpdateScenario(),
         "migration", new MigrationScenario(),
-        "auto-purge", new AutoPurgeScenario());
+        "auto-purge", new AutoPurgeScenario(),
+        "capability", new CapabilityScenario());
 
     private final Map<String, String> results = new TreeMap<>();
     private final Deque<String> steps = new ArrayDeque<>();

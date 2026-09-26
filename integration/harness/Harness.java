@@ -71,8 +71,9 @@ import java.util.stream.Stream;
  *       planted by LibreProtect.</li>
  * </ol>
  *
- * <p>The feature suites run alongside it, each in its own file: {@link TranslationChecks},
- * {@link UpdateChecks}, {@link MigrationChecks} and {@link AutoPurgeChecks}.
+ * <p>The feature suites run alongside it, each in its own file: {@link CapabilityChecks},
+ * {@link TranslationChecks}, {@link UpdateChecks}, {@link MigrationChecks} and
+ * {@link AutoPurgeChecks}.
  * A suite gets a {@link Suite}, which creates fresh {@link Server}s, boots them
  * with either plugin and a {@link Scenario} for the test plugin, gives access
  * to the {@link Containers} and the upstream generation, and records checks
@@ -157,13 +158,14 @@ public final class Harness {
         Suite update = new Suite(this, "update", "update", List.of(2));
         Suite autoPurge = new Suite(this, "auto-purge", "auto-purge", List.of(3));
         Suite translation = new Suite(this, "translation", "translation", List.of(4));
-        runAll(List.of(dropIn, migration, update, autoPurge, translation),
-            List.of(this::dropIn, MigrationChecks::run, UpdateChecks::run, AutoPurgeChecks::run,
-                TranslationChecks::run));
+        Suite capability = new Suite(this, "capability", "capability", List.of(5));
+        runAll(List.of(dropIn, migration, update, autoPurge, translation, capability),
+            List.of(this::dropIn, MigrationChecks::run, UpdateChecks::run, AutoPurgeChecks::run, TranslationChecks::run,
+                CapabilityChecks::run));
 
         List<String> passes = new ArrayList<>();
         List<String> failures = new ArrayList<>();
-        for (Suite suite : List.of(dropIn, translation, update, migration, autoPurge)) {
+        for (Suite suite : List.of(dropIn, capability, translation, update, migration, autoPurge)) {
             suite.collect(passes, failures);
         }
         System.out.println();
