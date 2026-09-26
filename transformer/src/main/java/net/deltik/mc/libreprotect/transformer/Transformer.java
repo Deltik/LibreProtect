@@ -148,6 +148,12 @@ final class Transformer {
                 && !report.upstreamVersion.contains("${"),
             "plugin.yml version is '" + report.upstreamVersion + "'. CoreProtect compares versions with the one that "
                 + "upstream's build puts there, so it must be set.");
+        Object libraries = pluginYml.get("libraries");
+        ContractViolation.require(libraries == null || libraries instanceof List,
+            "plugin.yml's libraries is '" + libraries + "', not a list of libraries for the server to download");
+        if (libraries instanceof List<?> list) {
+            list.forEach(library -> report.pluginLibraries.add(String.valueOf(library)));
+        }
 
         findPhraseRenderers(upstreamClasses);
 

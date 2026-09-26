@@ -35,6 +35,7 @@
 #   scripts/lp db env               Print their endpoints and credentials (build/containers.env)
 #   scripts/lp db down              Remove them
 #   scripts/lp sources              Archive the complete source of the last build (needs a clean commit)
+#   scripts/lp sbom                 Write a CycloneDX software bill of materials of the last build (needs jq)
 #   scripts/lp clean                Remove build output
 #   scripts/lp headers [--fix]      Check that Java files and shell scripts begin with the
 #                                   license notice, or add it to those that have none
@@ -841,6 +842,89 @@ coreprotect/LICENSE (Artistic-2.0).
     log "Done: $archive.gz"
 }
 
+# A CycloneDX software bill of materials of the last build: upstream's
+# dependencies that the JAR contains, and the libraries that its plugin.yml
+# has the server download when it loads the plugin, such as CoreProtect 25's
+# DuckDB driver. The dependencies that the server provides are left out:
+# those that upstream's pom marks provided, and those that upstream's build
+# leaves out of the JAR, such as Log4j and SLF4J, whose copies on the server
+# the plugin uses. The transformer's BundledComponents finds the latter by
+# comparing the JAR's files with the dependencies' files, rather than by
+# reading upstream's build settings; it keeps a dependency that it can't
+# compare, such as one of system scope, and warns about it.
+cmd_sbom() {
+    [[ $# -eq 0 ]] || die "Unknown option: $1"
+    local report="$DIST_DIR/transform-report.json" observed="$DIST_DIR/audit-observed.json"
+    local transformer="$ROOT/transformer/target/libreprotect-transformer.jar"
+    [[ -f "$DIST_DIR/version.txt" && -f "$report" && -f "$observed" && -f "$transformer" ]] \
+        || die "Run scripts/lp build first"
+    command -v jq >/dev/null 2>&1 || die "The software bill of materials needs jq"
+
+    local version upstream_commit
+    version="$(cat "$DIST_DIR/version.txt")"
+    upstream_commit="$(jq -r .upstreamCommit "$report")"
+    [[ "$(git -C "$UPSTREAM_DIR" rev-parse HEAD 2>/dev/null)" == "$upstream_commit" ]] \
+        || die "$UPSTREAM_DIR is no longer at $upstream_commit, which the last build was made from. Rebuild first."
+    local original upstream_jar
+    original="$(find "$UPSTREAM_DIR/target" -maxdepth 1 -name 'original-*.jar' 2>/dev/null | head -n 1)"
+    upstream_jar="$(find "$UPSTREAM_DIR/target" -maxdepth 1 -name '*.jar' ! -name 'original-*' ! -name '*-sources.jar' ! -name '*-javadoc.jar' 2>/dev/null | head -n 1)"
+    [[ -f "$original" && -f "$upstream_jar" ]] || die "Run scripts/lp build first"
+
+    find_jdk
+    local bom="$UPSTREAM_DIR/target/sbom.json" output="$DIST_DIR/LibreProtect-$version.cdx.json"
+    local dependencies="$UPSTREAM_DIR/target/sbom-dependencies" outside="$UPSTREAM_DIR/target/sbom-outside.json"
+    rm -rf "$bom" "$dependencies" "$outside"
+    "$ROOT/mvnw" -B -q -f "$UPSTREAM_DIR/pom.xml" org.cyclonedx:cyclonedx-maven-plugin:2.9.3:makeBom \
+        -DoutputFormat=json -DoutputName=sbom -DincludeTestScope=false -DincludeProvidedScope=false
+    [[ -f "$bom" ]] || die "The CycloneDX Maven plugin did not write $bom"
+    # The same dependencies' files, to compare with the JAR's
+    "$ROOT/mvnw" -B -q -f "$UPSTREAM_DIR/pom.xml" org.apache.maven.plugins:maven-dependency-plugin:3.9.0:copy-dependencies \
+        -DincludeScope=runtime -Dmdep.useRepositoryLayout=true -DoutputDirectory="$dependencies"
+    log "Finding which of upstream's dependencies $(basename "$upstream_jar") contains"
+    "$JAVA_HOME/bin/java" -cp "$transformer" net.deltik.mc.libreprotect.transformer.BundledComponents \
+        --bom "$bom" --jar "$upstream_jar" --original-jar "$original" --dependencies "$dependencies" \
+        --output "$outside"
+
+    # The audit read the libraries from the JAR's plugin.yml, which the transformer leaves as it is.
+    # Each is groupId:artifactId[:extension[:classifier]]:version, as Maven's resolver reads it.
+    # Coordinates that name the same file, such as g:a:1 and g:a:jar:1, become one component.
+    # A dependency that the JAR leaves out but plugin.yml lists is downloaded, and so kept as required.
+    jq --slurpfile observed "$observed" --slurpfile outside "$outside" \
+        --arg downloaded_description "Not in the JAR: plugin.yml lists it in libraries, so the server downloads it when it loads the plugin" '
+        .metadata.component["bom-ref"] as $root
+        | [.components[]?.purl] as $listed
+        | ([$observed[0].pluginLibraries[]
+            | split(":") as $coordinates
+            | ($coordinates | length) as $parts
+            | if $parts < 3 or $parts > 5 or any($coordinates[]; . == "")
+                then error("Unexpected library in plugin.yml: \(.)") else . end
+            | ("pkg:maven/\($coordinates[0])/\($coordinates[1])@\($coordinates[$parts - 1])?"
+                + (if $parts == 5 then "classifier=\($coordinates[3])&" else "" end)
+                + "type=\(if $parts >= 4 then $coordinates[2] else "jar" end)") as $purl
+            | {type: "library", "bom-ref": $purl, group: $coordinates[0], name: $coordinates[1],
+               version: $coordinates[$parts - 1], scope: "required", purl: $purl,
+               description: $downloaded_description}
+          ] | unique_by(.["bom-ref"])) as $libraries
+        | [$libraries[] | select(.purl as $purl | any($listed[]; . == $purl) | not)] as $downloaded
+        | [(.components // [])[]
+            | select(.purl as $purl | any($outside[0][]; . == $purl) and (any($libraries[]; .purl == $purl) | not))
+            | .["bom-ref"]] as $omitted
+        | .components = [(.components // [])[]
+            | select(.["bom-ref"] as $ref | any($omitted[]; . == $ref) | not)
+            | .purl as $purl
+            | if any($outside[0][]; . == $purl) then .scope = "required" | .description = $downloaded_description
+              else . end]
+            + $downloaded
+        | .dependencies = [(.dependencies // [])[]
+            | select(.ref as $ref | any($omitted[]; . == $ref) | not)
+            | .dependsOn = [(.dependsOn // [])[] | select(. as $ref | any($omitted[]; . == $ref) | not)]
+            | if .ref == $root then .dependsOn += [$downloaded[]["bom-ref"]] else . end]
+            + [$downloaded[] | {ref: .["bom-ref"], dependsOn: []}]
+    ' "$bom" > "$output.new"
+    mv "$output.new" "$output"
+    log "Done: $output"
+}
+
 cmd_clean() {
     rm -rf "$BUILD_DIR" "$DIST_DIR"
     find "$ROOT" -maxdepth 3 -name target -type d -prune -exec rm -rf {} +
@@ -854,6 +938,7 @@ main() {
         it) cmd_it "$@" ;;
         db) cmd_db "$@" ;;
         sources) cmd_sources "$@" ;;
+        sbom) cmd_sbom "$@" ;;
         clean) cmd_clean "$@" ;;
         headers) exec "$ROOT/scripts/ci/license-headers.sh" "$@" ;;
         "" | -h | --help | help) usage ;;

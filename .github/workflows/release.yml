@@ -64,11 +64,10 @@ jobs:
       - name: Source archive
         run: scripts/lp sources
 
-      - name: Software bill of materials for the bundled upstream dependencies
-        run: |
-          ./mvnw -B -q -f build/upstream/pom.xml org.cyclonedx:cyclonedx-maven-plugin:2.9.3:makeBom \
-            -DoutputFormat=json -DoutputName=sbom -DincludeTestScope=false -DincludeProvidedScope=false
-          cp build/upstream/target/sbom.json "dist/LibreProtect-$(cat dist/version.txt).cdx.json"
+      - name: Software bill of materials
+        # The upstream dependencies in the JAR, and the libraries that
+        # plugin.yml has the server download
+        run: scripts/lp sbom
 
       - name: Summarize
         if: always()

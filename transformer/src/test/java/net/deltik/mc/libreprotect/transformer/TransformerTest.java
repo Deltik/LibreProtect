@@ -377,6 +377,27 @@ class TransformerTest {
         }
 
         @Test
+        @DisplayName("lists in DIFFERENCES.md the libraries that plugin.yml asks the server to download")
+        void pluginLibraries() throws IOException {
+            String differences = Differences.render(transform(new SyntheticUpstream(), directory.resolve("out.jar")));
+            assertFalse(differences.contains("## Libraries the Server Downloads"), differences);
+
+            SyntheticUpstream upstream = new SyntheticUpstream();
+            upstream.pluginYml += "libraries:\n  - org.duckdb:duckdb_jdbc:1.4.5.0\n  - com.example:other:2\n";
+            TransformReport report = transform(upstream, directory.resolve("out.jar"));
+            assertEquals(List.of("org.duckdb:duckdb_jdbc:1.4.5.0", "com.example:other:2"), report.pluginLibraries);
+            differences = Differences.render(report);
+            assertTrue(differences.contains("## Libraries the Server Downloads\n\nCoreProtect's `plugin.yml` asks the "
+                + "server to download these libraries:\n\n- `org.duckdb:duckdb_jdbc:1.4.5.0`\n- `com.example:other:2`\n"),
+                differences);
+            assertTrue(differences.contains("before any of the plugin's code runs"), differences);
+
+            upstream.pluginYml += "  - \"com.example:`odd`|<lib>:1\"\n";
+            differences = Differences.render(transform(upstream, directory.resolve("out.jar")));
+            assertTrue(differences.contains("\n- ``com.example:`odd`|<lib>:1``\n"), differences);
+        }
+
+        @Test
         @DisplayName("bundles upstream's translations unchanged and reports what each translates")
         void translations() throws IOException {
             SyntheticUpstream upstream = new SyntheticUpstream();
@@ -812,6 +833,14 @@ class TransformerTest {
             String message = violation(upstream -> upstream.upstreamExtra.put("META-INF/libreprotect/capabilities.tsv",
                 new byte[0])).getMessage();
             assertTrue(message.contains("META-INF/libreprotect/capabilities.tsv would overwrite"), message);
+        }
+
+        @Test
+        @DisplayName("plugin.yml libraries that aren't a list")
+        void pluginLibrariesNotAList() {
+            String message = violation(upstream -> upstream.pluginYml += "libraries: org.example:lib:1\n")
+                .getMessage();
+            assertTrue(message.contains("plugin.yml's libraries is 'org.example:lib:1', not a list"), message);
         }
 
         @Test

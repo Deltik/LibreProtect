@@ -49,7 +49,7 @@ Each release on GitHub has build provenance, which proves that GitHub Actions bu
 gh attestation verify LibreProtect-<version>.jar --repo Deltik/LibreProtect
 ```
 
-Each release on GitHub also has a `.sha256` checksum file and the complete source code of the build. Releases other than development builds also have a CycloneDX software bill of materials, which lists the libraries in the JAR.
+Each release on GitHub also has a `.sha256` checksum file and the complete source code of the build. Releases other than development builds also have a CycloneDX software bill of materials, which lists the libraries in the JAR and those that the server downloads for it. Libraries that CoreProtect uses from the server, such as Log4j, aren't listed.
 
 ### Development Builds
 
@@ -225,6 +225,7 @@ The network policy covers the requests that CoreProtect and the libraries it bun
 
 * Connections to the databases in CoreProtect's `config.yml`, such as MySQL or ClickHouse, which CoreProtect, database migration and automatic purging make.
 * LibreProtect's own requests to the [update sources](#update-sources). The policy decides whether LibreProtect answers CoreProtect's update check, and so whether it asks them, but routes can't block or redirect these requests. An empty `update-sources` in `libreprotect.yml`, or `check-updates: false` in CoreProtect's `config.yml`, stops them.
+* The libraries that CoreProtect's `plugin.yml` lists, which the server (Paper or Spigot) downloads when it loads the plugin, before any of the plugin's code runs. For example, on CoreProtect versions that support DuckDB, the server downloads the DuckDB driver from Maven Central, or from the mirror of Maven Central that it is configured to use. Recent Paper versions use a mirror hosted by Google by default. Each release's `DIFFERENCES.md` lists these libraries under "Libraries the Server Downloads".
 
 ## Differences from CoreProtect
 
@@ -363,6 +364,7 @@ scripts/lp build --ref master    # Build any upstream branch, tag or commit as a
 scripts/lp it                    # Integration test the last build (downloads Paper once, and accepts the Minecraft EULA)
 scripts/lp db up                 # Keep the database containers running between tests (db env shows them, db down removes them)
 scripts/lp sources               # Archive the complete source code of the last build (build from a clean commit first)
+scripts/lp sbom                  # Write a CycloneDX software bill of materials of the last build (needs jq)
 scripts/lp clean                 # Delete build output
 scripts/lp --help                # Show every command and option
 DRY_RUN=1 scripts/ci/upstream-watch.sh   # Show what the scheduled reconciler would do now

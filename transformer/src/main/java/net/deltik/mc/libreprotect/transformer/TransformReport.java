@@ -153,6 +153,8 @@ final class TransformReport {
     final List<String> phraseRenderers = new ArrayList<>();
     final List<BrandingSite> brandingSites = new ArrayList<>();
     final Map<String, ValueChange> pluginYmlChanges = new LinkedHashMap<>();
+    /** Libraries that upstream's plugin.yml asks the server to download */
+    final List<String> pluginLibraries = new ArrayList<>();
     final List<String> injectedEntries = new ArrayList<>();
     final List<ExtensionPoint> extensionPoints = new ArrayList<>();
     /** LibreProtect extension classes or methods that upstream no longer asks for; the audit reports these */

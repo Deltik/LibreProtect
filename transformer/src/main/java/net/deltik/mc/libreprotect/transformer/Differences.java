@@ -149,6 +149,19 @@ final class Differences {
             LinkedHashMap::new, Collectors.counting()));
         egress.forEach((row, count) -> md.append("| ").append(row).append(" | ").append(count).append(" |\n"));
 
+        if (!report.pluginLibraries.isEmpty()) {
+            md.append("\n## Libraries the Server Downloads\n\n")
+                .append("CoreProtect's `plugin.yml` asks the server to download these libraries:\n\n");
+            report.pluginLibraries.forEach(library -> md.append("- ").append(code(library)).append("\n"));
+            md.append("\nThe server (Paper or Spigot) downloads them, and the libraries they depend on, when it loads ")
+                .append("the plugin, before any of the plugin's code runs. It gets them from Maven Central, or from ")
+                .append("the mirror of Maven Central that it is configured to use, and keeps them in its `libraries` ")
+                .append("folder. Since LibreProtect's code isn't running yet, it can't block or redirect these ")
+                .append("downloads. Recent Paper versions use a mirror hosted by Google, unless the ")
+                .append("`PAPER_DEFAULT_CENTRAL_REPOSITORY` environment variable or the ")
+                .append("`org.bukkit.plugin.java.LibraryLoader.centralURL` system property names another.\n");
+        }
+
         md.append("\n## Donation-Key Checks\n\n")
             .append("These checks now return a constant, so features that upstream reserves for donors are ")
             .append("available. No donation key is needed, and by default none is sent. Under the `passthrough` ")
