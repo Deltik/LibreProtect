@@ -11,7 +11,7 @@
 **LibreProtect** is a privacy-hardened build of [CoreProtect](https://github.com/PlayPro/CoreProtect), the block logging and rollback plugin for Minecraft servers. It is rebuilt from each CoreProtect release, automatically when possible.
 
 * **No telemetry.** CoreProtect contacts coreprotect.net for update checks, usage statistics, error reports, donation-key checks and translations, and it bundles bStats. LibreProtect sends each of those requests through a [network policy](#configuration). By default, it answers translation requests itself, from translations it bundles, and blocks everything else except update checks. It answers those by asking GitHub or Modrinth for LibreProtect's latest release, without sending your version number, server port or license key. The `privacy-first` preset blocks update checks too.
-* **Everything unlocked.** Features that CoreProtect reserves for donors work without a donation key.
+* **Everything unlocked.** Features that CoreProtect reserves for donors work without a donation key, including [automatic purging](#automatic-purging), which LibreProtect implements itself.
 * **Drop-in.** LibreProtect keeps CoreProtect's commands, permissions, API, data folder and database. Add-ons that depend on CoreProtect keep working, and you can switch back and forth between the two.
 
 LibreProtect is an independent project. It isn't affiliated with or endorsed by CoreProtect or its authors.
@@ -24,6 +24,7 @@ LibreProtect is an independent project. It isn't affiliated with or endorsed by 
 * [Configuration](#configuration)
 * [Differences from CoreProtect](#differences-from-coreprotect)
 * [Compatibility](#compatibility)
+* [Automatic Purging](#automatic-purging)
 * [License](#license)
 
 <!-- begin store description -->
@@ -56,6 +57,8 @@ Development builds of CoreProtect's unreleased code are published as [prerelease
 ## Usage
 
 Commands, permissions and the API are CoreProtect's. See [CoreProtect's documentation](https://docs.coreprotect.net/).
+
+LibreProtect also has its own, free implementation of [automatic purging](#automatic-purging) of old data, which CoreProtect reserves for its paid builds.
 
 ## Configuration
 
@@ -230,7 +233,7 @@ The network policy covers the requests that CoreProtect and the libraries it bun
 * The startup log shows which network policy is active.
 * LibreProtect bundles CoreProtect's [translations](#translations) and answers translation requests itself, instead of sending your phrases to coreprotect.net.
 * Update checks ask [GitHub or Modrinth](#update-sources) for LibreProtect's releases instead of asking update.coreprotect.net, and the update notice shows LibreProtect's version.
-* Automatic purging (`auto-purge`) works. CoreProtect has it only in its paid builds, whose code isn't public, so LibreProtect has its own implementation. `/co migrate-db` is only in CoreProtect's paid builds too; LibreProtect has a placeholder that says so. [A free implementation is welcome.](extensions/src/main/java/net/coreprotect/utility/extensions/)
+* [Automatic purging](#automatic-purging) (`auto-purge`) works. CoreProtect has it only in its paid builds, whose code isn't public, so LibreProtect has its own implementation. `/co migrate-db` is only in CoreProtect's paid builds too; LibreProtect has a placeholder that says so. [A free implementation is welcome.](extensions/src/main/java/net/coreprotect/utility/extensions/)
 
 Each release lists its exact changes in `DIFFERENCES.md`, which is attached to the release and included in the JAR. It also says which of LibreProtect's features work with the CoreProtect that the release was built from.
 
@@ -241,6 +244,31 @@ Please report problems with LibreProtect [here](https://github.com/Deltik/LibreP
 LibreProtect supports the same Minecraft versions and server software as the CoreProtect release it is built from. Releases on Modrinth list them. Every build is tested on the Paper version in [`integration/paper.lock`](integration/paper.lock).
 
 LibreProtect and CoreProtect use the same database, so you can switch between them. The integration test switches from CoreProtect to LibreProtect and back on the same data for every build.
+
+## Automatic Purging
+
+To remove old data every day, set `auto-purge` in CoreProtect's `config.yml` to how much data to keep:
+
+```yaml
+auto-purge: 180d
+auto-purge-time: 03:30
+```
+
+* `auto-purge` takes times like CoreProtect's commands do: `y`, `mo` (30 days), `w`, `d`, `h`, `m` and `s`, which can be combined (`1y,6mo`) and can have decimals (`1.5y`). As in CoreProtect, the minimum is `30d`. `false`, the default, turns automatic purging off. So does a value that isn't valid or is below the minimum, with a warning.
+* `auto-purge-time` is when to run each day, in 24-hour `HH:mm` server time. The default is midnight.
+
+Changes apply shortly after `/co reload` or a restart. The log shows the next run, and each run logs the date it removes data from before, what it removed, and when it runs next. `/co status` shows how many rows were removed since the server started. Automatic purging trusts the server's clock, so a clock set far ahead would remove recent data.
+
+Automatic purging runs in the background while the server stays usable:
+
+* On SQLite, MySQL and DuckDB, it removes old rows in small chunks with pauses in between. While a chunk runs, CoreProtect may refuse a rollback, `/co reload` or `/co purge` with its message that a purge is in progress; try again a moment later. On SQLite and MySQL, the newest row of each of the `block`, `entity` and `skull` tables, and of `entity_spawn` on CoreProtect versions that have it, stays, however old it is, because SQLite, and MySQL before 8.0, could give its row ID to new data that other rows still refer to.
+* On ClickHouse, CoreProtect drops the monthly partitions that are entirely older and deletes the older rows of the others in one step, which needs `database-lock: true` in `config.yml`. Until it finishes, lookups, rollbacks, `/co purge` and `/co reload` are refused as they are during `/co purge`, and it doesn't stop for them. A shutdown doesn't wait for it: CoreProtect cancels it, as it cancels `/co purge`, but a deletion that has started keeps running inside ClickHouse. On CoreProtect versions that look for unfinished deletions, until it finishes, the next purge is refused and CoreProtect won't start on ClickHouse.
+
+On the other engines, a run stops when the server shuts down, a manual purge, database migration or conversion starts, or `/co consumer pause` is used. On any engine, the next run removes what a stopped run left.
+
+If the CoreProtect that LibreProtect was built from lacks something that automatic purging needs, the log says what when `auto-purge` is on, and runs stop before they touch the database. A database engine that LibreProtect doesn't know is never purged.
+
+Removing rows makes room for new data, but it may not shrink the database files right away. On an existing database with a lot of old data, you can run a manual purge first, such as `/co purge t:180d`, with `#optimize` on MySQL to reclaim the space.
 <!-- end store description -->
 
 ## For Developers
@@ -269,7 +297,7 @@ LibreProtect never edits CoreProtect's source code. Each build:
    The audit covers upstream's code. Besides connecting to the databases in `config.yml`, LibreProtect's own code makes one kind of network request itself: update checks to the [update sources](#update-sources), and only when the network policy answers update checks.
 6. **Runs integration tests** ([`integration/`](integration/)) on real Paper servers, with a Java agent that records and blocks all outgoing network traffic, and MySQL and ClickHouse in containers:
    * One server runs on the same data with stock CoreProtect, then LibreProtect, then stock CoreProtect again. Stock CoreProtect must be seen contacting coreprotect.net, which proves that the test can see network traffic at all. LibreProtect must make no requests but the default policy's update checks, read stock CoreProtect's data, and pass API, command and message checks. Stock CoreProtect must then read LibreProtect's data.
-   * More servers check that the capabilities on a running server match the report in the JAR, and test bundled and layered translations, and update checks against stand-ins for GitHub and Modrinth.
+   * More servers check that the capabilities on a running server match the report in the JAR, and test bundled and layered translations, update checks against stand-ins for GitHub and Modrinth, and automatic purging on each database engine that CoreProtect supports, including stopping and resuming.
 
 Builds are reproducible: the same inputs produce a byte-identical JAR.
 
