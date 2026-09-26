@@ -49,7 +49,9 @@ class FallbackTest {
 
     /** Optional members whose absence is harmless, which a way may do without */
     private static final Set<String> HARMLESS_OPTIONAL = Set.of(
-        "net/coreprotect/database/DatabaseType#getDisplayName()Ljava/lang/String;");
+        "net/coreprotect/database/DatabaseType#getDisplayName()Ljava/lang/String;",
+        // What the constant was is the fallback
+        "net/coreprotect/database/clickhouse/ClickHouseSchema#BATCH_RECEIPT_FAMILY:Ljava/lang/String;");
 
     /**
      * @return the capability report's lines, each split into its fields

@@ -70,6 +70,8 @@ final class Differences {
         "config.lock", "CoreProtect's lock on its settings",
         "server.thread", "Running tasks on the server's thread",
         "migrate-db.schema", "Creating CoreProtect's tables",
+        "clickhouse.reads", "Reading ClickHouse",
+        "clickhouse.writes", "Writing ClickHouse",
         "hook.auto-purge-counter", "Counting purged rows for `/co status`",
         "hook.lock-heartbeat", "Refreshing CoreProtect's database lock",
         "hook.entity-spawn-verification", "Rechecking tracked entities",

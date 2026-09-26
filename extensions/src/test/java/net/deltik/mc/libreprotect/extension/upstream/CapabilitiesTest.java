@@ -22,6 +22,7 @@ package net.deltik.mc.libreprotect.extension.upstream;
 
 import net.deltik.mc.libreprotect.extension.common.Engine;
 import net.deltik.mc.libreprotect.extension.migration.jdbc.IncompleteMarker;
+import net.deltik.mc.libreprotect.extension.upstream.clickhouse.ClickHouseApi;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Choice;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Missing;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Upstream;
@@ -97,8 +98,7 @@ class CapabilitiesTest {
     }
 
     @Test
-    @DisplayName("should take the ways of this CoreProtect's generation, with none unavailable but migrations from"
-        + " and to ClickHouse, which have no endpoints")
+    @DisplayName("should take the ways of this CoreProtect's generation, with none unavailable")
     void strategies() {
         AssumeCapability.reviewedUpstream();
         Map<String, String> expected = new LinkedHashMap<>();
@@ -117,15 +117,17 @@ class CapabilitiesTest {
         expected.put("migrate-db.schema", ENGINE_TYPES ? "by-engine-type" : "by-use-mysql");
         expected.put("migrate-db.transcoding", ENGINE_TYPES ? "statement-codecs" : "absent");
         expected.put("migrate-db.duckdb-writes", ENGINE_TYPES ? "appender" : "absent");
+        expected.put("clickhouse.reads", ENGINE_TYPES ? "migration-reads" : "absent");
+        expected.put("clickhouse.writes", ENGINE_TYPES ? "compatibility-rows" : "absent");
         expected.put("migrate-db.protocol", ENGINE_TYPES ? "reload-lifecycle" : "flag-protocol");
         expected.put("migrate-db.source.sqlite", "jdbc");
         expected.put("migrate-db.source.mysql", "jdbc");
         expected.put("migrate-db.source.duckdb", ENGINE_TYPES ? "coreprotect-connection" : "absent");
-        expected.put("migrate-db.source.clickhouse", ENGINE_TYPES ? Choice.UNAVAILABLE : "absent");
+        expected.put("migrate-db.source.clickhouse", ENGINE_TYPES ? "migration-reads" : "absent");
         expected.put("migrate-db.target.sqlite", "jdbc");
         expected.put("migrate-db.target.mysql", "jdbc");
         expected.put("migrate-db.target.duckdb", ENGINE_TYPES ? "jdbc" : "absent");
-        expected.put("migrate-db.target.clickhouse", ENGINE_TYPES ? Choice.UNAVAILABLE : "absent");
+        expected.put("migrate-db.target.clickhouse", ENGINE_TYPES ? "compatibility-rows" : "absent");
         expected.put("auto-purge.retention", "config-field");
         expected.put("auto-purge.settings", "config-fields");
         expected.put("auto-purge.tables", ENGINE_TYPES ? "purge-policy" : "purge-command-list");
@@ -190,8 +192,9 @@ class CapabilitiesTest {
         Choice<Leases> coordination = changed.get(Leases.CAPABILITY);
         assertEquals(ENGINE_TYPES ? "background-claims" : Choice.UNAVAILABLE + ": " + reason, ENGINE_TYPES
             ? coordination.strategy() : coordination.strategy() + ": " + coordination.reason());
-        // What only reads CoreProtect's settings still works
+        // What only reads CoreProtect's settings still works, and so does reading ClickHouse
         assertTrue(changed.get(PurgeSettings.RETENTION).isAvailable());
+        assertEquals(capabilities.get(ClickHouseApi.READS).strategy(), changed.get(ClickHouseApi.READS).strategy());
     }
 
     @Test

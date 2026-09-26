@@ -21,6 +21,7 @@
 package net.deltik.mc.libreprotect.extension.upstream;
 
 import net.deltik.mc.libreprotect.extension.common.Engine;
+import net.deltik.mc.libreprotect.extension.upstream.clickhouse.ClickHouseApi;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Choice;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Upstream;
 import net.deltik.mc.libreprotect.testutil.AssumeCapability;
@@ -35,6 +36,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * CoreProtect 25 keeps many names of CoreProtect 24 with other meanings, so
@@ -60,6 +62,39 @@ class NewerDesignTest {
         for (String trace : Designs.MULTI_ENGINE.traces()) {
             assertEquals(MULTI_ENGINE, upstream.has(trace), trace);
         }
+    }
+
+    @Test
+    @DisplayName("should know ClickHouse's lookup index by every one of its traces, and CoreProtect 24 by none")
+    void lookupIndexTraces() {
+        // The reviewed CoreProtect 25 has the index, and CoreProtect 24 has no ClickHouse
+        AssumeCapability.reviewedUpstream();
+        Upstream upstream = Upstream.coreProtect();
+        for (String trace : Designs.CLICKHOUSE_LOOKUP_INDEX.traces()) {
+            assertEquals(MULTI_ENGINE, upstream.has(trace), trace);
+        }
+    }
+
+    @Test
+    @DisplayName("should rely on ClickHouse's lookup index while any one trace of it is left, and not before it")
+    void lookupIndexRelies() {
+        AssumeCapability.strategy("clickhouse.writes", "compatibility-rows");
+        assumeTrue(Designs.CLICKHOUSE_LOOKUP_INDEX.isIn(Upstream.coreProtect()), "needs ClickHouse's lookup index");
+        Capabilities renamed = Capabilities.probe(Upstream.coreProtect().hiding(
+            Names.CLICKHOUSE_LOOKUP_INDEX + "#append", Names.CLICKHOUSE_LOOKUP_INDEX + "#recover"));
+
+        assertEquals("CoreProtect has no ClickHouseLookupIndex.append(ClickHouseRowBinaryBuffer, ClickHouseFamily,"
+            + " int, boolean)", renamed.get(ClickHouseApi.WRITES).reason());
+        // Reading ClickHouse doesn't write the index
+        assertEquals("migration-reads", renamed.get(ClickHouseApi.READS).strategy());
+        assertEquals("CoreProtect has no ClickHouseLookupIndex.recover(Connection, String, String, UUID)",
+            renamed.get(PurgeEngine.CLICKHOUSE).reason());
+
+        // As before the index, which had nothing of it to rely on
+        Capabilities before = Capabilities.probe(Upstream.coreProtect().hiding(
+            Designs.CLICKHOUSE_LOOKUP_INDEX.traces().toArray(new String[0])));
+        assertEquals("compatibility-rows", before.get(ClickHouseApi.WRITES).strategy());
+        assertEquals("retention", before.get(PurgeEngine.CLICKHOUSE).strategy());
     }
 
     @Test

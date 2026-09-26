@@ -24,6 +24,7 @@ import net.deltik.mc.libreprotect.extension.common.Engine;
 import net.deltik.mc.libreprotect.extension.migration.MigrationBridge;
 import net.deltik.mc.libreprotect.extension.migration.MigrationException;
 import net.deltik.mc.libreprotect.extension.migration.MigrationSession;
+import net.deltik.mc.libreprotect.extension.upstream.clickhouse.ClickHouseEndpoints;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Choice;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Missing;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Upstream;
@@ -65,7 +66,8 @@ public final class CoreProtectMigration implements MigrationBridge {
     private static final List<EndpointWays> ENDPOINTS = Arrays.asList(
         JdbcEndpoints.SQLITE,
         JdbcEndpoints.MYSQL,
-        JdbcEndpoints.DUCKDB);
+        JdbcEndpoints.DUCKDB,
+        ClickHouseEndpoints.WAYS);
 
     private static final Map<Engine, Capability<EngineSide>> SOURCES = new EnumMap<>(Engine.class);
     private static final Map<Engine, Capability<EngineSide>> TARGETS = new EnumMap<>(Engine.class);

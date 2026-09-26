@@ -23,6 +23,7 @@ package net.deltik.mc.libreprotect.extension.migration;
 import net.deltik.mc.libreprotect.extension.common.Engine;
 
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalLong;
 
@@ -71,6 +72,22 @@ public interface RowSource extends AutoCloseable {
      *         inclusive, in row ID order
      */
     List<Row> readRange(String table, List<String> columns, long fromRowId, long toRowId) throws SQLException;
+
+    /**
+     * Read several ranges at once. Engines that scan a whole table for any
+     * row ID range, like ClickHouse, read them all in one scan.
+     *
+     * @param ranges row ID ranges as {@code {fromRowId, toRowId}}, inclusive,
+     *               in ascending order and not overlapping
+     * @return the rows in the ranges, in row ID order
+     */
+    default List<Row> readRanges(String table, List<String> columns, List<long[]> ranges) throws SQLException {
+        List<Row> rows = new ArrayList<>();
+        for (long[] range : ranges) {
+            rows.addAll(readRange(table, columns, range[0], range[1]));
+        }
+        return rows;
+    }
 
     /**
      * Make a call that another thread is waiting in fail soon, and every

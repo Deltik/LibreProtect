@@ -356,7 +356,6 @@ class TransformerTest {
 
                 - `/co migrate-db` from ClickHouse, `/co migrate-db` to ClickHouse: CoreProtect has no ClickHouse
                 - `auto-purge` with DuckDB: CoreProtect has no DuckDB
-                - `clickhouse.writes`: This CoreProtect has no ClickHouse support
 
                 The features also rest on 3 capabilities that several of them share, such as telling which database \
                 CoreProtect uses. One of those doesn't work with this CoreProtect, as the table shows; the others do.

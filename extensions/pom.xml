@@ -123,6 +123,13 @@
       <scope>test</scope>
     </dependency>
     <dependency>
+      <!-- The ClickHouse client inside CoreProtect 25 logs through SLF4J,
+           which the server provides at run time -->
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
       <!-- Renames classes of the upstream JAR, as an upstream refactoring
            would, for tests of what the extensions survive -->
       <groupId>org.ow2.asm</groupId>

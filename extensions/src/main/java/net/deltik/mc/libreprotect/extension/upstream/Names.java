@@ -47,15 +47,43 @@ public final class Names {
     public static final String DUCKDB_DATABASE = "net.coreprotect.database.DuckDBDatabase";
     public static final String DUCKDB_RECOVERY = "net.coreprotect.database.DuckDBRecovery";
     public static final String PURGE_POLICY = "net.coreprotect.database.PurgePolicy";
+    public static final String CLICKHOUSE_BATCH_IDENTITY =
+        "net.coreprotect.database.clickhouse.ClickHouseBatchIdentity";
+    public static final String CLICKHOUSE_BATCH_PUBLISHER =
+        "net.coreprotect.database.clickhouse.ClickHouseBatchPublisher";
+    public static final String CLICKHOUSE_BATCH_RECEIPT = "net.coreprotect.database.clickhouse.ClickHouseBatchReceipt";
     public static final String CLICKHOUSE_DATABASE = "net.coreprotect.database.clickhouse.ClickHouseDatabase";
+    public static final String CLICKHOUSE_EVENT_BATCH = "net.coreprotect.database.clickhouse.ClickHouseEventBatch";
+    public static final String CLICKHOUSE_FAMILY = "net.coreprotect.database.clickhouse.ClickHouseFamily";
+    public static final String CLICKHOUSE_HIGH_WATER_PUBLISHER =
+        "net.coreprotect.database.clickhouse.ClickHouseHighWaterPublisher";
+    public static final String CLICKHOUSE_HIGH_WATER_MARKS =
+        "net.coreprotect.database.clickhouse.ClickHouseHighWaterMarks";
+    public static final String CLICKHOUSE_IDENTIFIERS = "net.coreprotect.database.clickhouse.ClickHouseIdentifiers";
+    public static final String CLICKHOUSE_IDENTITY_ALLOCATOR =
+        "net.coreprotect.database.clickhouse.ClickHouseIdentityAllocator";
+    public static final String CLICKHOUSE_IDENTITY_RESERVATION =
+        "net.coreprotect.database.clickhouse.ClickHouseIdentityReservation";
+    public static final String CLICKHOUSE_JDBC = "net.coreprotect.database.clickhouse.ClickHouseJdbc";
     public static final String CLICKHOUSE_JDBC_CONFIG = "net.coreprotect.database.clickhouse.ClickHouseJdbcConfig";
+    public static final String CLICKHOUSE_LOOKUP = "net.coreprotect.database.clickhouse.ClickHouseLookup";
+    public static final String CLICKHOUSE_LOOKUP_INDEX = "net.coreprotect.database.clickhouse.ClickHouseLookupIndex";
+    public static final String CLICKHOUSE_NATIVE_CLIENT = "net.coreprotect.database.clickhouse.ClickHouseNativeClient";
     public static final String CLICKHOUSE_RETENTION = "net.coreprotect.database.clickhouse.ClickHouseRetention";
+    public static final String CLICKHOUSE_SCHEMA = "net.coreprotect.database.clickhouse.ClickHouseSchema";
+    public static final String CLICKHOUSE_STARTUP_RECONCILER =
+        "net.coreprotect.database.clickhouse.ClickHouseStartupReconciler";
+    public static final String CLICKHOUSE_WRITE_BATCH = "net.coreprotect.database.clickhouse.ClickHouseWriteBatch";
+    public static final String CLICKHOUSE_WRITER_REGISTRATION =
+        "net.coreprotect.database.clickhouse.ClickHouseWriterRegistration";
     public static final String BLOCK_STATEMENT = "net.coreprotect.database.statement.BlockStatement";
     public static final String ENTITY_STATEMENT = "net.coreprotect.database.statement.EntityStatement";
     public static final String PLUGIN_INITIALIZATION = "net.coreprotect.services.PluginInitializationService";
     public static final String SHUTDOWN_SERVICE = "net.coreprotect.services.ShutdownService";
     public static final String SCHEDULER = "net.coreprotect.thread.Scheduler";
+    public static final String DATABASE_UTILS = "net.coreprotect.utility.DatabaseUtils";
     public static final String ENTITY_SPAWN_TRACKING = "net.coreprotect.utility.EntitySpawnTracking";
+    public static final String VERSION_UTILS = "net.coreprotect.utility.VersionUtils";
     public static final String BLOCK_META_CODEC = "net.coreprotect.utility.serialize.BlockMetaCodec";
     public static final String ENTITY_DATA_CODEC = "net.coreprotect.utility.serialize.EntityDataCodec";
     public static final String LEGACY_METADATA_CODEC = "net.coreprotect.utility.serialize.LegacyMetadataCodec";

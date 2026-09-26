@@ -39,6 +39,7 @@ final class Validator {
 
     private static final int PAGE_ROWS = 2_000;
     /** At most about this many sampled rows are read at once */
+    private static final long GROUP_ROWS = 50_000;
 
     private final RowSource source;
     private final RowSource target;
@@ -155,25 +156,37 @@ final class Validator {
     }
 
     /**
-     * Compare the sampled ranges, one read of each side per range.
+     * Compare the sampled ranges, several ranges per read, since some engines
+     * scan the whole table for each read.
      */
     private long compareSample(TableCopy table, Progress progress, long doneBefore)
         throws SQLException, MigrationException, InterruptedException {
         String name = table.table();
         long compared = 0;
-        for (SamplePlan.Range range : table.sample().ranges()) {
+        List<SamplePlan.Range> ranges = table.sample().ranges();
+        for (int start = 0; start < ranges.size(); ) {
             stop.check();
+            List<long[]> group = new ArrayList<>();
+            long rows = 0;
+            int end = start;
+            while (end < ranges.size() && (group.isEmpty() || rows + ranges.get(end).rows() <= GROUP_ROWS)) {
+                SamplePlan.Range range = ranges.get(end++);
+                group.add(new long[]{range.fromRowId(), range.toRowId()});
+                rows += range.rows();
+            }
             List<Row> expected = retry.call("reading " + name,
-                () -> source.readRange(name, table.sourceColumns(), range.fromRowId(), range.toRowId()));
-            if (expected.size() != range.rows()) {
+                () -> source.readRanges(name, table.sourceColumns(), group));
+            if (expected.size() != rows) {
                 throw new MigrationException("Table " + name + " of the source has " + expected.size()
-                    + " rows in " + range + " now, not " + range.rows() + ". Something else writes to the source.");
+                    + " rows in " + ranges.subList(start, end) + " now, not " + rows
+                    + ". Something else writes to the source.");
             }
             List<Row> actual = retry.call("reading " + name,
-                () -> target.readRange(name, table.targetColumns(), range.fromRowId(), range.toRowId()));
+                () -> target.readRanges(name, table.targetColumns(), group));
             compareRows(table, expected, actual);
-            compared += range.rows();
+            compared += rows;
             progress.update(doneBefore + compared, name);
+            start = end;
         }
         return compared;
     }

@@ -388,37 +388,65 @@ class MigrationCapabilitiesTest {
         }
 
         @Test
-        @DisplayName("should turn off migrations from and to ClickHouse, which have no endpoints")
-        void clickHouseWithoutEndpoints() {
+        @DisplayName("should migrate from and to ClickHouse through its registered endpoints")
+        void clickHouseRegistered() {
             AssumeCapability.strategy("migrate-db.protocol", "reload-lifecycle");
             CoreProtectMigration migration = new CoreProtectMigration(REAL);
 
-            assertEquals("LibreProtect can't write ClickHouse databases in migrations yet",
-                REAL.get(CoreProtectMigration.target(Engine.CLICKHOUSE)).reason());
-            assertEquals(EnumSet.of(Engine.SQLITE, Engine.MYSQL, Engine.DUCKDB), migration.engines());
+            assertEquals("migration-reads", REAL.get(CoreProtectMigration.source(Engine.CLICKHOUSE)).strategy());
+            assertEquals("compatibility-rows", REAL.get(CoreProtectMigration.target(Engine.CLICKHOUSE)).strategy());
+            assertEquals(EnumSet.allOf(Engine.class), migration.engines());
             coreProtect.useEngine(Engine.SQLITE);
-            assertEquals("LibreProtect can't write ClickHouse databases in migrations yet",
-                migration.unavailableReason(Engine.CLICKHOUSE));
-            assertNull(migration.unavailableReason(Engine.DUCKDB));
+            assertNull(migration.unavailableReason(Engine.CLICKHOUSE));
             coreProtect.useEngine(Engine.CLICKHOUSE);
-            assertEquals("CoreProtect's ClickHouse database can't be read: LibreProtect can't read ClickHouse databases"
-                + " in migrations yet", migration.unavailableReason(Engine.SQLITE));
+            assertNull(migration.unavailableReason(Engine.SQLITE));
+            assertNull(migration.unavailableReason(Engine.DUCKDB));
+            // CoreProtect takes a prepared ClickHouse target over, and closes what it gives up the same way
+            String closes = "member\tmigrate-db.target.clickhouse\tnet/coreprotect/database/clickhouse/"
+                + "ClickHouseDatabase#close()V";
+            assertTrue(REAL.get(CoreProtectMigration.target(Engine.CLICKHOUSE)).reportLines().contains(closes),
+                REAL.get(CoreProtectMigration.target(Engine.CLICKHOUSE)).reportLines()::toString);
         }
 
         @Test
         @DisplayName("should name each migration it can't do as users know it, with what CoreProtect lacks, for the"
             + " console")
         void unavailableFeatures() {
-            // ClickHouse, where CoreProtect has it, has no endpoints for migrations yet
-            assertEquals(REAL.get(CoreProtectMigration.target(Engine.CLICKHOUSE)).isAbsent() ? Map.of() : Map.of(
-                "/co migrate-db from ClickHouse", "LibreProtect can't read ClickHouse databases in migrations yet",
-                "/co migrate-db to ClickHouse", "LibreProtect can't write ClickHouse databases in migrations yet"),
-                CoreProtectMigration.unavailableFeatures(REAL));
+            assertEquals(Map.of(), CoreProtectMigration.unavailableFeatures(REAL));
 
             Map<String, String> none = CoreProtectMigration.unavailableFeatures(Capabilities.probe(Upstream.coreProtect()
                 .hiding(Names.CONFIG_HANDLER + "#migrationRunning")));
             assertEquals(List.of("/co migrate-db"), List.copyOf(none.keySet()), none::toString);
             assertTrue(none.get("/co migrate-db").contains("ConfigHandler.migrationRunning"), none::toString);
+
+            if (REAL.get(CoreProtectMigration.target(Engine.CLICKHOUSE)).isAvailable()) {
+                assertEquals(Map.of("/co migrate-db from and to ClickHouse", "CoreProtect has no Config.CLICKHOUSE_TLS"),
+                    CoreProtectMigration.unavailableFeatures(Capabilities.probe(Upstream.coreProtect()
+                        .hiding(Names.CONFIG + "#CLICKHOUSE_TLS"))));
+                Map<String, String> target = CoreProtectMigration.unavailableFeatures(Capabilities.probe(
+                    Upstream.coreProtect().hiding(Names.CLICKHOUSE_EVENT_BATCH + "#addCompatibilityRow")));
+                assertEquals(List.of("/co migrate-db to ClickHouse"), List.copyOf(target.keySet()), target::toString);
+            }
+        }
+
+        @Test
+        @DisplayName("should keep migrations from ClickHouse when CoreProtect's ClickHouse writer changed")
+        void clickHouseWriterChanged() {
+            AssumeCapability.strategy("migrate-db.protocol", "reload-lifecycle");
+            Capabilities capabilities = Capabilities.probe(Upstream.coreProtect().hiding(Names.CLICKHOUSE_EVENT_BATCH
+                + "#addCompatibilityRow"));
+            CoreProtectMigration migration = new CoreProtectMigration(capabilities);
+
+            Choice<?> target = capabilities.get(CoreProtectMigration.target(Engine.CLICKHOUSE));
+            assertEquals(Choice.UNAVAILABLE, target.strategy(), target::toString);
+            assertTrue(target.reason().startsWith("CoreProtect has no ClickHouseEventBatch.addCompatibilityRow("),
+                target::reason);
+            assertEquals("migration-reads", capabilities.get(CoreProtectMigration.source(Engine.CLICKHOUSE))
+                .strategy());
+            coreProtect.useEngine(Engine.CLICKHOUSE);
+            assertNull(migration.unavailableReason(Engine.MYSQL));
+            coreProtect.useEngine(Engine.SQLITE);
+            assertEquals(target.reason(), migration.unavailableReason(Engine.CLICKHOUSE));
         }
 
         @ParameterizedTest(name = "without {0}")
@@ -485,6 +513,10 @@ class MigrationCapabilitiesTest {
                 + renamedClass.replace('.', '/') + ";Z)V\t";
             assertTrue(protocol.reportLines().stream().anyMatch(line -> line.startsWith(relied)),
                 protocol.reportLines()::toString);
+            // Only ClickHouse's own migrations name the class, and turn off
+            Choice<?> clickHouse = renamed.get(CoreProtectMigration.target(Engine.CLICKHOUSE));
+            assertEquals(Choice.UNAVAILABLE, clickHouse.strategy(), clickHouse::toString);
+            assertTrue(clickHouse.reason().contains("ClickHouseDatabase"), clickHouse::reason);
         }
 
         @Test

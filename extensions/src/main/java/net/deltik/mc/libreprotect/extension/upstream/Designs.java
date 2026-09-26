@@ -56,6 +56,26 @@ public final class Designs {
         Names.DATABASE + "#awaitConnectionDrain",
         Names.PURGE_POLICY);
 
+    /**
+     * CoreProtect's lookup index of its ClickHouse data, which lookups by
+     * player read instead of the events: its writer stamps every row of the
+     * event table with its write version, which the table then requires,
+     * and adds an index row beside each row of the tables that those lookups
+     * search. A purge closes the index while it deletes, and CoreProtect
+     * refuses to start while a purge that didn't complete is still deleting.
+     * Databases from before it are upgraded in place when CoreProtect opens
+     * them. LibreProtect writes ClickHouse through that writer, so it takes
+     * the same way with or without the index; it relies on the index only
+     * while CoreProtect has it. Its traces come from the index, the lookups
+     * that read it, the upgrade's check of the older schema and the writer
+     * registration that the index is owned by.
+     */
+    public static final Design CLICKHOUSE_LOOKUP_INDEX = Design.of("ClickHouse lookup index",
+        Names.CLICKHOUSE_LOOKUP_INDEX,
+        Names.CLICKHOUSE_LOOKUP,
+        Names.CLICKHOUSE_SCHEMA + "#validateLegacyPhysicalSchema",
+        Names.CLICKHOUSE_WRITER_REGISTRATION + "#schemaOwner");
+
     private Designs() {
     }
 }

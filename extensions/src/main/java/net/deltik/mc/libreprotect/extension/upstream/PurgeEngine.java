@@ -286,8 +286,17 @@ public abstract class PurgeEngine {
             upstream.relyOn("has its retention purge, once it's open and owns its dataset", Names.CLICKHOUSE_DATABASE,
                 "purge" + range);
             upstream.relyOn("drops the monthly partitions that the time range covers, deletes the rest of its rows,"
-                + " and cleans up what they leave of entities, one purge at a time", Names.CLICKHOUSE_RETENTION,
+                + " and cleans up what they leave of entities, one purge at a time; where CoreProtect has a lookup"
+                + " index, it refuses while mutations of the event table are unfinished, such as an earlier purge's"
+                + " deletions, and closes the index to lookups until it completes", Names.CLICKHOUSE_RETENTION,
                 "purge" + range);
+            upstream.relyOnSince(Designs.CLICKHOUSE_LOOKUP_INDEX, "opens the lookup index again when CoreProtect"
+                + " opens the database after a purge that didn't complete, but refuses to open the database while"
+                + " mutations of the event table are unfinished", Names.CLICKHOUSE_LOOKUP_INDEX,
+                "recover(Ljava/sql/Connection;Ljava/lang/String;Ljava/lang/String;Ljava/util/UUID;)V");
+            upstream.relyOnSince(Designs.CLICKHOUSE_LOOKUP_INDEX, "closes or opens the lookup index to lookups for"
+                + " the installation that owns the purge, which lookups read only while no installation's is closed",
+                Names.CLICKHOUSE_LOOKUP_INDEX, "setReady(Ljava/sql/Connection;Ljava/lang/String;Ljava/util/UUID;Z)V");
             upstream.relyOn("cancels purges in progress, then waits for purgeRunning to clear before it closes the"
                 + " database", Names.SHUTDOWN_SERVICE, "safeShutdown(Lorg/bukkit/plugin/Plugin;)V");
             upstream.relyOn("waits, for up to 15 minutes, while purgeRunning is set", Names.SHUTDOWN_SERVICE,

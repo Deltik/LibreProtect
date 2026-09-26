@@ -82,6 +82,7 @@
     <sqlite-jdbc.version>3.53.0.0</sqlite-jdbc.version>
     <duckdb.version>1.4.5.0</duckdb.version>
     <mysql-connector-j.version>9.6.0</mysql-connector-j.version>
+    <slf4j.version>2.0.17</slf4j.version>
 
     <!-- How many JVMs run test classes at once, and their options.
          scripts/lp sets the number by the machine's processors and memory.
@@ -153,6 +154,11 @@
         <artifactId>mysql-connector-j</artifactId>
         <version>${mysql-connector-j.version}</version>
       </dependency>
+      <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-api</artifactId>
+        <version>${slf4j.version}</version>
+      </dependency>
     </dependencies>
   </dependencyManagement>
 
@@ -170,7 +176,8 @@
           <version>3.6.0</version>
           <configuration>
             <!-- Test classes run in several JVMs at once, each JVM running
-                 one class at a time. -->
+                 one class at a time. Tests that share a database server use
+                 table prefixes of their own. -->
             <forkCount>${lp.test.forks}</forkCount>
             <reuseForks>true</reuseForks>
             <argLine>${lp.test.jvm}</argLine>

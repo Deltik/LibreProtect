@@ -141,6 +141,8 @@
     "capability auto-purge.retention=config-field",
     "capability auto-purge.settings=config-fields",
     "capability auto-purge.tables=purge-command-list",
+    "capability clickhouse.reads=absent",
+    "capability clickhouse.writes=absent",
     "capability config.lock=absent",
     "capability consumer.gate=pause-flags",
     "capability consumer.start-result=absent",
