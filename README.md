@@ -11,7 +11,7 @@
 **LibreProtect** is a privacy-hardened build of [CoreProtect](https://github.com/PlayPro/CoreProtect), the block logging and rollback plugin for Minecraft servers. It is rebuilt from each CoreProtect release, automatically when possible.
 
 * **No telemetry.** CoreProtect contacts coreprotect.net for update checks, usage statistics, error reports, donation-key checks and translations, and it bundles bStats. LibreProtect sends each of those requests through a [network policy](#configuration). By default, it answers translation requests itself, from translations it bundles, and blocks everything else except update checks. It answers those by asking GitHub or Modrinth for LibreProtect's latest release, without sending your version number, server port or license key. The `privacy-first` preset blocks update checks too.
-* **Everything unlocked.** Features that CoreProtect reserves for donors work without a donation key, including [automatic purging](#automatic-purging), which LibreProtect implements itself.
+* **Everything unlocked.** Features that CoreProtect reserves for donors work without a donation key, including [automatic purging](#automatic-purging) and [database migration](#database-migration), which LibreProtect implements itself.
 * **Drop-in.** LibreProtect keeps CoreProtect's commands, permissions, API, data folder and database. Add-ons that depend on CoreProtect keep working, and you can switch back and forth between the two.
 
 LibreProtect is an independent project. It isn't affiliated with or endorsed by CoreProtect or its authors.
@@ -25,6 +25,7 @@ LibreProtect is an independent project. It isn't affiliated with or endorsed by 
 * [Differences from CoreProtect](#differences-from-coreprotect)
 * [Compatibility](#compatibility)
 * [Automatic Purging](#automatic-purging)
+* [Database Migration](#database-migration)
 * [License](#license)
 
 <!-- begin store description -->
@@ -58,7 +59,7 @@ Development builds of CoreProtect's unreleased code are published as [prerelease
 
 Commands, permissions and the API are CoreProtect's. See [CoreProtect's documentation](https://docs.coreprotect.net/).
 
-LibreProtect also has its own, free implementation of [automatic purging](#automatic-purging) of old data, which CoreProtect reserves for its paid builds.
+LibreProtect also has its own, free implementations of two features that CoreProtect reserves for its paid builds: [automatic purging](#automatic-purging) of old data, and [database migration](#database-migration) with `/co migrate-db`.
 
 ## Configuration
 
@@ -233,7 +234,7 @@ The network policy covers the requests that CoreProtect and the libraries it bun
 * The startup log shows which network policy is active.
 * LibreProtect bundles CoreProtect's [translations](#translations) and answers translation requests itself, instead of sending your phrases to coreprotect.net.
 * Update checks ask [GitHub or Modrinth](#update-sources) for LibreProtect's releases instead of asking update.coreprotect.net, and the update notice shows LibreProtect's version.
-* Database migration (`/co migrate-db`) and [automatic purging](#automatic-purging) (`auto-purge`) work. CoreProtect has them only in its paid builds, whose code isn't public, so LibreProtect has its own implementations.
+* [Database migration](#database-migration) (`/co migrate-db`) and [automatic purging](#automatic-purging) (`auto-purge`) work. CoreProtect has them only in its paid builds, whose code isn't public, so LibreProtect has its own implementations.
 
 Each release lists its exact changes in `DIFFERENCES.md`, which is attached to the release and included in the JAR. It also says which of LibreProtect's features work with the CoreProtect that the release was built from.
 
@@ -262,13 +263,42 @@ Changes apply shortly after `/co reload` or a restart. The log shows the next ru
 Automatic purging runs in the background while the server stays usable:
 
 * On SQLite, MySQL and DuckDB, it removes old rows in small chunks with pauses in between. While a chunk runs, CoreProtect may refuse a rollback, `/co reload` or `/co purge` with its message that a purge is in progress; try again a moment later. On SQLite and MySQL, the newest row of each of the `block`, `entity` and `skull` tables, and of `entity_spawn` on CoreProtect versions that have it, stays, however old it is, because SQLite, and MySQL before 8.0, could give its row ID to new data that other rows still refer to.
-* On ClickHouse, CoreProtect drops the monthly partitions that are entirely older and deletes the older rows of the others in one step, which needs `database-lock: true` in `config.yml`. Until it finishes, lookups, rollbacks, `/co purge` and `/co reload` are refused as they are during `/co purge`, and it doesn't stop for them. A shutdown doesn't wait for it: CoreProtect cancels it, as it cancels `/co purge`, but a deletion that has started keeps running inside ClickHouse. On CoreProtect versions that look for unfinished deletions, until it finishes, the next purge is refused and CoreProtect won't start on ClickHouse.
+* On ClickHouse, CoreProtect drops the monthly partitions that are entirely older and deletes the older rows of the others in one step, which needs `database-lock: true` in `config.yml`. Until it finishes, lookups, rollbacks, `/co purge`, `/co reload` and `/co migrate-db` are refused as they are during `/co purge`, and it doesn't stop for them. A shutdown doesn't wait for it: CoreProtect cancels it, as it cancels `/co purge`, but a deletion that has started keeps running inside ClickHouse. On CoreProtect versions that look for unfinished deletions, until it finishes, the next purge is refused and CoreProtect won't start on ClickHouse.
 
 On the other engines, a run stops when the server shuts down, a manual purge, database migration or conversion starts, or `/co consumer pause` is used. On any engine, the next run removes what a stopped run left.
 
 If the CoreProtect that LibreProtect was built from lacks something that automatic purging needs, the log says what when `auto-purge` is on, and runs stop before they touch the database. A database engine that LibreProtect doesn't know is never purged.
 
 Removing rows makes room for new data, but it may not shrink the database files right away. On an existing database with a lot of old data, you can run a manual purge first, such as `/co purge t:180d`, with `#optimize` on MySQL to reclaim the space.
+
+## Database Migration
+
+`/co migrate-db` copies all of CoreProtect's data from the database it uses now to another database, checks the copy, and switches CoreProtect to it while the server keeps running. Only the server console can run it.
+
+```
+co migrate-db <database> [--full-validation]
+```
+
+It migrates between SQLite (`sqlite`) and MySQL (`mysql`), and on CoreProtect versions that support DuckDB and ClickHouse, between any two of SQLite, MySQL, DuckDB (`duckdb`) and ClickHouse (`clickhouse`). `co migrate-db` alone shows which databases it can migrate to.
+
+Before you start:
+
+* Keep `database-lock: true` in `config.yml`.
+* The new database must not have CoreProtect's data in it. Before migrating to SQLite, move the SQLite file away: `plugins/CoreProtect/database.db`, or the file that `sqlite-database` in `config.yml` names on CoreProtect versions with that setting. A DuckDB file, `plugins/CoreProtect/database.duckdb`, must not exist yet. A MySQL or ClickHouse database must not have CoreProtect's data under the table prefix. Other tables are left alone.
+* On CoreProtect versions with the `database-type` setting in `config.yml`, leave `database-type` naming the database in use, and load the new database's settings with a restart or `/co reload` first. MySQL and ClickHouse use the `table-prefix` in `config.yml` when you migrate from SQLite or DuckDB, and keep the prefix in use when you migrate from MySQL or ClickHouse. SQLite and DuckDB always use `co_`.
+* On CoreProtect versions without `database-type`, set `use-mysql` and the MySQL settings in `config.yml` for the new database, as CoreProtect's instructions say, but don't restart or use `/co reload`. LibreProtect reads the new database's settings from the file. While it copies, it sets `use-mysql` back to the database in use, so that a crash leaves CoreProtect there, and sets it to the new database when it switches.
+* Don't change the new database's settings once the migration starts. LibreProtect checks them again before it copies and before it switches, and stops if they changed.
+* The ClickHouse server must be a version that CoreProtect supports (see [CoreProtect's documentation](https://docs.coreprotect.net/)), with an Atomic database. Before it copies anything, the migration asks CoreProtect's own check whether the server is new enough, and stops if it isn't.
+
+While the migration runs, CoreProtect keeps logging: new events wait in memory and go to the new database after the switch. Lookups, rollbacks, purges and `/co reload` are refused until it finishes. The console shows the progress. Don't stop the server until the migration reports its result.
+
+Before it switches, LibreProtect checks the copy: every table's row count and row IDs, every row of small tables and reference tables, and a sample of the rows of larger tables. `--full-validation` compares every row instead. Any difference stops the migration before the switch.
+
+Between SQLite or MySQL and DuckDB or ClickHouse, CoreProtect's own conversions change the format of some data. A value that they can't convert is copied unchanged and listed, since CoreProtect reads either format, but a migration to ClickHouse fails instead. If the conversions themselves don't work the way LibreProtect expects, the migration fails and says what changed, rather than copying unconverted data.
+
+When it switches, LibreProtect checks that CoreProtect actually uses the new database. Then `config.yml` selects the new database, with `database-type`, or with `use-mysql` on CoreProtect versions without `database-type`. The old database is left as it was, so you can archive or delete it once you're satisfied. If the migration fails, or the server stops during it, CoreProtect keeps using the old database, and the new one is marked as unfinished so that CoreProtect won't start on it. Delete the new database before you try again.
+
+If the CoreProtect that LibreProtect was built from lacks something that a migration needs, the command says so instead of starting: `/co migrate-db isn't available with this CoreProtect build: <reason>`, or `Migrating to <database> isn't available with this CoreProtect build: <reason>` when only some migrations are affected. For example, if CoreProtect's ClickHouse writer changed, migrating to ClickHouse is refused, but migrating from ClickHouse to another database still works.
 <!-- end store description -->
 
 ## For Developers
@@ -297,7 +327,7 @@ LibreProtect never edits CoreProtect's source code. Each build:
    The audit covers upstream's code. Besides connecting to the databases in `config.yml`, LibreProtect's own code makes one kind of network request itself: update checks to the [update sources](#update-sources), and only when the network policy answers update checks.
 6. **Runs integration tests** ([`integration/`](integration/)) on real Paper servers, with a Java agent that records and blocks all outgoing network traffic, and MySQL and ClickHouse in containers:
    * One server runs on the same data with stock CoreProtect, then LibreProtect, then stock CoreProtect again. Stock CoreProtect must be seen contacting coreprotect.net, which proves that the test can see network traffic at all. LibreProtect must make no requests but the default policy's update checks, read stock CoreProtect's data, and pass API, command and message checks. Stock CoreProtect must then read LibreProtect's data.
-   * More servers check that the capabilities on a running server match the report in the JAR, and test bundled and layered translations, update checks against stand-ins for GitHub and Modrinth, and automatic purging on each database engine that CoreProtect supports, including stopping and resuming.
+   * More servers check that the capabilities on a running server match the report in the JAR, and test bundled and layered translations, update checks against stand-ins for GitHub and Modrinth, `/co migrate-db` through each database engine that CoreProtect supports and back, and automatic purging on each of them, including stopping and resuming.
 
 Builds are reproducible: the same inputs produce a byte-identical JAR.
 
