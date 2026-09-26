@@ -166,6 +166,58 @@ check_version() {
     fi
 }
 
+# The libraries that the last upstream build's plugin.yml has servers
+# download, one per line, from its top-level libraries list in block style
+# (- a) or flow style ([a, b]), without quotes
+upstream_plugin_libraries() {
+    local plugin_yml="$UPSTREAM_DIR/target/classes/plugin.yml"
+    [[ -f "$plugin_yml" ]] || die "Upstream build did not produce $plugin_yml"
+    awk '
+        { sub(/\r$/, "") }
+        flow != "" { flow = flow " " $0 }
+        flow == "" && /^libraries:/ {
+            rest = $0
+            sub(/^libraries:[ \t]*/, "", rest)
+            if (rest !~ /^\[/) { block = 1; next }
+            flow = rest
+        }
+        flow != "" {
+            if (flow ~ /\]/) {
+                sub(/^\[/, "", flow)
+                sub(/\].*$/, "", flow)
+                count = split(flow, items, ",")
+                for (i = 1; i <= count; i++) print items[i]
+                flow = ""
+            }
+            next
+        }
+        block && /^[ \t]*-/ { item = $0; sub(/^[ \t]*-/, "", item); sub(/[ \t]#.*$/, "", item); print item; next }
+        block && /^[ \t]*(#.*)?$/ { next }
+        { block = 0 }
+    ' "$plugin_yml" | tr -d "\"' \t"
+}
+
+# The DuckDB driver version that the last upstream build's plugin.yml has
+# servers download, or nothing if it has them download none
+upstream_duckdb_version() {
+    local libraries library version=""
+    local -a coordinates
+    # Command substitutions don't inherit set -e, so pass a failure on
+    libraries="$(upstream_plugin_libraries)" || exit
+    while IFS= read -r library; do
+        # groupId:artifactId[:extension[:classifier]]:version, as Maven's resolver reads it
+        IFS=: read -r -a coordinates <<<"$library"
+        if (( ${#coordinates[@]} >= 3 && ${#coordinates[@]} <= 5 )) \
+            && [[ "${coordinates[0]}" == org.duckdb && "${coordinates[1]}" == duckdb_jdbc ]]; then
+            [[ -z "$version" ]] || die "Upstream's plugin.yml lists the DuckDB driver more than once"
+            version="${coordinates[${#coordinates[@]} - 1]}"
+            [[ "$version" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]] \
+                || die "Unexpected DuckDB version '$version' in upstream's plugin.yml"
+        fi
+    done <<<"$libraries"
+    printf '%s' "$version"
+}
+
 # CoreProtect generation of the checked-out upstream: 25 once it has the
 # multi-engine database layer (DuckDB, ClickHouse), otherwise 24. Only the
 # integration test and the database containers go by it: which engines to
@@ -382,6 +434,13 @@ cmd_build() {
         -Dupstream.jar="$upstream_jar" -Dlp.test.forks="$forks")
     $skip_tests && maven_args+=(-Dmaven.test.skip=true)
     containers_healthy && maven_args+=(-Dlpit.containers="$CONTAINERS_ENV")
+    local duckdb_version
+    duckdb_version="$(upstream_duckdb_version)"
+    if [[ -n "$duckdb_version" ]]; then
+        # Servers run the DuckDB driver that upstream's plugin.yml names, not the one in LibreProtect's pom
+        log "Using DuckDB $duckdb_version, which upstream's plugin.yml has servers download"
+        maven_args+=(-Dduckdb.version="$duckdb_version")
+    fi
     "$ROOT/mvnw" "${maven_args[@]}"
 
     log "Transforming"

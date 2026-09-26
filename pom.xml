@@ -80,6 +80,8 @@
          MySQL) or download for CoreProtect 25 (DuckDB). The extensions' own
          code reaches drivers only through JDBC and reflection. -->
     <sqlite-jdbc.version>3.53.0.0</sqlite-jdbc.version>
+    <!-- scripts/lp overrides this with the version that upstream's plugin.yml
+         has servers download, when it names one -->
     <duckdb.version>1.4.5.0</duckdb.version>
     <mysql-connector-j.version>9.6.0</mysql-connector-j.version>
     <slf4j.version>2.0.17</slf4j.version>

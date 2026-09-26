@@ -18,3 +18,9 @@ updates:
     ignore:
       # Compiled against deliberately: the oldest server API upstream supports
       - dependency-name: com.destroystokyo.paper:paper-api
+      # Servers run the DuckDB driver that CoreProtect's plugin.yml has them
+      # download. scripts/lp builds with that version whenever plugin.yml
+      # names one, so the version in pom.xml only counts for CoreProtect
+      # versions without DuckDB, whose servers don't run it. Updates to it
+      # would change nothing that servers run.
+      - dependency-name: org.duckdb:duckdb_jdbc
