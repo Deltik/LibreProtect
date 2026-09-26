@@ -48,7 +48,8 @@ class NewerDesignTest {
     @RegisterExtension
     final CoreProtectFixture coreProtect = new CoreProtectFixture();
 
-    private static final List<Capability<?>> WITH_OLDER_WAYS = List.of(ActiveDatabase.CAPABILITY);
+    private static final List<Capability<?>> WITH_OLDER_WAYS = List.of(ActiveDatabase.CAPABILITY,
+        PurgeTables.CAPABILITY, Leases.CAPABILITY);
 
     @Test
     @DisplayName("should know CoreProtect 25 by every one of its traces, and CoreProtect 24 by none")
@@ -105,6 +106,9 @@ class NewerDesignTest {
         Capabilities capabilities = Capabilities.probe(Upstream.coreProtect().hiding(
             Names.CONSUMER + "#isPersistenceHalted", Names.CONFIG_HANDLER + "#shutdownDrainRunning"));
 
+        assertEquals("CoreProtect has no Database.awaitConnectionDrain(long)",
+            Capabilities.probe(Upstream.coreProtect().hiding(Names.DATABASE + "#awaitConnectionDrain"))
+                .get(Leases.CAPABILITY).reason());
         assertEquals("CoreProtect has no Consumer.isPersistenceHalted()",
             capabilities.get(ConsumerGate.CAPABILITY).reason());
         assertEquals("CoreProtect has no ConfigHandler.shutdownDrainRunning",

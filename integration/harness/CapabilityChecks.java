@@ -31,7 +31,7 @@ import java.util.zip.ZipFile;
 /**
  * What LibreProtect's extensions do with CoreProtect on a real server,
  * compared with what the build found. The build probes the upstream JAR with
- * the server API of its test class path, and bundles the
+ * the server API and the drivers of its test class path, and bundles the
  * outcome as {@code META-INF/libreprotect/capabilities.tsv}. The server probes
  * the same classes with its own API and the libraries it downloaded for
  * plugin.yml, such as DuckDB's driver. The reports must be the same, but for

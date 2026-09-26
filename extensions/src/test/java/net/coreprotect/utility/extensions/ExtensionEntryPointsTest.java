@@ -188,24 +188,34 @@ class ExtensionEntryPointsTest {
         }
 
         @Test
-        @DisplayName("stop() should be a no-op")
-        void stopIsNoOp() {
-            assertDoesNotThrow(BackgroundService::stop);
-            assertDoesNotThrow(BackgroundService::stop);
-            assertTrue(testLogger.getRecords().isEmpty());
-        }
-
-        @Test
-        @DisplayName("stop() should be safe without start()")
+        @DisplayName("stop() should be safe without start(), and more than once")
         void stopWithoutStart() {
             assertDoesNotThrow(BackgroundService::stop);
+            assertDoesNotThrow(BackgroundService::stop);
+            assertTrue(testLogger.getRecords().isEmpty(), () -> testLogger.getMessages().toString());
         }
 
         @Test
-        @DisplayName("start() should stay silent and not throw outside a plugin class loader")
-        void startOutsidePlugin() {
-            assertDoesNotThrow(BackgroundService::start);
+        @DisplayName("start() and stop() should not throw, and stay silent while auto-purge isn't configured")
+        void startAndStop() throws InterruptedException {
+            try {
+                assertDoesNotThrow(BackgroundService::start);
+                assertDoesNotThrow(BackgroundService::start);
+            } finally {
+                assertDoesNotThrow(BackgroundService::stop);
+            }
+            long deadline = System.nanoTime() + 10_000_000_000L;
+            while (autoPurgeThreads() > 0 && System.nanoTime() < deadline) {
+                Thread.sleep(5);
+            }
+            assertEquals(0, autoPurgeThreads(), "stop() ends the auto-purge thread");
             assertTrue(testLogger.getRecords().isEmpty(), () -> testLogger.getMessages().toString());
+        }
+
+        private long autoPurgeThreads() {
+            return Thread.getAllStackTraces().keySet().stream()
+                .filter(thread -> thread.getName().equals("LibreProtect auto-purge") && thread.isAlive())
+                .count();
         }
 
         @Test

@@ -354,7 +354,7 @@ class TransformerTest {
 
                 This CoreProtect doesn't have these at all:
 
-                - `auto-purge.engine.duckdb`: CoreProtect has no DuckDB
+                - `auto-purge` with DuckDB: CoreProtect has no DuckDB
                 - `clickhouse.writes`: This CoreProtect has no ClickHouse support
                 - `migrate-db.source.clickhouse`, `migrate-db.target.clickhouse`: CoreProtect has no ClickHouse
 

@@ -35,8 +35,12 @@ class DifferencesTest {
     @Test
     @DisplayName("names known capabilities as features")
     void knownFeatures() {
+        assertEquals("`auto-purge`: taking turns with CoreProtect's database work",
+            Differences.feature("auto-purge.coordination"));
+        assertEquals("`auto-purge` with SQLite", Differences.feature("auto-purge.engine.sqlite"));
         // Shared by several features, and shown only when unavailable
         assertEquals("Pausing CoreProtect's database writes", Differences.feature("consumer.gate"));
+        assertEquals("Noticing a manual purge at work", Differences.feature("hook.purge-worker"));
     }
 
     @Test

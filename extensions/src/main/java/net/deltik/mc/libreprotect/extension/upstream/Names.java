@@ -29,6 +29,8 @@ package net.deltik.mc.libreprotect.extension.upstream;
  */
 public final class Names {
 
+    public static final String PURGE_COMMAND = "net.coreprotect.command.PurgeCommand";
+    public static final String ROLLBACK_RESTORE_COMMAND = "net.coreprotect.command.RollbackRestoreCommand";
     public static final String CONFIG = "net.coreprotect.config.Config";
     public static final String CONFIG_HANDLER = "net.coreprotect.config.ConfigHandler";
     public static final String DATABASE_CONFIG_WRITER = "net.coreprotect.config.DatabaseConfigWriter";
@@ -42,7 +44,10 @@ public final class Names {
     public static final String PURGE_POLICY = "net.coreprotect.database.PurgePolicy";
     public static final String CLICKHOUSE_DATABASE = "net.coreprotect.database.clickhouse.ClickHouseDatabase";
     public static final String CLICKHOUSE_JDBC_CONFIG = "net.coreprotect.database.clickhouse.ClickHouseJdbcConfig";
+    public static final String CLICKHOUSE_RETENTION = "net.coreprotect.database.clickhouse.ClickHouseRetention";
     public static final String BLOCK_STATEMENT = "net.coreprotect.database.statement.BlockStatement";
+    public static final String SHUTDOWN_SERVICE = "net.coreprotect.services.ShutdownService";
+    public static final String ENTITY_SPAWN_TRACKING = "net.coreprotect.utility.EntitySpawnTracking";
 
     private Names() {
     }

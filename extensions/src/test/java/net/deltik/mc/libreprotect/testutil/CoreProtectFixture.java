@@ -21,17 +21,22 @@
 package net.deltik.mc.libreprotect.testutil;
 
 import net.deltik.mc.libreprotect.extension.common.Engine;
+import net.deltik.mc.libreprotect.extension.upstream.ActiveDatabase;
 import net.deltik.mc.libreprotect.extension.upstream.Names;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.InstanceField;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Missing;
+import net.deltik.mc.libreprotect.extension.upstream.reflect.Shape;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.StaticField;
+import net.deltik.mc.libreprotect.extension.upstream.reflect.StaticMethod;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Upstream;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.UpstreamClass;
 import org.junit.jupiter.api.extension.AfterEachCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -93,6 +98,64 @@ public final class CoreProtectFixture implements AfterEachCallback {
      */
     public Object get(String path) {
         return accessor(path).get.get();
+    }
+
+    /**
+     * Call a static method of CoreProtect's, found by its name and number of
+     * parameters, such as one that only one generation has. What it
+     * changes isn't put back.
+     *
+     * @param path a method as {@code Class.method}, as for {@link #set}, such
+     *             as {@code Consumer.claimRollback}
+     * @return what it returns, or {@code null} if nothing
+     */
+    public Object call(String path, Object... args) {
+        int dot = path.lastIndexOf('.');
+        String methodName = path.substring(dot + 1);
+        try {
+            UpstreamClass owner = upstream.type(qualified(path.substring(0, dot)));
+            Method declared = declaredMethod(owner.type(), methodName, args.length);
+            Class<?> returns = declared.getReturnType().isPrimitive() ? declared.getReturnType() : Object.class;
+            return owner.staticMethod(methodName, returns, declared.getParameterTypes()).call(args);
+        } catch (Missing e) {
+            throw new IllegalArgumentException("CoreProtect has no " + path + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Have CoreProtect create its tables in the database it uses, with its
+     * own schema code, which also lists them in
+     * {@code ConfigHandler.databaseTables}, as at startup: through the
+     * overload that takes the engine where CoreProtect has one, and otherwise
+     * through the one that takes {@code use-mysql}.
+     */
+    public CoreProtectFixture createTables(String prefix) throws Exception {
+        Engine engine = ActiveDatabase.CAPABILITY.probe(upstream).require().activeEngine();
+        UpstreamClass database = upstream.type(Names.DATABASE);
+        try (Connection connection = database.staticMethod("getConnection", Connection.class, boolean.class,
+            int.class).call(true, 0)) {
+            if (upstream.has(Names.DATABASE_TYPE)) {
+                StaticMethod<Void, RuntimeException> create = database.staticMethodShaped("createDatabaseTables",
+                    void.class, Shape.exactly(String.class), Shape.exactly(boolean.class),
+                    Shape.exactly(Connection.class), Shape.enumWith("SQLITE", "MYSQL"), Shape.exactly(boolean.class));
+                create.call(prefix, true, connection, upstream.type(create.parameterType(3)).asEnum()
+                    .constant(engine.name()), false);
+            } else {
+                database.staticMethod("createDatabaseTables", void.class, String.class, boolean.class,
+                    Connection.class, boolean.class, boolean.class).call(prefix, true, connection,
+                    engine == Engine.MYSQL, false);
+            }
+        }
+        return this;
+    }
+
+    /**
+     * @return whether CoreProtect has a background purge claimed, where it
+     *         has such claims
+     */
+    public boolean backgroundPurgeClaimed() {
+        return upstream.has(Names.CONSUMER + "#isBackgroundPurgeRunning")
+            && Boolean.TRUE.equals(call("Consumer.isBackgroundPurgeRunning"));
     }
 
     /**
@@ -159,6 +222,23 @@ public final class CoreProtectFixture implements AfterEachCallback {
         } catch (Missing e) {
             throw new IllegalArgumentException("CoreProtect's " + path + " can't be set: " + e.getMessage(), e);
         }
+    }
+
+    private static Method declaredMethod(Class<?> type, String name, int parameters) {
+        List<Method> found = new ArrayList<>();
+        for (Class<?> c = type; c != null; c = c.getSuperclass()) {
+            for (Method method : c.getDeclaredMethods()) {
+                if (method.getName().equals(name) && method.getParameterCount() == parameters
+                    && Modifier.isStatic(method.getModifiers()) && !method.isSynthetic()) {
+                    found.add(method);
+                }
+            }
+        }
+        if (found.size() != 1) {
+            throw new IllegalArgumentException(type.getName() + " has " + found.size() + " static methods " + name
+                + " with " + parameters + " parameters");
+        }
+        return found.get(0);
     }
 
     private static Field declared(Class<?> type, String name) {

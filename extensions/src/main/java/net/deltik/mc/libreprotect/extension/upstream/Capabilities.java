@@ -35,7 +35,8 @@ import java.util.Map;
  * How LibreProtect's extensions use this CoreProtect: every capability,
  * probed once. The build probes the upstream JAR it bundles the same way and
  * writes the outcome to {@code capabilities.tsv} (see
- * {@link CapabilityReport}).
+ * {@link CapabilityReport}), so a capability that would be unavailable at
+ * run time stops the release first.
  */
 public final class Capabilities {
 
@@ -44,7 +45,18 @@ public final class Capabilities {
         ActiveDatabase.CAPABILITY,
         Flags.CAPABILITY,
         ConsumerGate.CAPABILITY,
-        StartResult.CAPABILITY));
+        StartResult.CAPABILITY,
+        Hooks.AUTO_PURGE_COUNTER,
+        Hooks.ENTITY_SPAWN_VERIFICATION,
+        Hooks.PURGE_WORKER,
+        PurgeSettings.RETENTION,
+        PurgeSettings.CAPABILITY,
+        PurgeTables.CAPABILITY,
+        Leases.CAPABILITY,
+        PurgeEngine.SQLITE,
+        PurgeEngine.MYSQL,
+        PurgeEngine.DUCKDB,
+        PurgeEngine.CLICKHOUSE));
 
     private static volatile Capabilities current;
 

@@ -40,11 +40,19 @@ import java.util.stream.Collectors;
  */
 final class Differences {
 
+    /** Database engines by the names that CoreProtect's configuration uses, in the order the table shows them */
+    private static final Map<String, String> ENGINES = orderedMap(
+        "sqlite", "SQLite", "mysql", "MySQL", "duckdb", "DuckDB", "clickhouse", "ClickHouse");
+
+    /** Readable names of the capabilities for each database engine, by ID prefix; {@code {}} is the engine */
+    private static final Map<String, String> ENGINE_FEATURES = orderedMap(
+        "auto-purge.engine.", "`auto-purge` with {}");
+
     /**
      * Readable names of the capabilities that users know as features, by
      * ID, in the order the table shows them
      */
-    static final Map<String, String> FEATURES = orderedMap();
+    static final Map<String, String> FEATURES = features();
     private static final List<String> FEATURE_ORDER = List.copyOf(FEATURES.keySet());
 
     /**
@@ -56,7 +64,21 @@ final class Differences {
         "database.selector", "Which database CoreProtect uses",
         "lifecycle.flags", "CoreProtect's state flags",
         "consumer.gate", "Pausing CoreProtect's database writes",
-        "consumer.start-result", "CoreProtect's answers when its maintenance starts");
+        "consumer.start-result", "CoreProtect's answers when its maintenance starts",
+        "hook.auto-purge-counter", "Counting purged rows for `/co status`",
+        "hook.entity-spawn-verification", "Rechecking tracked entities",
+        "hook.purge-worker", "Noticing a manual purge at work");
+
+    private static Map<String, String> features() {
+        Map<String, String> features = new LinkedHashMap<>();
+        features.put("auto-purge.retention", "`auto-purge`: how much to keep");
+        features.put("auto-purge.settings", "`auto-purge`: when to purge, and the table prefix");
+        features.put("auto-purge.coordination", "`auto-purge`: taking turns with CoreProtect's database work");
+        features.put("auto-purge.tables", "`auto-purge`: the tables to purge");
+        ENGINES.forEach((engine, name) -> features.put("auto-purge.engine." + engine, ENGINE_FEATURES
+            .get("auto-purge.engine.").replace("{}", name)));
+        return Collections.unmodifiableMap(features);
+    }
 
     /**
      * @param keysAndValues a key, then its value, and so on
@@ -196,7 +218,8 @@ final class Differences {
 
         md.append("\n## Extension Points\n\n")
             .append("Upstream loads these classes by name, but its public source doesn't include them. LibreProtect ")
-            .append("provides them:\n\n");
+            .append("provides them, with its own implementation of automatic purging (`auto-purge`) and a ")
+            .append("placeholder for `/co migrate-db`:\n\n");
         for (TransformReport.ExtensionPoint extensionPoint : report.extensionPoints) {
             md.append("- ").append(code(extensionPoint.className())).append(", requested by ")
                 .append(codes(extensionPoint.requestedBy())).append("\n");
@@ -224,7 +247,7 @@ final class Differences {
      * transformer has no name for, by ID. A capability that several features
      * share is left out while it's available. Features that this CoreProtect
      * doesn't have at all, such as those of engines it lacks, follow the
-     * table, by the reason. The table is left out while it has no rows.
+     * table, by the reason.
      */
     static void capabilities(StringBuilder md, List<TransformReport.Capability> capabilities) {
         List<TransformReport.Capability> ordered = new ArrayList<>(capabilities);
@@ -232,7 +255,7 @@ final class Differences {
         Map<String, List<String>> absent = new LinkedHashMap<>();
         int shared = 0;
         int sharedUnavailable = 0;
-        boolean table = false;
+        md.append("| Feature | With this CoreProtect |\n|---|---|\n");
         for (TransformReport.Capability capability : ordered) {
             boolean isShared = SHARED.containsKey(capability.id());
             if (capability.value().equals(CapabilityReport.ABSENT)) {
@@ -247,10 +270,6 @@ final class Differences {
                     continue;
                 }
                 sharedUnavailable++;
-            }
-            if (!table) {
-                md.append("| Feature | With this CoreProtect |\n|---|---|\n");
-                table = true;
             }
             String status = capability.available() ? sentenceCase(capability.description())
                 : "Not available: " + capability.reason();
@@ -354,6 +373,12 @@ final class Differences {
         String feature = FEATURES.getOrDefault(id, SHARED.get(id));
         if (feature != null) {
             return feature;
+        }
+        for (Map.Entry<String, String> prefix : ENGINE_FEATURES.entrySet()) {
+            if (id.startsWith(prefix.getKey()) && id.length() > prefix.getKey().length()) {
+                String engine = id.substring(prefix.getKey().length());
+                return prefix.getValue().replace("{}", ENGINES.getOrDefault(engine, code(engine)));
+            }
         }
         return code(id);
     }

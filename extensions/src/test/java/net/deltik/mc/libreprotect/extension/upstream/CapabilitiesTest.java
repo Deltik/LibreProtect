@@ -32,10 +32,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -97,6 +99,17 @@ class CapabilitiesTest {
         expected.put("lifecycle.flags", "static-flags");
         expected.put("consumer.gate", "pause-flags");
         expected.put("consumer.start-result", ENGINE_TYPES ? "named-results" : "absent");
+        expected.put("hook.auto-purge-counter", "rows-purged");
+        expected.put("hook.entity-spawn-verification", ENGINE_TYPES ? "invalidate" : "absent");
+        expected.put("hook.purge-worker", ENGINE_TYPES ? "worker-running" : "absent");
+        expected.put("auto-purge.retention", "config-field");
+        expected.put("auto-purge.settings", "config-fields");
+        expected.put("auto-purge.tables", ENGINE_TYPES ? "purge-policy" : "purge-command-list");
+        expected.put("auto-purge.coordination", ENGINE_TYPES ? "background-claims" : "cooperative-flags");
+        expected.put("auto-purge.engine.sqlite", "chunked-deletes");
+        expected.put("auto-purge.engine.mysql", "chunked-deletes");
+        expected.put("auto-purge.engine.duckdb", ENGINE_TYPES ? "chunked-deletes" : "absent");
+        expected.put("auto-purge.engine.clickhouse", ENGINE_TYPES ? "retention" : "absent");
 
         Map<String, String> actual = new LinkedHashMap<>();
         for (Choice<?> choice : capabilities.all()) {
@@ -123,6 +136,36 @@ class CapabilitiesTest {
                 assertFalse(choice.reason().contains(id), () -> choice + " names " + id);
             }
         }
+    }
+
+    @Test
+    @DisplayName("should turn off each feature that needs a shared capability that's unavailable, saying why")
+    void dependentFeatures() {
+        AssumeCapability.reviewedUpstream();
+        Capabilities changed = Capabilities.probe(Upstream.coreProtect().hiding(Names.CONFIG_HANDLER
+            + "#migrationRunning"));
+        String reason = "CoreProtect has no ConfigHandler.migrationRunning";
+        assertEquals(reason, changed.get(Flags.CAPABILITY).reason());
+
+        List<Capability<?>> features = new ArrayList<>();
+        for (Engine engine : Engine.values()) {
+            features.add(PurgeEngine.capability(engine));
+        }
+        for (Capability<?> feature : features) {
+            Choice<?> choice = changed.get(feature);
+            if (capabilities.get(feature).isAbsent()) {
+                assertTrue(choice.isAbsent(), choice::toString);
+            } else {
+                assertEquals(Choice.UNAVAILABLE + ": " + reason, choice.strategy() + ": " + choice.reason(),
+                    feature::id);
+            }
+        }
+        // CoreProtect 24's way of taking turns watches the flags; CoreProtect 25's claims don't need them
+        Choice<Leases> coordination = changed.get(Leases.CAPABILITY);
+        assertEquals(ENGINE_TYPES ? "background-claims" : Choice.UNAVAILABLE + ": " + reason, ENGINE_TYPES
+            ? coordination.strategy() : coordination.strategy() + ": " + coordination.reason());
+        // What only reads CoreProtect's settings still works
+        assertTrue(changed.get(PurgeSettings.RETENTION).isAvailable());
     }
 
     @Test
@@ -205,6 +248,25 @@ class CapabilitiesTest {
             assertFalse(gate.running());
             assertFalse(gate.persistenceHalted());
         }
+    }
+
+    @Test
+    @DisplayName("should count purged rows where CoreProtect shows them")
+    void hooks() throws Missing {
+        AtomicLong counter = (AtomicLong) coreProtect.get("ConfigHandler.autoPurgeRowsPurged");
+        long before = counter.get();
+
+        capabilities.require(Hooks.AUTO_PURGE_COUNTER).add(5);
+
+        assertEquals(before + 5, counter.get());
+    }
+
+    @Test
+    @DisplayName("should see CoreProtect 25's manual purge worker")
+    void newerHooks() throws Missing {
+        AssumeCapability.strategy("hook.purge-worker", "worker-running");
+
+        assertFalse(capabilities.require(Hooks.PURGE_WORKER).running());
     }
 
     @Test
