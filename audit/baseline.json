@@ -5,8 +5,10 @@
     "A site ending in '*' matches by prefix. Pin FAIL-rule allowances to a method so new uses get reviewed; REVIEW-rule allowances can cover a whole class so upstream renames don't cause churn.",
     "To accept upstream changes, compare dist/audit-observed.json with this file and copy over what you have reviewed, in a pull request.",
     "egressExemptPrefixes: com/clickhouse/ is the ClickHouse JDBC driver, bundled on upstream's master branch after v24.1. It connects only to the ClickHouse server configured in config.yml, so its network code is neither redirected nor failed by the audit. Its bundled org/roaringbitmap/ and org/jspecify/annotations/ are accepted with it.",
+    "capabilities: how LibreProtect's extensions work with the upstream JAR, from the capability report that their build writes and the JAR bundles as META-INF/libreprotect/capabilities.tsv. 'capability <id>' is the way they take (or 'absent' where upstream lacks the feature, 'unavailable' where they can't use it). Under the capability and way that use them, 'code <id>/<way> <method>' is a fingerprint of an upstream method whose behavior the way relies on beyond its signature, including the private and synthetic methods of its nest that it calls, 'doc <id>/<way> <path>' a hash of upstream documentation it follows, 'enum <id>/<way> <class>' the constants of an upstream enum it names, and 'optional <id>/<way> <member>' whether upstream has a member it does without. Each entry is an accepted key=value, and a key may have several: one for each upstream line that LibreProtect builds. These are the values of the build that the last comment names. An observed key=value that isn't listed is a capability-change REVIEW: check that the extensions still do the right thing with what changed, then add it. A listed key that a build doesn't observe is no REVIEW, since another line may have it, except for a 'capability <id>' that the report no longer has. Since code, documents, enums and members are keyed by the way that relies on them, one line's code is never accepted under another line's way: an upstream that reverts a class but keeps its newer design still asks for a review. Upkeep: when a line is no longer built, such as v24 once a CoreProtect 25 release is locked, its entries can stay while the extensions keep its ways, since each is accepted only with its way; remove them along with the way. The exception is the few keys to which both lines give different values under a way that both take: remove the old line's values of those.",
+    "reviewedUpstreams: the SHA-256 of each upstream JAR whose ways the extensions' unit tests expect exactly, as the 'upstream sha256' line of its capability report gives it: one for each upstream line built today, the build that the last comment names. The audit doesn't check this list, so a new upstream never needs a review for it. On an upstream JAR that it doesn't list, those tests are skipped, and the audit reports any change to the capabilities. Upkeep: once the capabilities of a new upstream build are reviewed and the tests expect its ways, replace its line's hash with the new one, which its build's extensions/target/capabilities.tsv shows.",
     "versionReads: the upstream methods that read a plugin's version or full name (getVersion() or getFullName() of PluginDescriptionFile, getVersion() or getDisplayName() of PluginMeta) or name plugin.yml in a string, as code that reads it itself does. CoreProtect compares its own version with others only in VersionUtils.getPluginVersion(), which the transformer has read upstream's version instead of LibreProtect's. StatusCommand, Patch and ShutdownService only show the version, loadWorldEdit reads WorldEdit's, and getBranch reads the branch from plugin.yml. A new method is a version-read REVIEW: if CoreProtect compares its own version there, it would compare LibreProtect's, whose leading numbers name upstream's nearest release tag, so extend the transformer before accepting it.",
-    "Reviewed against CoreProtect v24.1 (0af209a0a05135216599113c0b5e2638ad3c704b)."
+    "Reviewed against the build of CoreProtect v24.1 (0af209a0a05135216599113c0b5e2638ad3c704b): the audit finds nothing unreviewed in it, and the capabilities are what it reports."
   ],
   "allow": [
     {
@@ -130,5 +132,18 @@
     "net/coreprotect/utility/VersionUtils#getPluginVersion()Ljava/lang/String;",
     "net/coreprotect/utility/VersionUtils#loadWorldEdit()V"
   ],
-  "licenseSha256": "f2e0707902c4cd92155bb081a6eb0d77ebab789eafb212659fa6f44fcdca531b"
+  "capabilities": [
+    "capability consumer.gate=pause-flags",
+    "capability consumer.start-result=absent",
+    "capability database.selector=use-mysql",
+    "capability lifecycle.flags=static-flags",
+    "code consumer.gate/pause-flags net/coreprotect/consumer/Consumer#pauseConsumer(I)V=e0971944d165",
+    "optional consumer.gate/pause-flags net/coreprotect/consumer/Consumer#isPersistenceHalted()Z=absent",
+    "optional lifecycle.flags/static-flags net/coreprotect/config/ConfigHandler#shutdownDrainRunning:Z=absent",
+    "optional lifecycle.flags/static-flags net/coreprotect/consumer/Consumer#databaseReloadShutdownSignal()Ljava/util/concurrent/CompletableFuture;=absent"
+  ],
+  "licenseSha256": "f2e0707902c4cd92155bb081a6eb0d77ebab789eafb212659fa6f44fcdca531b",
+  "reviewedUpstreams": [
+    "561b76431d4fd988f922109c1b2271724fe3e24a42918c651bfb338ac54d1143"
+  ]
 }

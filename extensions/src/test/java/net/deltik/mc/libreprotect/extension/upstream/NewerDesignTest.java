@@ -53,7 +53,8 @@ class NewerDesignTest {
     @Test
     @DisplayName("should know CoreProtect 25 by every one of its traces, and CoreProtect 24 by none")
     void traces() {
-        // CoreProtect has all or none; a renamed trace leaves the design known by the others
+        // A reviewed CoreProtect has all or none; a renamed trace leaves the design known by the others
+        AssumeCapability.reviewedUpstream();
         Upstream upstream = Upstream.coreProtect();
         for (String trace : Designs.MULTI_ENGINE.traces()) {
             assertEquals(MULTI_ENGINE, upstream.has(trace), trace);
@@ -114,6 +115,7 @@ class NewerDesignTest {
     @DisplayName("should need the behavior it relies on from CoreProtect 25 rather than drop it quietly")
     void newerRelies() {
         AssumeCapability.strategy("database.selector", "database-type");
+        AssumeCapability.reviewedUpstream();
         assertEquals("CoreProtect has no Consumer.processConsumerBatch(int, boolean)", Capabilities.probe(
             Upstream.coreProtect().hiding(Names.CONSUMER + "#processConsumerBatch")).get(ConsumerGate.CAPABILITY)
             .reason());
@@ -122,6 +124,7 @@ class NewerDesignTest {
     @Test
     @DisplayName("should take an older way on CoreProtect 24 even though the newer way looked up a class both have")
     void sharedClasses() {
+        AssumeCapability.reviewedUpstream();
         Choice<String> choice = Choice.first(Upstream.coreProtect(), "test.drain",
             Choice.way("drain", "CoreProtect 25's connection drain", Designs.MULTI_ENGINE, u -> {
                 u.type(Names.DATABASE).staticMethod("awaitConnectionDrain", boolean.class, long.class);
@@ -139,6 +142,7 @@ class NewerDesignTest {
     @DisplayName("should take CoreProtect 24's ways on CoreProtect 24")
     void olderWays() {
         assumeFalse(MULTI_ENGINE, "needs CoreProtect 24");
+        AssumeCapability.reviewedUpstream();
         for (Capability<?> capability : WITH_OLDER_WAYS) {
             Choice<?> choice = Capabilities.current().get(capability);
             assertTrue(choice.isAvailable(), choice::toString);

@@ -72,12 +72,19 @@ class AuditTest {
     }
 
     private AuditReport audit(Consumer<SyntheticUpstream> change, AuditBaseline baseline) throws Exception {
+        return audit(change, extensions -> { }, baseline);
+    }
+
+    private AuditReport audit(Consumer<SyntheticUpstream> change, Consumer<SyntheticExtensions> extensionsChange,
+                              AuditBaseline baseline) throws Exception {
         SyntheticUpstream upstream = new SyntheticUpstream();
         change.accept(upstream);
+        SyntheticExtensions extensions = new SyntheticExtensions();
+        extensionsChange.accept(extensions);
         SyntheticUpstream.Jars jars = upstream.write(directory);
         Transformer transformer = new Transformer(new Transformer.Options(
-            jars.shaded(), jars.original(), TestClasses.runtimeJar(directory),
-            new SyntheticExtensions().write(directory), jars.lang(), directory.resolve("out.jar"),
+            jars.shaded(), jars.original(), TestClasses.runtimeJar(directory), extensions.write(directory),
+            extensions.writeReport(directory, jars.shaded()), jars.source(), jars.lang(), directory.resolve("out.jar"),
             "24.1-libre1", "description", "https://example.invalid", "v24.1", "0000000", "0000000", 0L,
             List.copyOf(baseline.egressExemptPrefixes)));
         TransformReport report = transformer.run();
@@ -144,6 +151,20 @@ class AuditTest {
         AuditReport report = audit(upstream -> { }, baseline);
         assertFalse(report.failed, report.findings.toString());
         assertFalse(report.reviewRequired, report.findings.toString());
+    }
+
+    @Test
+    @DisplayName("never asks about the reviewed upstream JARs, whichever upstream it audits, and carries them over")
+    void reviewedUpstreams() throws Exception {
+        AuditBaseline baseline = cleanBaseline();
+        baseline.reviewedUpstreams.add("0".repeat(64));
+
+        AuditReport report = audit(upstream -> { }, baseline);
+
+        assertFalse(report.reviewRequired, report.findings.toString());
+        assertTrue(report.findings.stream().noneMatch(finding -> finding.site().contains("0".repeat(64))),
+            report.findings::toString);
+        assertEquals(baseline.reviewedUpstreams, report.observed.reviewedUpstreams);
     }
 
     @Nested
@@ -365,8 +386,239 @@ class AuditTest {
         }
     }
 
+    @Nested
+    @DisplayName("REVIEW of how the extensions work with upstream")
+    class Capabilities {
+
+        private static final String CONFIG_HANDLER = SyntheticUpstream.CONFIG_HANDLER;
+
+        /**
+         * @return the only finding at the site, which must be a capability change that needs review
+         */
+        private static AuditReport.Finding change(AuditReport report, String site) {
+            List<AuditReport.Finding> findings = report.findings.stream()
+                .filter(finding -> finding.site().equals(site)).toList();
+            assertEquals(1, findings.size(), report.findings::toString);
+            assertEquals(Severity.REVIEW, findings.get(0).severity());
+            assertEquals(Audit.RULE_CAPABILITY, findings.get(0).rule());
+            return findings.get(0);
+        }
+
+        private static long changes(AuditReport report) {
+            return changes(report, Severity.REVIEW);
+        }
+
+        private static long changes(AuditReport report, Severity severity) {
+            return report.findings.stream().filter(finding -> finding.rule().equals(Audit.RULE_CAPABILITY)
+                && finding.severity() == severity).count();
+        }
+
+        @Test
+        @DisplayName("none when nothing changed")
+        void unchanged() throws Exception {
+            AuditReport report = audit(upstream -> { }, cleanBaseline());
+            assertEquals(0, changes(report), report.findings::toString);
+        }
+
+        @Test
+        @DisplayName("a capability whose strategy changed")
+        void changedStrategy() throws Exception {
+            AuditReport report = audit(upstream -> { }, extensions -> extensions.report.replaceAll(line ->
+                line.replace("\tuse-mysql\tReads CoreProtect's use-mysql setting",
+                    "\tdatabase-type\tReads CoreProtect's database type")), cleanBaseline());
+            assertEquals("changed from use-mysql to database-type. Reads CoreProtect's database type",
+                change(report, "capability database.selector").detail());
+            // What the new way uses is new too, whatever the old way used
+            assertEquals("new: SQLITE,MYSQL. database.selector uses its constants: Reads CoreProtect's database type",
+                change(report, "enum database.selector/database-type " + SyntheticUpstream.DATABASE_TYPE).detail());
+            assertEquals(2, changes(report), report.findings::toString);
+        }
+
+        @Test
+        @DisplayName("a new capability")
+        void newCapability() throws Exception {
+            AuditReport report = audit(upstream -> { }, extensions -> extensions.report.add(
+                "capability\tauto-purge.tables\tschema-tables\tPurges every table with a time column"), cleanBaseline());
+            assertEquals("new: schema-tables. Purges every table with a time column",
+                change(report, "capability auto-purge.tables").detail());
+        }
+
+        @Test
+        @DisplayName("a capability no longer reported")
+        void missingCapability() throws Exception {
+            AuditReport report = audit(upstream -> { }, extensions -> extensions.report.removeIf(line ->
+                line.contains("\tclickhouse.writes\t")), cleanBaseline());
+            assertEquals("no longer in the capability report; was absent",
+                change(report, "capability clickhouse.writes").detail());
+        }
+
+        @Test
+        @DisplayName("accepts each value that the baseline accepts for a key, one per upstream line, and no other")
+        void valuesOfEachLine() throws Exception {
+            AuditBaseline baseline = cleanBaseline();
+            baseline.capabilities.add("capability database.selector=database-type");
+            AuditReport report = audit(upstream -> { }, baseline);
+            assertEquals(0, changes(report), report.findings::toString);
+
+            AuditReport changed = audit(upstream -> { }, extensions -> extensions.report.replaceAll(line ->
+                line.replace("\tuse-mysql\tReads CoreProtect's use-mysql setting", "\tpostgres\tReads another setting")),
+                baseline);
+            assertEquals("changed from database-type or use-mysql to postgres. Reads another setting",
+                change(changed, "capability database.selector").detail());
+            change(changed, "enum database.selector/postgres " + SyntheticUpstream.DATABASE_TYPE);
+            assertEquals(2, changes(changed), changed.findings::toString);
+        }
+
+        @Test
+        @DisplayName("asks nothing about keys that only another upstream line has, but about a capability gone")
+        void keysOfAnotherLine() throws Exception {
+            AuditBaseline baseline = cleanBaseline();
+            baseline.capabilities.addAll(List.of("code consumer.gate/cooperative-flags net/coreprotect/Other#run()V"
+                + "=0123456789ab", "optional other.thing/some-way net/coreprotect/Other#flag:Z=present",
+                "enum database.selector/database-type net/coreprotect/OtherType=ONE,TWO",
+                "doc migrate-db.target.duckdb/jdbc docs/other.md=0123456789ab"));
+            AuditReport report = audit(upstream -> { }, baseline);
+            assertEquals(0, changes(report), report.findings::toString);
+
+            baseline.capabilities.add("capability something.gone=some-way");
+            report = audit(upstream -> { }, baseline);
+            assertEquals("no longer in the capability report; was some-way",
+                change(report, "capability something.gone").detail());
+            assertEquals(1, changes(report), report.findings::toString);
+        }
+
+        @Test
+        @DisplayName("accepts code and documents only under the way that relies on them, not another line's way")
+        void codeOfAnotherWay() throws Exception {
+            // The other upstream line: other ways, whose code and documents differ
+            Consumer<SyntheticUpstream> otherLine = upstream -> {
+                upstream.loadDatabaseClearsPurge = true;
+                upstream.sources.put("docs/database-migration.md", "# The reload lifecycle\n");
+            };
+            Consumer<SyntheticExtensions> otherWays = extensions -> extensions.report.replaceAll(line -> line
+                .replace("\tconsumer.gate\tbackground-claims\t", "\tconsumer.gate\tcooperative-flags\t")
+                .replace("\tmigrate-db.target.duckdb\tunavailable\t", "\tmigrate-db.target.duckdb\tjdbc\t"));
+            AuditBaseline baseline = cleanBaseline();
+            baseline.capabilities.addAll(audit(otherLine, otherWays, baseline).observed.capabilities);
+            AuditReport other = audit(otherLine, otherWays, baseline);
+            assertEquals(0, changes(other), other.findings::toString);
+            AuditReport same = audit(upstream -> { }, baseline);
+            assertEquals(0, changes(same), same.findings::toString);
+
+            // This line's ways, with the other line's code and documents, as if upstream reverted a class
+            AuditReport reverted = audit(otherLine, baseline);
+            String code = change(reverted, "code consumer.gate/background-claims " + CONFIG_HANDLER
+                + "#loadDatabase()V").detail();
+            assertTrue(code.matches("changed from [0-9a-f]{12} to [0-9a-f]{12}\\. consumer\\.gate relies on it: "
+                + "Reloading the database leaves purgeRunning alone"), code);
+            String doc = change(reverted, "doc migrate-db.target.duckdb/unavailable docs/database-migration.md")
+                .detail();
+            assertTrue(doc.endsWith("migrate-db.target.duckdb follows it: The flag protocol for migration tools"), doc);
+            assertEquals(2, changes(reverted), reverted.findings::toString);
+        }
+
+        @Test
+        @DisplayName("accepts exactly the capability change that an allowance names with its value")
+        void allowance() throws Exception {
+            Consumer<SyntheticExtensions> change = extensions -> extensions.report.replaceAll(line ->
+                line.replace("\tuse-mysql\t", "\tdatabase-type\t"));
+            for (String site : List.of("capability database.selector", "capability database.selector=use-mysql",
+                "capability database.selector=database")) {
+                AuditBaseline baseline = cleanBaseline();
+                baseline.allow.add(new AuditBaseline.Allowance(Audit.RULE_CAPABILITY, site, "test"));
+                change(audit(upstream -> { }, change, baseline), "capability database.selector");
+            }
+
+            for (String site : List.of("capability database.selector=database-type", "capability database.*")) {
+                AuditBaseline baseline = cleanBaseline();
+                baseline.allow.add(new AuditBaseline.Allowance(Audit.RULE_CAPABILITY, site, "test"));
+                AuditReport report = audit(upstream -> { }, change, baseline);
+                assertFalse(has(report, Severity.REVIEW, Audit.RULE_CAPABILITY, "capability database.selector"),
+                    report.findings::toString);
+                assertTrue(has(report, Severity.INFO, Audit.RULE_CAPABILITY, "capability database.selector"));
+                // The new way's enum is another key, which the allowance doesn't name
+                change(report, "enum database.selector/database-type " + SyntheticUpstream.DATABASE_TYPE);
+            }
+        }
+
+        @Test
+        @DisplayName("an optional member that upstream removed")
+        void optionalMember() throws Exception {
+            AuditReport report = audit(upstream -> upstream.purgeRunning = false, extensions -> extensions.report
+                .replaceAll(line -> line.startsWith("optional\t") ? line.replace("\tpresent", "\tabsent") : line),
+                cleanBaseline());
+            assertTrue(change(report, "optional consumer.gate/background-claims " + CONFIG_HANDLER
+                + "#purgeRunning:Z").detail().startsWith(
+                "changed from present to absent. consumer.gate uses it if it exists: Pauses CoreProtect's consumer"));
+        }
+
+        @Test
+        @DisplayName("upstream changed code that the extensions rely on")
+        void changedCode() throws Exception {
+            AuditReport report = audit(upstream -> upstream.loadDatabaseClearsPurge = true, cleanBaseline());
+            String detail = change(report, "code consumer.gate/background-claims " + CONFIG_HANDLER
+                + "#loadDatabase()V").detail();
+            assertTrue(detail.matches("changed from [0-9a-f]{12} to [0-9a-f]{12}\\. consumer\\.gate relies on it: "
+                + "Reloading the database leaves purgeRunning alone"), detail);
+        }
+
+        @Test
+        @DisplayName("upstream removed code that the extensions rely on")
+        void removedCode() throws Exception {
+            AuditReport report = audit(upstream -> upstream.loadDatabase = false, cleanBaseline());
+            assertTrue(change(report, "code consumer.gate/background-claims " + CONFIG_HANDLER + "#loadDatabase()V")
+                .detail().matches("changed from [0-9a-f]{12} to absent\\..*"));
+        }
+
+        @Test
+        @DisplayName("upstream changed documentation that the extensions follow")
+        void changedDocumentation() throws Exception {
+            AuditReport report = audit(upstream -> upstream.sources.put("docs/database-migration.md", "# Moved\n"),
+                cleanBaseline());
+            assertTrue(change(report, "doc migrate-db.target.duckdb/unavailable docs/database-migration.md").detail()
+                .endsWith("migrate-db.target.duckdb follows it: The flag protocol for migration tools"));
+        }
+
+        @Test
+        @DisplayName("upstream changed an enum's constants")
+        void changedEnum() throws Exception {
+            AuditReport report = audit(upstream -> upstream.databaseTypes.add("DUCKDB"), extensions -> extensions.report
+                .replaceAll(line -> line.replace("\tSQLITE,MYSQL", "\tSQLITE,MYSQL,DUCKDB")), cleanBaseline());
+            assertEquals("changed from SQLITE,MYSQL to SQLITE,MYSQL,DUCKDB. database.selector uses its constants: "
+                + "Reads CoreProtect's use-mysql setting", change(report, "enum database.selector/use-mysql "
+                + SyntheticUpstream.DATABASE_TYPE).detail());
+        }
+
+        @Test
+        @DisplayName("everything, with a baseline that has no capabilities")
+        void noBaselineCapabilities() throws Exception {
+            AuditBaseline baseline = cleanBaseline();
+            baseline.capabilities = null;
+            AuditReport report = audit(upstream -> { }, baseline);
+            assertEquals(report.observed.capabilities.size(), changes(report), report.findings::toString);
+            assertTrue(report.reviewRequired);
+        }
+
+        @Test
+        @DisplayName("records what it observed, so that it can be copied into the baseline")
+        void observed() throws Exception {
+            AuditBaseline observed = cleanBaseline();
+            List<String> keys = observed.capabilities.stream()
+                .map(entry -> entry.replaceAll("=[0-9a-f]{12}$", "=<hash>")).toList();
+            assertEquals(List.of(
+                "capability clickhouse.writes=absent",
+                "capability consumer.gate=background-claims",
+                "capability database.selector=use-mysql",
+                "capability migrate-db.target.duckdb=unavailable",
+                "code consumer.gate/background-claims " + CONFIG_HANDLER + "#loadDatabase()V=<hash>",
+                "doc migrate-db.target.duckdb/unavailable docs/database-migration.md=<hash>",
+                "enum database.selector/use-mysql " + SyntheticUpstream.DATABASE_TYPE + "=SQLITE,MYSQL",
+                "optional consumer.gate/background-claims " + CONFIG_HANDLER + "#purgeRunning:Z=present"), keys);
+        }
+    }
+
     @Test
-    @DisplayName("the observed state can replace the baseline as is")
+    @DisplayName("writes the observed state as a baseline, which reads back unchanged")
     void observedRoundTrips() throws Exception {
         AuditBaseline baseline = cleanBaseline();
         String json = Reports.toJson(baseline);

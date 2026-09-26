@@ -53,6 +53,7 @@ final class SyntheticUpstream {
     static final String DRIVER = "com/example/jdbc/Driver";
     static final String CONFIG_HANDLER = "net/coreprotect/config/ConfigHandler";
     static final String CONSUMER = "net/coreprotect/consumer/Consumer";
+    static final String DATABASE_TYPE = "net/coreprotect/database/DatabaseType";
 
     String pluginYml = """
         name: CoreProtect
@@ -83,6 +84,8 @@ final class SyntheticUpstream {
     /** Whether {@code ConfigHandler.loadDatabase()} clears {@code purgeRunning}, rather than just returning */
     boolean loadDatabaseClearsPurge = false;
     boolean consumer = true;
+    /** Constants of the database engine enum */
+    final List<String> databaseTypes = new ArrayList<>(List.of("SQLITE", "MYSQL"));
     List<String> extensionStrings = new ArrayList<>(List.of(
         "net.coreprotect.utility.extensions.DatabaseMigration", "runCommand",
         "net.coreprotect.utility.extensions.BackgroundService", "start", "stop"));
@@ -111,6 +114,10 @@ final class SyntheticUpstream {
             LINK_DOWNLOAD: "Herunterladen: {0}"
             """));
 
+    /** Other files of upstream's source tree, by path */
+    final Map<String, String> sources = new LinkedHashMap<>(Map.of(
+        "docs/database-migration.md", "# Database migration\n\nSet the migration flag before copying.\n"));
+
     /** Upstream-authored entries (end up in both JARs) */
     final Map<String, byte[]> upstreamExtra = new LinkedHashMap<>();
     /** Shaded library entries (only in the shaded JAR) */
@@ -122,9 +129,10 @@ final class SyntheticUpstream {
     }
 
     /**
-     * @param lang upstream's {@code lang/} directory
+     * @param lang   upstream's {@code lang/} directory
+     * @param source upstream's source tree, with {@link #sources}
      */
-    record Jars(Path shaded, Path original, Path lang) {
+    record Jars(Path shaded, Path original, Path lang, Path source) {
     }
 
     Jars write(Path directory) throws IOException {
@@ -134,6 +142,11 @@ final class SyntheticUpstream {
         }
         for (Map.Entry<String, String> file : lang.entrySet()) {
             Files.writeString(langDirectory.resolve(file.getKey()), file.getValue(), StandardCharsets.UTF_8);
+        }
+        Path source = Files.createDirectories(directory.resolve("source"));
+        for (Map.Entry<String, String> file : sources.entrySet()) {
+            Files.createDirectories(source.resolve(file.getKey()).getParent());
+            Files.writeString(source.resolve(file.getKey()), file.getValue(), StandardCharsets.UTF_8);
         }
 
         Map<String, byte[]> authored = new LinkedHashMap<>();
@@ -153,6 +166,7 @@ final class SyntheticUpstream {
         if (consumer) {
             authored.put(CONSUMER + ".class", consumerClass());
         }
+        authored.put(DATABASE_TYPE + ".class", enumClass(DATABASE_TYPE, databaseTypes));
         authored.putAll(upstreamExtra);
 
         Map<String, byte[]> shaded = new LinkedHashMap<>(authored);
@@ -161,7 +175,7 @@ final class SyntheticUpstream {
         return new Jars(
             TestClasses.writeJar(directory.resolve("CoreProtect-24.1.jar"), shaded),
             TestClasses.writeJar(directory.resolve("original-CoreProtect-24.1.jar"), authored),
-            langDirectory);
+            langDirectory, source);
     }
 
     byte[] mainClass() {
@@ -382,6 +396,23 @@ final class SyntheticUpstream {
         constructor.visitInsn(Opcodes.RETURN);
         constructor.visitMaxs(0, 0);
         constructor.visitEnd();
+        writer.visitEnd();
+        return writer.toByteArray();
+    }
+
+    /**
+     * @return an enum with the constants, in order, and a field of its own type that isn't a constant
+     */
+    static byte[] enumClass(String name, List<String> constants) {
+        ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        writer.visit(Opcodes.V11, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER | Opcodes.ACC_FINAL | Opcodes.ACC_ENUM, name,
+            null, "java/lang/Enum", null);
+        for (String constant : constants) {
+            writer.visitField(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL | Opcodes.ACC_ENUM, constant,
+                "L" + name + ";", null, null).visitEnd();
+        }
+        writer.visitField(Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL, "DEFAULT", "L" + name + ";",
+            null, null).visitEnd();
         writer.visitEnd();
         return writer.toByteArray();
     }

@@ -46,8 +46,8 @@ public final class Capability<T> {
     }
 
     /**
-     * @param id the capability's ID in the capability report, such as
-     *           {@code database.selector}
+     * @param id the capability's ID in the report and the audit's baseline,
+     *           such as {@code database.selector}
      * @param ways its ways, newest first
      * @throws IllegalArgumentException if a way with an older way after it
      *                                  has no design (see {@link Choice#requireDesigns})

@@ -232,7 +232,7 @@ The network policy covers the requests that CoreProtect and the libraries it bun
 * Update checks ask [GitHub or Modrinth](#update-sources) for LibreProtect's releases instead of asking update.coreprotect.net, and the update notice shows LibreProtect's version.
 * `/co migrate-db` and automatic purging (`auto-purge`) exist only in CoreProtect's paid builds, and their code isn't public. LibreProtect has placeholders that say so. [Free implementations are welcome.](extensions/src/main/java/net/coreprotect/utility/extensions/)
 
-Each release lists its exact changes in `DIFFERENCES.md`, which is attached to the release and included in the JAR.
+Each release lists its exact changes in `DIFFERENCES.md`, which is attached to the release and included in the JAR. It also says which of LibreProtect's features work with the CoreProtect that the release was built from.
 
 Please report problems with LibreProtect [here](https://github.com/Deltik/LibreProtect/issues), not to CoreProtect.
 
@@ -261,12 +261,13 @@ LibreProtect never edits CoreProtect's source code. Each build:
    * LibreProtect's [runtime](runtime/) classes are added. So are its [extensions](extensions/), placeholders for CoreProtect's closed-source extension points: database migration and automatic purging.
    * The translations in CoreProtect's source code, which its JAR leaves out, are added, with CoreProtect's built-in English phrases taken from its code.
 3. **Checks contracts.** The build fails with an explanation if upstream breaks an assumption that the transformation relies on. For example, the main class can't be subclassed, a donation-key check was renamed, or network calls are left over.
-4. **Audits** upstream's JAR, as upstream built it, against [`audit/baseline.json`](audit/baseline.json), the reviewed state of upstream:
+4. **Checks what the extensions can do with this upstream.** The extensions don't link against CoreProtect's classes. They reach CoreProtect only by reflection, and each feature asks for the capabilities it needs, such as pausing CoreProtect's database writes. The build probes the exact upstream JAR that it bundles and records what the extensions found, and the transformer checks that report against the JAR and bundles it. When upstream changes something that a feature needs, only that feature turns off, and it says why. `DIFFERENCES.md` shows how each feature works with that build's CoreProtect.
+5. **Audits** upstream's JAR, as upstream built it, against [`audit/baseline.json`](audit/baseline.json), the reviewed state of upstream:
    * **FAIL** stops the build. It means that upstream's code does something that LibreProtect can't keep under the network policy, such as opening a raw socket.
-   * **REVIEW** blocks releases, but not development builds, until a maintainer accepts the change. Examples are a new host and a change to upstream's dependencies or license.
+   * **REVIEW** blocks releases, but not development builds, until a maintainer accepts the change. Examples are a new host, a change to upstream's dependencies or license, and a change to how the extensions work with upstream, including a change to the upstream code whose behavior they rely on, which the build fingerprints.
 
    The audit covers upstream's code. LibreProtect's own code makes one kind of network request itself: update checks to the [update sources](#update-sources), and only when the network policy answers update checks.
-5. **Runs integration tests** ([`integration/`](integration/)) on real Paper servers, with a Java agent that records and blocks all outgoing network traffic, and MySQL and ClickHouse in containers:
+6. **Runs integration tests** ([`integration/`](integration/)) on real Paper servers, with a Java agent that records and blocks all outgoing network traffic, and MySQL and ClickHouse in containers:
    * One server runs on the same data with stock CoreProtect, then LibreProtect, then stock CoreProtect again. Stock CoreProtect must be seen contacting coreprotect.net, which proves that the test can see network traffic at all. LibreProtect must make no requests but the default policy's update checks, read stock CoreProtect's data, and pass API, command and message checks. Stock CoreProtect must then read LibreProtect's data.
    * More servers test bundled and layered translations, and update checks against stand-ins for GitHub and Modrinth.
 
@@ -317,7 +318,7 @@ A development build's version is what `git describe --tags --long` says about th
 |----------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | [`runtime/`](runtime/)                       | Classes added to the plugin: the network policy and its routes, update checks, bundled translations and branding. Compiled against the Bukkit API, never against CoreProtect.           |
 | [`extensions/`](extensions/)                 | LibreProtect's implementations of CoreProtect's closed-source extension points. They reach CoreProtect only by reflection, by capability, so one source tree works with every upstream. |
-| [`transformer/`](transformer/)               | The build-time bytecode transformer, contract checks and audit, using [ASM](https://asm.ow2.io/)                                                                                        |
+| [`transformer/`](transformer/)               | The build-time bytecode transformer, contract checks, capability report checks and audit, using [ASM](https://asm.ow2.io/)                                                              |
 | [`audit/baseline.json`](audit/baseline.json) | The reviewed state of upstream                                                                                                                                                          |
 | [`integration/`](integration/)               | The egress-recording Java agent, test plugin and harness                                                                                                                                |
 | [`upstream.lock`](upstream.lock)             | The upstream release that releases are built from                                                                                                                                       |

@@ -88,6 +88,30 @@ final class AuditBaseline {
      * read another key.
      */
     TreeSet<String> versionReads = new TreeSet<>();
+    /**
+     * How the extensions may work with upstream, from the capability report,
+     * as the {@code key=value} lines accepted after review:
+     * {@code capability <id>=<strategy|absent|unavailable>}, and under the
+     * capability's way, {@code optional <id>/<way> <member>=<present|absent>},
+     * {@code code <id>/<way> <owner#name(descriptor)>=<fingerprint|absent>},
+     * {@code enum <id>/<way> <owner>=<constants>} and
+     * {@code doc <id>/<way> <path>=<hash|absent>}. A key may be accepted with
+     * several values, one for each upstream line that LibreProtect builds. In
+     * {@code audit-observed.json}, it's what one build observed.
+     *
+     * <p>An {@link #allow} entry for the {@code capability-change} rule names
+     * the whole {@code key=value} that it accepts as its site, so that it
+     * doesn't accept later changes to the key. A capability that is no longer
+     * reported has an empty value.
+     */
+    TreeSet<String> capabilities = new TreeSet<>();
     /** SHA-256 of upstream's LICENSE file */
     String licenseSha256;
+    /**
+     * SHA-256 of the upstream JARs whose ways the extensions' unit tests
+     * expect exactly, as their capability report's {@code upstream sha256}
+     * line gives it. Not audited: an upstream that isn't listed only skips
+     * those tests, so a bump to a new release needs no review for it.
+     */
+    TreeSet<String> reviewedUpstreams = new TreeSet<>();
 }

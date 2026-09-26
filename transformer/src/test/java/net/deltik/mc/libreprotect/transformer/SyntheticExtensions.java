@@ -25,7 +25,11 @@ import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,7 +39,8 @@ import java.util.function.Consumer;
  * Builds a small fake extensions JAR, shaped like LibreProtect's: the two
  * extension classes that upstream loads by name, and a class that finds
  * upstream's internals by name, the way the extensions' upstream package
- * does.
+ * does. Also builds the capability report that the extensions' build would
+ * write for it.
  */
 final class SyntheticExtensions {
 
@@ -46,6 +51,25 @@ final class SyntheticExtensions {
     /** Classes to add, by entry name */
     final Map<String, byte[]> extra = new LinkedHashMap<>();
 
+    /** The capability report's lines after the first, sorted by their UTF-8 bytes when written */
+    final List<String> report = new ArrayList<>(List.of(
+        "capability\tclickhouse.writes\tabsent\tThis CoreProtect has no ClickHouse support",
+        "capability\tconsumer.gate\tbackground-claims\tPauses CoreProtect's consumer while a purge claims the database",
+        "member\tconsumer.gate\t" + SyntheticUpstream.CONSUMER,
+        "member\tconsumer.gate\t" + SyntheticUpstream.CONSUMER + "#pausedSuccess:Z",
+        "optional\tconsumer.gate\t" + SyntheticUpstream.CONFIG_HANDLER + "#purgeRunning:Z\tpresent",
+        "relies\tconsumer.gate\t" + SyntheticUpstream.CONFIG_HANDLER + "#loadDatabase()V\t"
+            + "Reloading the database leaves purgeRunning alone",
+        "rejected\tconsumer.gate\tcooperative-flags\tThis CoreProtect has no cooperative flags",
+        "capability\tdatabase.selector\tuse-mysql\tReads CoreProtect's use-mysql setting",
+        "member\tdatabase.selector\t" + SyntheticUpstream.CONFIG_HANDLER,
+        "enum\tdatabase.selector\t" + SyntheticUpstream.DATABASE_TYPE + "\tSQLITE,MYSQL",
+        "capability\tmigrate-db.target.duckdb\tunavailable\tDuckDB's driver isn't among plugin.yml's libraries",
+        "doc\tmigrate-db.target.duckdb\tdocs/database-migration.md\tThe flag protocol for migration tools"));
+
+    /** The SHA-256 that the report says was probed, or {@code null} for the upstream JAR's */
+    String reportSha256;
+
     Path write(Path directory) throws IOException {
         Map<String, byte[]> entries = new LinkedHashMap<>();
         entries.put(MIGRATION + ".class", extensionClass(MIGRATION, Map.of(
@@ -54,6 +78,21 @@ final class SyntheticExtensions {
         entries.put(REFLECTOR + ".class", reflectorClass());
         entries.putAll(extra);
         return TestClasses.writeJar(directory.resolve("extensions.jar"), entries);
+    }
+
+    /**
+     * @param upstreamJar the upstream JAR that the report says was probed
+     */
+    Path writeReport(Path directory, Path upstreamJar) throws IOException {
+        String sha256 = reportSha256 != null ? reportSha256
+            : CapabilityReport.sha256(Files.readAllBytes(upstreamJar));
+        StringBuilder text = new StringBuilder("upstream\tsha256\t").append(sha256).append('\n');
+        report.stream().sorted(SyntheticExtensions::compareBytes).forEach(line -> text.append(line).append('\n'));
+        return Files.writeString(directory.resolve("capabilities.tsv"), text, StandardCharsets.UTF_8);
+    }
+
+    static int compareBytes(String first, String second) {
+        return Arrays.compareUnsigned(first.getBytes(StandardCharsets.UTF_8), second.getBytes(StandardCharsets.UTF_8));
     }
 
     static byte[] extensionClass(String name, Map<String, String> methods) {

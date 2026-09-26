@@ -22,7 +22,10 @@ package net.deltik.mc.libreprotect.transformer;
 
 import org.objectweb.asm.Type;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -36,6 +39,35 @@ import java.util.stream.Collectors;
  * versions to document how they differ from the standard version.
  */
 final class Differences {
+
+    /**
+     * Readable names of the capabilities that users know as features, by
+     * ID, in the order the table shows them
+     */
+    static final Map<String, String> FEATURES = orderedMap();
+    private static final List<String> FEATURE_ORDER = List.copyOf(FEATURES.keySet());
+
+    /**
+     * Readable names of the capabilities that several features share, by
+     * ID. The table shows one only when it isn't available, since the
+     * features that need it can't work then either.
+     */
+    static final Map<String, String> SHARED = orderedMap(
+        "database.selector", "Which database CoreProtect uses",
+        "lifecycle.flags", "CoreProtect's state flags",
+        "consumer.gate", "Pausing CoreProtect's database writes",
+        "consumer.start-result", "CoreProtect's answers when its maintenance starts");
+
+    /**
+     * @param keysAndValues a key, then its value, and so on
+     */
+    private static Map<String, String> orderedMap(String... keysAndValues) {
+        Map<String, String> map = new LinkedHashMap<>();
+        for (int i = 0; i < keysAndValues.length; i += 2) {
+            map.put(keysAndValues[i], keysAndValues[i + 1]);
+        }
+        return Collections.unmodifiableMap(map);
+    }
 
     private Differences() {
     }
@@ -169,12 +201,106 @@ final class Differences {
             md.append("- ").append(code(extensionPoint.className())).append(", requested by ")
                 .append(codes(extensionPoint.requestedBy())).append("\n");
         }
+        if (!report.capabilities.isEmpty()) {
+            md.append("\n## How the Extensions Work with This CoreProtect\n\n")
+                .append("The extensions don't link against CoreProtect's classes. When they run, they find the ")
+                .append(report.upstreamMemberCount).append(" CoreProtect classes, methods and fields that they use ")
+                .append("by name, through reflection. The build checked each of them against this CoreProtect JAR; ")
+                .append("they are listed in `transform-report.json`, and what the build found is in `")
+                .append(CapabilityReport.ENTRY).append("`.\n\n");
+            capabilities(md, report.capabilities);
+        }
 
         md.append("\n## Added Files\n\n");
         for (String entry : report.injectedEntries) {
             md.append("- ").append(code(entry)).append("\n");
         }
         return md.toString();
+    }
+
+    /**
+     * The table of what each feature does with this CoreProtect: the
+     * features users know first, in {@link #FEATURES}' order, then any the
+     * transformer has no name for, by ID. A capability that several features
+     * share is left out while it's available. Features that this CoreProtect
+     * doesn't have at all, such as those of engines it lacks, follow the
+     * table, by the reason. The table is left out while it has no rows.
+     */
+    static void capabilities(StringBuilder md, List<TransformReport.Capability> capabilities) {
+        List<TransformReport.Capability> ordered = new ArrayList<>(capabilities);
+        ordered.sort(Comparator.comparingInt(Differences::rank).thenComparing(TransformReport.Capability::id));
+        Map<String, List<String>> absent = new LinkedHashMap<>();
+        int shared = 0;
+        int sharedUnavailable = 0;
+        boolean table = false;
+        for (TransformReport.Capability capability : ordered) {
+            boolean isShared = SHARED.containsKey(capability.id());
+            if (capability.value().equals(CapabilityReport.ABSENT)) {
+                if (!isShared) {
+                    absent.computeIfAbsent(capability.reason(), reason -> new ArrayList<>()).add(feature(capability.id()));
+                }
+                continue;
+            }
+            if (isShared) {
+                shared++;
+                if (capability.available()) {
+                    continue;
+                }
+                sharedUnavailable++;
+            }
+            if (!table) {
+                md.append("| Feature | With this CoreProtect |\n|---|---|\n");
+                table = true;
+            }
+            String status = capability.available() ? sentenceCase(capability.description())
+                : "Not available: " + capability.reason();
+            md.append("| ").append(feature(capability.id())).append(" | ").append(cellText(status)).append(" |\n");
+        }
+        if (!absent.isEmpty()) {
+            md.append("\nThis CoreProtect doesn't have these at all:\n\n");
+            absent.forEach((reason, features) -> md.append("- ").append(String.join(", ", features)).append(": ")
+                .append(cellText(reason)).append("\n"));
+        }
+        if (shared > 0) {
+            md.append("\nThe features also rest on ").append(shared).append(shared == 1 ? " capability" : " capabilities")
+                .append(" that several of them share, such as telling which database CoreProtect uses. ")
+                .append(sharedStatus(shared, sharedUnavailable)).append("\n");
+        }
+    }
+
+    /**
+     * @return a sentence on whether the capabilities that the features share
+     *         work; the table has a row for each one that doesn't
+     */
+    private static String sharedStatus(int shared, int unavailable) {
+        if (unavailable == 0) {
+            return shared == 1 ? "It works with this CoreProtect." : "All of those work with this CoreProtect.";
+        }
+        if (unavailable == shared) {
+            return shared == 1 ? "It doesn't work with this CoreProtect, as the table shows."
+                : "None of those work with this CoreProtect, as the table shows.";
+        }
+        return (unavailable == 1 ? "One of those doesn't" : unavailable + " of those don't")
+            + " work with this CoreProtect, as the table shows; the others do.";
+    }
+
+    /**
+     * @return the text with its first letter capitalized, as a table cell
+     *         starts, such as a description "the migration's own SQLite
+     *         connections"
+     */
+    private static String sentenceCase(String text) {
+        return text.isEmpty() ? text : Character.toUpperCase(text.charAt(0)) + text.substring(1);
+    }
+
+    /**
+     * @return where a capability goes in the table: its place among the
+     *         features users know, then after them
+     */
+    private static int rank(TransformReport.Capability capability) {
+        int index = FEATURE_ORDER.indexOf(capability.id());
+        return index >= 0 ? index : SHARED.containsKey(capability.id()) ? FEATURE_ORDER.size() + 1
+            : FEATURE_ORDER.size();
     }
 
     /**
@@ -219,6 +345,17 @@ final class Differences {
             }
         }
         return escaped.toString();
+    }
+
+    /**
+     * @return a readable name for a capability, or its ID as code if it has none
+     */
+    static String feature(String id) {
+        String feature = FEATURES.getOrDefault(id, SHARED.get(id));
+        if (feature != null) {
+            return feature;
+        }
+        return code(id);
     }
 
     /**

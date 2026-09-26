@@ -35,7 +35,8 @@ jq -r '.findings[] | select(.severity != "INFO") | "  \(.severity) \(.rule) at \
 cat >&2 <<'EOF'
 
 To accept them after review, update audit/baseline.json in this branch:
-  - copy the reviewed values from dist/audit-observed.json (in the build artifact), or
+  - copy the reviewed values from dist/audit-observed.json (in the build artifact); for
+    "capabilities", add the reviewed key=value lines, keeping the other upstream line's, or
   - add an "allow" entry with a reason for a specific rule and site.
 EOF
 exit 1

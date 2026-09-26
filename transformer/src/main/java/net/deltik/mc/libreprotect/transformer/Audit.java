@@ -38,12 +38,14 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -61,9 +63,11 @@ import java.util.regex.Pattern;
  *       site.</li>
  *   <li><b>REVIEW</b>: new hosts, DNS lookups, dynamic class loading, new
  *       closed-source extension points, new reads of a plugin's version or
- *       of plugin.yml, signs of fork detection or obfuscation, and changes to
- *       upstream's dependencies, build, or license. Development builds still
- *       ship; releases wait for approval.</li>
+ *       of plugin.yml, signs of fork detection or obfuscation, changes to
+ *       upstream's dependencies, build, or license, and changes to how the
+ *       extensions work with upstream: the strategies in the capability
+ *       report, and the code and documentation of upstream's that they rely
+ *       on. Development builds still ship; releases wait for approval.</li>
  * </ul>
  *
  * <p>FAIL rules cover upstream's own code and bundled libraries. The rest only
@@ -87,6 +91,7 @@ final class Audit {
     static final String RULE_FORK_DETECTION = "fork-detection";
     static final String RULE_OBFUSCATION = "obfuscation";
     static final String RULE_CUSTOM_BOOTSTRAP = "custom-bootstrap";
+    static final String RULE_CAPABILITY = "capability-change";
 
     private static final Set<String> NETWORK_CLASSES = Set.of(
         "java/net/Socket", "java/net/ServerSocket", "java/net/DatagramSocket", "java/net/MulticastSocket",
@@ -214,10 +219,13 @@ final class Audit {
         observeBuild();
         compareInventories();
 
-        // Carry the reviewed decisions over, so the observed file can replace the baseline as-is
+        // Carry the reviewed decisions over, so the observed file is a baseline of its own. It accepts only this
+        // upstream line's capabilities, so accepting it means adding them to those the baseline accepts
+        // for the other line
         observed.comment = baseline.comment;
         observed.allow = baseline.allow;
         observed.egressExemptPrefixes = baseline.egressExemptPrefixes;
+        observed.reviewedUpstreams = baseline.reviewedUpstreams;
         report.observed = observed;
         return report;
     }
@@ -432,6 +440,7 @@ final class Audit {
         compare("version-read", "method that reads a plugin's version, a name that ends in it, or plugin.yml itself; "
             + "if CoreProtect compares its own version there, it compares LibreProtect's, unless the transformer has it "
             + "read upstream's as in getPluginVersion()", baseline.versionReads, observed.versionReads);
+        compareCapabilities();
 
         if (observed.licenseSha256 == null) {
             review("license-change", "LICENSE", "upstream no longer has a LICENSE file");
@@ -439,6 +448,56 @@ final class Audit {
             review("license-change", "LICENSE", "LICENSE changed (SHA-256 " + observed.licenseSha256
                 + "); make sure LibreProtect may still be distributed");
         }
+    }
+
+    /**
+     * The baseline accepts {@code key=value} lines, a key with a value for
+     * each upstream line that LibreProtect builds, such as the locked release
+     * and upstream's default branch. An observed value that the baseline
+     * doesn't accept for its key needs a review: a new key, or a value other
+     * than the accepted ones. So does a capability that the report no longer
+     * has at all. Other accepted keys that this build doesn't observe, such
+     * as the code that only another upstream line has, need nothing. Code,
+     * documents, enums and optional members are keyed by the capability and
+     * way that use them (see {@link CapabilityReport#observations}), so the
+     * code of one line's way is never accepted under another's. Each finding
+     * says which capabilities the key belongs to and why they care.
+     */
+    private void compareCapabilities() {
+        Map<String, CapabilityReport.Observation> current = CapabilityReport.observations(transformReport.capabilities);
+        current.forEach((key, observation) -> observed.capabilities.add(key + "=" + observation.value()));
+
+        Map<String, List<String>> accepted = new TreeMap<>();
+        for (String entry : baseline.capabilities == null ? Set.<String>of() : baseline.capabilities) {
+            int equals = entry.indexOf('=');
+            accepted.computeIfAbsent(equals < 0 ? entry : entry.substring(0, equals), key -> new ArrayList<>())
+                .add(equals < 0 ? "" : entry.substring(equals + 1));
+        }
+
+        current.forEach((key, observation) -> {
+            List<String> values = accepted.get(key);
+            String context = String.join("; ", observation.contexts());
+            String value = observation.value();
+            if (values == null) {
+                reviewCapability(key, value, "new: " + value + ". " + context);
+            } else if (!values.contains(value)) {
+                reviewCapability(key, value, "changed from " + String.join(" or ", values) + " to " + value + ". "
+                    + context);
+            }
+        });
+        accepted.forEach((key, values) -> {
+            if (!current.containsKey(key) && key.startsWith(CapabilityReport.CAPABILITY_KEY)) {
+                reviewCapability(key, "", "no longer in the capability report; was " + String.join(" or ", values));
+            }
+        });
+    }
+
+    /**
+     * An allowance for a capability change names the {@code key=value} it
+     * accepts, so that it doesn't accept the key's later values too.
+     */
+    private void reviewCapability(String key, String value, String detail) {
+        add(Severity.REVIEW, RULE_CAPABILITY, key, detail, key + "=" + value);
     }
 
     private void compare(String rule, String what, Set<String> reviewed, Set<String> current) {
@@ -463,6 +522,13 @@ final class Audit {
     }
 
     private void add(Severity severity, String rule, String site, String detail) {
+        add(severity, rule, site, detail, site);
+    }
+
+    /**
+     * @param allowedSite what an allowance must name as its site to accept the finding
+     */
+    private void add(Severity severity, String rule, String site, String detail, String allowedSite) {
         boolean duplicate = report.findings.stream().anyMatch(finding ->
             finding.rule().equals(rule) && finding.site().equals(site) && finding.detail().equals(detail));
         if (duplicate) {
@@ -470,8 +536,8 @@ final class Audit {
         }
         for (AuditBaseline.Allowance allowance : baseline.allow) {
             boolean siteMatches = allowance.site.endsWith("*")
-                ? site.startsWith(allowance.site.substring(0, allowance.site.length() - 1))
-                : site.equals(allowance.site);
+                ? allowedSite.startsWith(allowance.site.substring(0, allowance.site.length() - 1))
+                : allowedSite.equals(allowance.site);
             if (rule.equals(allowance.rule) && siteMatches) {
                 report.add(Severity.INFO, rule, site, detail + " (allowed: " + allowance.reason + ")");
                 return;

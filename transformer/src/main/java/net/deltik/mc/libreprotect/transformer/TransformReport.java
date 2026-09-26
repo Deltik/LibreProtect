@@ -71,6 +71,67 @@ final class TransformReport {
     record Translation(String language, int phrases, List<String> missing, List<String> unknown) {
     }
 
+    /**
+     * How the extensions do one thing with this upstream JAR, as the
+     * extensions' build found by probing it.
+     *
+     * @param id          what the extensions do, such as {@code consumer.gate}
+     * @param value       the strategy they use, or {@value CapabilityReport#ABSENT} or
+     *                    {@value CapabilityReport#UNAVAILABLE}
+     * @param description what the strategy does, if there is one
+     * @param reason      why there is none, otherwise
+     * @param members     upstream classes, methods and fields that the strategy looks up by name
+     * @param optionals   upstream members that the strategy uses if they exist
+     * @param relies      upstream methods whose behavior the strategy relies on
+     * @param enums       upstream enums whose constants the strategy uses
+     * @param docs        upstream documentation that the strategy follows
+     * @param rejected    other strategies, and why the extensions don't use them with this upstream
+     */
+    record Capability(String id, String value, String description, String reason, List<String> members,
+                      List<OptionalMember> optionals, List<Reliance> relies, List<EnumConstants> enums,
+                      List<Doc> docs, List<Rejected> rejected) {
+
+        boolean available() {
+            return !value.equals(CapabilityReport.ABSENT) && !value.equals(CapabilityReport.UNAVAILABLE);
+        }
+
+        /**
+         * @return the description, or the reason if there is none
+         */
+        String text() {
+            return description != null ? description : reason;
+        }
+    }
+
+    /**
+     * @param state {@value CapabilityReport#PRESENT} or {@value CapabilityReport#ABSENT}
+     */
+    record OptionalMember(String member, String state) {
+    }
+
+    /**
+     * @param member      the method, as {@code owner#name(descriptor)}
+     * @param why         what the extensions rely on, which probing can't prove
+     * @param fingerprint the method's {@link CodeFingerprint}, or {@value CodeFingerprint#ABSENT}
+     */
+    record Reliance(String member, String why, String fingerprint) {
+    }
+
+    record EnumConstants(String owner, List<String> constants) {
+    }
+
+    /**
+     * @param path a file in upstream's source tree
+     * @param what what it documents
+     * @param hash the start of its SHA-256, or {@value CapabilityReport#ABSENT} if upstream's source tree doesn't
+     *             have it
+     */
+    record Doc(String path, String what, String hash) {
+    }
+
+    record Rejected(String strategy, String why) {
+    }
+
     String upstreamRef;
     String upstreamCommit;
     String upstreamVersion;
@@ -96,6 +157,10 @@ final class TransformReport {
     final List<ExtensionPoint> extensionPoints = new ArrayList<>();
     /** LibreProtect extension classes or methods that upstream no longer asks for; the audit reports these */
     final List<String> unrequestedExtensions = new ArrayList<>();
+    /** How the extensions work with this upstream JAR, from the capability report of their build */
+    final List<Capability> capabilities = new ArrayList<>();
+    /** How many distinct upstream members the extensions find by name for the capabilities they use */
+    int upstreamMemberCount;
     /** How many phrases upstream has */
     int phraseCount;
     /** Upstream's translations that LibreProtect bundles, by language code */

@@ -17,7 +17,8 @@
     points: /co migrate-db and automatic purging. They reach CoreProtect only by
     reflection, by capability, so one source tree works with every upstream.
     Packaging probes the exact upstream JAR being built and writes what the
-    extensions do with it to target/capabilities.tsv.
+    extensions do with it to target/capabilities.tsv, which the transformer
+    checks against that JAR, bundles and audits.
   </description>
 
   <properties>
@@ -31,9 +32,9 @@
     <plugins>
       <plugin>
         <!-- Probe the upstream JAR the way the extensions do at run time, and
-             write what they found to target/capabilities.tsv. The test class
-             path has the upstream JAR and the server API; it runs with skipped
-             tests too. -->
+             write what they found to target/capabilities.tsv for the
+             transformer to audit. The test class path has the upstream JAR
+             and the server API; it runs with skipped tests too. -->
         <groupId>org.codehaus.mojo</groupId>
         <artifactId>exec-maven-plugin</artifactId>
         <version>3.6.4</version>

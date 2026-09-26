@@ -31,16 +31,21 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.nio.file.Path;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Every capability on the CoreProtect being built: the ways it takes, which
- * depend on its generation, and what they do with CoreProtect's state.
+ * depend on its generation, and what they do with CoreProtect's state. The
+ * exact ways expected are those of the upstream JARs that
+ * {@code audit/baseline.json} lists as {@code reviewedUpstreams}; on another
+ * upstream, those tests are skipped.
  */
 class CapabilitiesTest {
 
@@ -57,6 +62,15 @@ class CapabilitiesTest {
     void once() {
         assertSame(Capabilities.current(), Capabilities.current());
         assertEquals(Capabilities.known().size(), capabilities.all().size());
+    }
+
+    @Test
+    @DisplayName("should know the upstream JAR for reviewedUpstreams by the SHA-256 that its capability report gives")
+    void upstreamIdentity() throws Exception {
+        String jar = System.getProperty("upstream.jar");
+        assumeTrue(jar != null, "scripts/lp passes the upstream JAR as -Dupstream.jar");
+
+        assertEquals(CapabilityReport.sha256(Path.of(jar)), AssumeCapability.upstreamSha256());
     }
 
     @Test
@@ -77,6 +91,7 @@ class CapabilitiesTest {
     @Test
     @DisplayName("should take the ways of this CoreProtect's generation, with none unavailable")
     void strategies() {
+        AssumeCapability.reviewedUpstream();
         Map<String, String> expected = new LinkedHashMap<>();
         expected.put("database.selector", ENGINE_TYPES ? "database-type" : "use-mysql");
         expected.put("lifecycle.flags", "static-flags");
@@ -88,6 +103,26 @@ class CapabilitiesTest {
             actual.put(choice.id(), choice.strategy());
         }
         assertEquals(expected, actual, () -> CapabilityReport.render(capabilities, null));
+    }
+
+    @Test
+    @DisplayName("should describe every way in plain language, which DIFFERENCES.md shows, naming no capability")
+    void plainDescriptions() {
+        List<String> ids = Capabilities.known().stream().map(Capability::id).toList();
+        for (Capability<?> capability : Capabilities.known()) {
+            for (Choice.Way<?> way : capability.ways()) {
+                for (String id : ids) {
+                    assertFalse(way.description().contains(id), () -> capability.id() + "'s way " + way.strategy()
+                        + " names " + id + ": " + way.description());
+                }
+            }
+        }
+        // As this CoreProtect's report says, whichever way each took
+        for (Choice<?> choice : capabilities.all()) {
+            for (String id : ids) {
+                assertFalse(choice.reason().contains(id), () -> choice + " names " + id);
+            }
+        }
     }
 
     @Test
@@ -103,6 +138,7 @@ class CapabilitiesTest {
         @Test
         @DisplayName("should know this CoreProtect's engines and which one it uses")
         void activeEngine() throws Missing {
+            AssumeCapability.reviewedUpstream();
             ActiveDatabase database = capabilities.require(ActiveDatabase.CAPABILITY);
 
             assertEquals(ENGINE_TYPES ? EnumSet.allOf(Engine.class) : EnumSet.of(Engine.SQLITE, Engine.MYSQL),

@@ -39,6 +39,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -62,6 +63,11 @@ class TransformerTest {
     @TempDir
     Path directory;
 
+    /** Whether to pass the extensions' capability report */
+    private boolean passReport = true;
+    /** Whether to pass upstream's source tree */
+    private boolean passUpstreamDirectory = true;
+
     private TransformReport transform(SyntheticUpstream upstream, Path output) throws IOException {
         return transform(upstream, new SyntheticExtensions(), TestClasses.runtimeJar(directory), output);
     }
@@ -69,9 +75,16 @@ class TransformerTest {
     private TransformReport transform(SyntheticUpstream upstream, SyntheticExtensions extensions, Path runtimeJar,
                                       Path output) throws IOException {
         SyntheticUpstream.Jars jars = upstream.write(directory);
+        return transform(jars, extensions == null ? null : extensions.write(directory),
+            extensions == null || !passReport ? null : extensions.writeReport(directory, jars.shaded()), runtimeJar,
+            output);
+    }
+
+    private TransformReport transform(SyntheticUpstream.Jars jars, Path extensionsJar, Path capabilities,
+                                      Path runtimeJar, Path output) throws IOException {
         Transformer.Options options = new Transformer.Options(
-            jars.shaded(), jars.original(), runtimeJar, extensions == null ? null : extensions.write(directory),
-            jars.lang(), output,
+            jars.shaded(), jars.original(), runtimeJar, extensionsJar, capabilities,
+            passUpstreamDirectory ? jars.source() : null, jars.lang(), output,
             "24.1-libre1", "Privacy-hardened build of CoreProtect", "https://github.com/Deltik/LibreProtect",
             "v24.1", "0af209a0a05135216599113c0b5e2638ad3c704b", "abc1234", 1_700_000_000L,
             List.of("com/example/jdbc/"));
@@ -79,6 +92,11 @@ class TransformerTest {
         TransformReport report = transformer.run();
         transformer.write(null);
         return report;
+    }
+
+    private static TransformReport.Capability capability(TransformReport report, String id) {
+        return report.capabilities.stream().filter(capability -> capability.id().equals(id)).findFirst()
+            .orElseThrow();
     }
 
     private ContractViolation violation(Consumer<SyntheticUpstream> change) {
@@ -166,6 +184,10 @@ class TransformerTest {
             assertTrue(jar.contains("net/coreprotect/utility/extensions/DatabaseMigration.class"));
             assertTrue(jar.contains(SyntheticExtensions.REFLECTOR + ".class"));
             assertTrue(jar.contains("META-INF/libreprotect/DIFFERENCES.md"));
+            assertEquals(4, report.capabilities.size());
+            assertArrayEquals(Files.readAllBytes(directory.resolve("capabilities.tsv")),
+                jar.get("META-INF/libreprotect/capabilities.tsv"), "the capability report is bundled as it is");
+            assertTrue(report.injectedEntries.contains("META-INF/libreprotect/capabilities.tsv"));
             assertEquals("fork.version=24.1-libre1\nfork.commit=abc1234\nupstream.ref=v24.1\n"
                     + "upstream.commit=0af209a0a05135216599113c0b5e2638ad3c704b\nupstream.version=24.1\n",
                 new String(jar.get("libreprotect-build.properties"), StandardCharsets.UTF_8));
@@ -210,6 +232,149 @@ class TransformerTest {
             TransformReport report = transform(upstream, directory.resolve("out.jar"));
             assertEquals(List.of("net.coreprotect.utility.extensions.BackgroundService#stop"),
                 report.unrequestedExtensions);
+        }
+
+        @Test
+        @DisplayName("reads the capability report, fingerprinting the upstream code and documentation it relies on")
+        void capabilities() throws IOException {
+            TransformReport report = transform(new SyntheticUpstream(), directory.resolve("out.jar"));
+
+            TransformReport.Capability gate = capability(report, "consumer.gate");
+            assertEquals("background-claims", gate.value());
+            assertEquals("Pauses CoreProtect's consumer while a purge claims the database", gate.description());
+            assertEquals(null, gate.reason());
+            assertEquals(List.of(SyntheticUpstream.CONSUMER, SyntheticUpstream.CONSUMER + "#pausedSuccess:Z"),
+                gate.members());
+            assertEquals(List.of(new TransformReport.OptionalMember(SyntheticUpstream.CONFIG_HANDLER
+                + "#purgeRunning:Z", "present")), gate.optionals());
+            assertEquals(1, gate.relies().size());
+            assertTrue(gate.relies().get(0).fingerprint().matches("[0-9a-f]{12}"), gate.relies()::toString);
+            assertEquals(List.of(new TransformReport.Rejected("cooperative-flags",
+                "This CoreProtect has no cooperative flags")), gate.rejected());
+
+            TransformReport.Capability selector = capability(report, "database.selector");
+            assertEquals(List.of(SyntheticUpstream.CONFIG_HANDLER), selector.members());
+            assertEquals(List.of(new TransformReport.EnumConstants(SyntheticUpstream.DATABASE_TYPE,
+                List.of("SQLITE", "MYSQL"))), selector.enums());
+
+            TransformReport.Capability duckdb = capability(report, "migrate-db.target.duckdb");
+            assertFalse(duckdb.available());
+            assertEquals("DuckDB's driver isn't among plugin.yml's libraries", duckdb.reason());
+            String docHash = CapabilityReport.sha256(Files.readAllBytes(directory.resolve(
+                "source/docs/database-migration.md"))).substring(0, 12);
+            assertEquals(List.of(new TransformReport.Doc("docs/database-migration.md",
+                "The flag protocol for migration tools", docHash)), duckdb.docs());
+
+            assertEquals(4, report.upstreamMemberCount,
+                "the members of the available capabilities, and their optional members that are present");
+        }
+
+        @Test
+        @DisplayName("fingerprints a method the extensions rely on as absent when upstream removed it")
+        void reliedOnMethodRemoved() throws IOException {
+            SyntheticUpstream upstream = new SyntheticUpstream();
+            upstream.loadDatabase = false;
+            TransformReport report = transform(upstream, directory.resolve("out.jar"));
+            assertEquals("absent", capability(report, "consumer.gate").relies().get(0).fingerprint());
+        }
+
+        @Test
+        @DisplayName("hashes documentation as absent when upstream lacks it")
+        void documentation() throws IOException {
+            SyntheticUpstream upstream = new SyntheticUpstream();
+            upstream.sources.clear();
+            TransformReport report = transform(upstream, directory.resolve("out.jar"));
+            assertEquals("absent", capability(report, "migrate-db.target.duckdb").docs().get(0).hash());
+        }
+
+        @Test
+        @DisplayName("accepts members inherited from a superclass, in the JAR or outside it")
+        void inheritedMembers() throws IOException {
+            String subclass = "net/coreprotect/consumer/QueueConsumer";
+            SyntheticUpstream upstream = new SyntheticUpstream();
+            upstream.upstreamExtra.put(subclass + ".class", SyntheticExtensions.codeClass(subclass,
+                SyntheticUpstream.CONSUMER, List.of()));
+            SyntheticExtensions extensions = new SyntheticExtensions();
+            extensions.report.addAll(List.of(
+                "member\tconsumer.gate\t" + subclass + "#pausedSuccess:Z",
+                "member\tconsumer.gate\t" + subclass + "#hashCode()I",
+                "member\tconsumer.gate\t" + SyntheticUpstream.MAIN + "#getDataFolder()Ljava/io/File;"));
+            TransformReport report = transform(upstream, extensions, TestClasses.runtimeJar(directory),
+                directory.resolve("out.jar"));
+            assertEquals(5, capability(report, "consumer.gate").members().size());
+        }
+
+        @Test
+        @DisplayName("accepts members of a capability that isn't available, which upstream lacks")
+        void missingMembersOfAbsentCapability() throws IOException {
+            SyntheticExtensions extensions = new SyntheticExtensions();
+            extensions.report.add("member\tclickhouse.writes\tnet/coreprotect/database/clickhouse/ClickHouseWriter");
+            TransformReport report = transform(new SyntheticUpstream(), extensions, TestClasses.runtimeJar(directory),
+                directory.resolve("out.jar"));
+            assertEquals(List.of("net/coreprotect/database/clickhouse/ClickHouseWriter"),
+                capability(report, "clickhouse.writes").members());
+        }
+
+        @Test
+        @DisplayName("needs no capability report without extension classes")
+        void noExtensions() throws IOException {
+            Path output = directory.resolve("out.jar");
+            TransformReport report = transform(new SyntheticUpstream(), null, TestClasses.runtimeJar(directory),
+                output);
+            assertEquals(List.of(), report.capabilities);
+            assertFalse(JarContents.read(output).contains("META-INF/libreprotect/capabilities.tsv"));
+            assertFalse(Differences.render(report).contains("How the Extensions Work"));
+        }
+
+        @Test
+        @DisplayName("shows in DIFFERENCES.md how the extensions work with this upstream")
+        void capabilitiesInDifferences() throws IOException {
+            SyntheticExtensions extensions = new SyntheticExtensions();
+            extensions.report.add("capability\tsomething.new\tsome-strategy\tDoes <b>one</b> thing | or `another` & \\");
+            extensions.report.add("capability\tauto-purge.engine.duckdb\tabsent\tCoreProtect has no DuckDB");
+            extensions.report.add("capability\tmigrate-db.target.clickhouse\tabsent\tCoreProtect has no ClickHouse");
+            extensions.report.add("capability\tmigrate-db.source.clickhouse\tabsent\tCoreProtect has no ClickHouse");
+            extensions.report.add("capability\tmigrate-db.protocol\tflag-protocol\tthe flags of CoreProtect");
+            extensions.report.add("capability\thook.lock-heartbeat\tunavailable\tCoreProtect has no Process.lastLockUpdate");
+            TransformReport report = transform(new SyntheticUpstream(), extensions, TestClasses.runtimeJar(directory),
+                directory.resolve("out.jar"));
+            String differences = Differences.render(report);
+
+            assertTrue(differences.contains("## How the Extensions Work with This CoreProtect\n\n"), differences);
+            assertTrue(differences.contains("they find the 4 CoreProtect classes, methods and fields that they use "
+                + "by name, through reflection."), differences);
+            // The features users know in their order, then others; shared capabilities only when unavailable
+            assertTrue(differences.contains("""
+                | Feature | With this CoreProtect |
+                |---|---|
+                | `hook.lock-heartbeat` | Not available: CoreProtect has no Process.lastLockUpdate |
+                | `migrate-db.protocol` | The flags of CoreProtect |
+                | `migrate-db.target.duckdb` | Not available: DuckDB's driver isn't among plugin.yml's libraries |
+                | `something.new` | Does &lt;b&gt;one&lt;/b&gt; thing \\| or \\`another\\` &amp; \\\\ |
+
+                This CoreProtect doesn't have these at all:
+
+                - `auto-purge.engine.duckdb`: CoreProtect has no DuckDB
+                - `clickhouse.writes`: This CoreProtect has no ClickHouse support
+                - `migrate-db.source.clickhouse`, `migrate-db.target.clickhouse`: CoreProtect has no ClickHouse
+
+                The features also rest on 2 capabilities that several of them share, such as telling which database \
+                CoreProtect uses. All of those work with this CoreProtect.
+                """), differences);
+            assertFalse(differences.contains("generation"), differences);
+            assertFalse(differences.contains("Writing ClickHouse"), "an absent shared capability isn't shown");
+        }
+
+        @Test
+        @DisplayName("shows in DIFFERENCES.md which version CoreProtect compares")
+        void pluginVersion() throws IOException {
+            String differences = Differences.render(transform(new SyntheticUpstream(), directory.resolve("out.jar")));
+
+            assertTrue(differences.contains("## CoreProtect's Own Version\n\n"), differences);
+            assertTrue(differences.contains("It now compares the version that upstream's build gave it, `24.1`,"),
+                differences);
+            assertTrue(differences.contains("| `net.coreprotect.utility.VersionUtils` | `getPluginVersion()` | `24.1` |\n"),
+                differences);
         }
 
         @Test
@@ -371,18 +536,6 @@ class TransformerTest {
         @DisplayName("sealed main class")
         void sealedMain() {
             assertTrue(violation(upstream -> upstream.mainSealed = true).getMessage().contains("sealed"));
-        }
-
-        @Test
-        @DisplayName("shows in DIFFERENCES.md which version CoreProtect compares")
-        void pluginVersion() throws IOException {
-            String differences = Differences.render(transform(new SyntheticUpstream(), directory.resolve("out.jar")));
-
-            assertTrue(differences.contains("## CoreProtect's Own Version\n\n"), differences);
-            assertTrue(differences.contains("It now compares the version that upstream's build gave it, `24.1`,"),
-                differences);
-            assertTrue(differences.contains("| `net.coreprotect.utility.VersionUtils` | `getPluginVersion()` | `24.1` |\n"),
-                differences);
         }
 
         @Test
@@ -553,6 +706,113 @@ class TransformerTest {
                 SyntheticExtensions.codeClass(core, "java/lang/Object", List.of(method -> method.visitMethodInsn(
                     Opcodes.INVOKESTATIC, "net/coreprotect/Removed", "run", "()V", false))))).getMessage();
             assertTrue(message.contains("uses upstream's net.coreprotect.Removed"), message);
+        }
+
+        @Test
+        @DisplayName("no capability report for extension classes")
+        void noCapabilityReport() {
+            passReport = false;
+            String message = violation(upstream -> { }).getMessage();
+            assertTrue(message.contains("no capability report was given"), message);
+        }
+
+        @Test
+        @DisplayName("capability report probed against another upstream JAR")
+        void capabilityReportForAnotherJar() {
+            String message = violation(upstream -> { }, extensions -> extensions.reportSha256 = "0".repeat(64))
+                .getMessage();
+            assertTrue(message.contains("The capability report was probed against another CoreProtect JAR: it names "
+                + "SHA-256 " + "0".repeat(64)), message);
+        }
+
+        @Test
+        @DisplayName("capability report with a line type the transformer doesn't know")
+        void capabilityReportLineType() {
+            String message = violation(upstream -> { }, extensions -> extensions.report.add(
+                "requires\tconsumer.gate\tsomething")).getMessage();
+            assertTrue(message.contains("unknown line type 'requires'"), message);
+        }
+
+        @Test
+        @DisplayName("capability report that says a capability works, with a member that upstream removed")
+        void capabilityMemberRemoved() {
+            String message = violation(upstream -> upstream.consumer = false).getMessage();
+            assertTrue(message.contains("The capability report says that consumer.gate works with background-claims, "
+                + "which uses " + SyntheticUpstream.CONSUMER + ", but the upstream JAR doesn't have it. The report, "
+                + "or the probe in the extensions' build that wrote it, is wrong."), message);
+        }
+
+        @Test
+        @DisplayName("capability report that says an optional member is present, which upstream removed")
+        void optionalMemberRemoved() {
+            String message = violation(upstream -> upstream.purgeRunning = false).getMessage();
+            assertTrue(message.contains("says that " + SyntheticUpstream.CONFIG_HANDLER + "#purgeRunning:Z is present, "
+                + "but the upstream JAR doesn't have it"), message);
+        }
+
+        @Test
+        @DisplayName("capability report that says an optional member is absent, which upstream has")
+        void optionalMemberAdded() {
+            String message = violation(upstream -> { }, extensions -> extensions.report.replaceAll(line ->
+                line.startsWith("optional\t") ? line.replace("\tpresent", "\tabsent") : line)).getMessage();
+            assertTrue(message.contains("#purgeRunning:Z is absent, but the upstream JAR has it"), message);
+        }
+
+        @Test
+        @DisplayName("capability report that misses a constant upstream added to an enum")
+        void enumConstantAdded() {
+            String message = violation(upstream -> upstream.databaseTypes.add("DUCKDB")).getMessage();
+            assertTrue(message.contains("lists the constants of " + SyntheticUpstream.DATABASE_TYPE + " as SQLITE,MYSQL, "
+                + "but the upstream JAR has SQLITE,MYSQL,DUCKDB"), message);
+        }
+
+        @Test
+        @DisplayName("capability report with constants of an enum that upstream doesn't have")
+        void enumMissing() {
+            String message = violation(upstream -> { }, extensions -> extensions.report.replaceAll(line ->
+                line.replace(SyntheticUpstream.DATABASE_TYPE, SyntheticUpstream.CONFIG_HANDLER))).getMessage();
+            assertTrue(message.contains("but the upstream JAR has no such enum"), message);
+        }
+
+        @Test
+        @DisplayName("capability report with no capabilities for extension classes")
+        void emptyCapabilityReport() {
+            String message = violation(upstream -> { }, extensions -> extensions.report.clear()).getMessage();
+            assertTrue(message.contains("The capability report lists no capabilities, but the extensions JAR has "
+                + "classes"), message);
+        }
+
+        @Test
+        @DisplayName("capability report naming documentation without upstream's source tree")
+        void documentationWithoutUpstreamDirectory() {
+            passUpstreamDirectory = false;
+            String message = violation(upstream -> { }).getMessage();
+            assertTrue(message.contains("names upstream's docs/database-migration.md, but the transformer wasn't given "
+                + "upstream's source tree (--upstream-dir)"), message);
+        }
+
+        @Test
+        @DisplayName("capability report that isn't valid UTF-8")
+        void capabilityReportEncoding() throws IOException {
+            SyntheticUpstream.Jars jars = new SyntheticUpstream().write(directory);
+            SyntheticExtensions extensions = new SyntheticExtensions();
+            Path report = extensions.writeReport(directory, jars.shaded());
+            byte[] bytes = Files.readAllBytes(report);
+            byte[] broken = Arrays.copyOf(bytes, bytes.length + 1);
+            broken[bytes.length - 1] = (byte) 0xC3;
+            broken[bytes.length] = '\n';
+            Files.write(report, broken);
+            String message = assertThrows(ContractViolation.class, () -> transform(jars, extensions.write(directory),
+                report, TestClasses.runtimeJar(directory), directory.resolve("out.jar"))).getMessage();
+            assertEquals("The capability report isn't valid UTF-8", message);
+        }
+
+        @Test
+        @DisplayName("upstream ships a capability report LibreProtect would overwrite")
+        void capabilityReportCollision() {
+            String message = violation(upstream -> upstream.upstreamExtra.put("META-INF/libreprotect/capabilities.tsv",
+                new byte[0])).getMessage();
+            assertTrue(message.contains("META-INF/libreprotect/capabilities.tsv would overwrite"), message);
         }
 
         @Test

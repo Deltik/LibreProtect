@@ -46,6 +46,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 final class TestClasses {
 
+    private static final long ENTRY_TIME = 1_700_000_000_000L;
+
     private TestClasses() {
     }
 
@@ -85,10 +87,15 @@ final class TestClasses {
         }
     }
 
+    /**
+     * Write a JAR whose bytes depend only on its entries, so that its SHA-256 does too.
+     */
     static Path writeJar(Path jar, Map<String, byte[]> entries) throws IOException {
         try (OutputStream out = Files.newOutputStream(jar); ZipOutputStream zip = new ZipOutputStream(out)) {
             for (Map.Entry<String, byte[]> entry : entries.entrySet()) {
-                zip.putNextEntry(new ZipEntry(entry.getKey()));
+                ZipEntry zipEntry = new ZipEntry(entry.getKey());
+                zipEntry.setTime(ENTRY_TIME);
+                zip.putNextEntry(zipEntry);
                 zip.write(entry.getValue());
                 zip.closeEntry();
             }

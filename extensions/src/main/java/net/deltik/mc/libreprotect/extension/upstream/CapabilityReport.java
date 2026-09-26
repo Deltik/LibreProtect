@@ -45,8 +45,9 @@ import java.util.List;
 
 /**
  * The capability report, {@code capabilities.tsv}: how LibreProtect's
- * extensions use the upstream JAR. One tab-separated record per line; the
- * {@code upstream} line first, the others sorted by their bytes:
+ * extensions use the upstream JAR, which the transformer audits. One
+ * tab-separated record per line; the {@code upstream} line first, the
+ * others sorted by their bytes:
  * <pre>
  * upstream    sha256      &lt;SHA-256 of the upstream JAR&gt;
  * capability  &lt;id&gt;  &lt;strategy|absent|unavailable&gt;  &lt;description, or why not&gt;

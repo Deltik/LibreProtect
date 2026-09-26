@@ -182,8 +182,9 @@ upstream_generation() {
 # Upstream's builds for development builds, kept by what went into them, so
 # that building the same upstream commit with the same settings again takes a
 # copy rather than another Maven build. Upstream's build is reproducible: it
-# would give the same bytes again. Releases never use them. scripts/lp clean
-# removes them, like all build output.
+# would give the same bytes again, which the audit's reviewedUpstreams
+# recognizes by hash. Releases never use them. scripts/lp clean removes them,
+# like all build output.
 UPSTREAM_BUILDS="$BUILD_DIR/upstream-builds"
 
 # The settings of upstream's build of the checkout at commit $1 with the Maven
@@ -392,6 +393,7 @@ cmd_build() {
         --original-jar "$original" \
         --runtime-jar "$ROOT/runtime/target/libreprotect-runtime.jar" \
         --extensions-jar "$ROOT/extensions/target/libreprotect-extensions.jar" \
+        --capabilities "$ROOT/extensions/target/capabilities.tsv" \
         --translations "$UPSTREAM_DIR/lang" \
         --upstream-dir "$UPSTREAM_DIR" \
         --baseline "$ROOT/audit/baseline.json" \

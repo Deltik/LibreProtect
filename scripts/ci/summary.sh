@@ -39,7 +39,7 @@ echo
 if jq -e '[.findings[] | select(.severity != "INFO")] | length > 0' "$AUDIT" >/dev/null; then
     echo "| Severity | Rule | Where | Detail |"
     echo "|---|---|---|---|"
-    jq -r '[.findings[] | select(.severity != "INFO")][:100][] | "| \(.severity) | \(.rule) | `\(.site)` | \(.detail | gsub("\\|"; "\\\\|")) |"' "$AUDIT"
+    jq -r '[.findings[] | select(.severity != "INFO")] | sort_by(.rule == "capability-change") | .[:100][] | "| \(.severity) | \(.rule) | `\(.site)` | \(.detail | gsub("\\|"; "\\\\|")) |"' "$AUDIT"
     echo
     echo "Accepting reviewed changes: compare \`dist/audit-observed.json\` (in the \`dist\` artifact) with \`audit/baseline.json\` and commit what you have reviewed."
     echo

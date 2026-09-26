@@ -70,7 +70,7 @@ notes="$(mktemp)"
     if jq -e '.reviewRequired' "$DIST/audit-report.json" >/dev/null; then
         echo "### Audit Findings Not Yet Reviewed"
         echo
-        jq -r '[.findings[] | select(.severity == "REVIEW")][:50][] | "- \(.rule) at `\(.site)`: \(.detail)"' "$DIST/audit-report.json"
+        jq -r '[.findings[] | select(.severity == "REVIEW")] | sort_by(.rule == "capability-change") | .[:50][] | "- \(.rule) at `\(.site)`: \(.detail)"' "$DIST/audit-report.json"
         echo
     fi
     sed 's/^# /### /; s/^## /#### /' "$DIST/DIFFERENCES.md"

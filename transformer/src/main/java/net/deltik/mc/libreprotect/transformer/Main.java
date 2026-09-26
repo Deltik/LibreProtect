@@ -44,6 +44,7 @@ public final class Main {
         "upstream-jar", "original-jar", "runtime-jar", "translations", "upstream-dir", "baseline", "output", "version",
         "upstream-ref", "upstream-commit", "fork-commit", "timestamp", "report", "differences", "audit-report",
         "observed");
+    private static final List<String> OPTIONAL = List.of("extensions-jar", "capabilities", "description", "website");
 
     private Main() {
     }
@@ -54,6 +55,11 @@ public final class Main {
             for (String required : REQUIRED) {
                 if (!arguments.containsKey(required)) {
                     throw new IllegalArgumentException("Missing --" + required);
+                }
+            }
+            for (String name : arguments.keySet()) {
+                if (!REQUIRED.contains(name) && !OPTIONAL.contains(name)) {
+                    throw new IllegalArgumentException("Unknown option --" + name);
                 }
             }
 
@@ -67,6 +73,8 @@ public final class Main {
                 Path.of(single(arguments, "original-jar")),
                 Path.of(single(arguments, "runtime-jar")),
                 arguments.containsKey("extensions-jar") ? Path.of(single(arguments, "extensions-jar")) : null,
+                arguments.containsKey("capabilities") ? Path.of(single(arguments, "capabilities")) : null,
+                Path.of(single(arguments, "upstream-dir")),
                 Path.of(single(arguments, "translations")),
                 Path.of(single(arguments, "output")),
                 single(arguments, "version"),
@@ -102,6 +110,7 @@ public final class Main {
                 + " phrases" + (report.englishDifferences.isEmpty() ? ""
                 : ", which en.yml differs from for " + String.join(", ", report.englishDifferences)));
             System.out.println("  main class " + report.upstreamMainClass + " -> " + report.generatedMainClass);
+            System.out.println("  " + capabilitySummary(report));
             System.out.println("  " + report.upstreamClassCount + " upstream classes, "
                 + report.libraryClassCount + " bundled library classes, "
                 + report.exemptLibraryClassCount + " exempt library classes");
@@ -127,6 +136,30 @@ public final class Main {
     }
 
     private static final int DETAIL_LIMIT = 25;
+
+    /**
+     * @return how the extensions work with this upstream, such as "extension
+     *         capabilities: 12 available, 3 absent, 1 unavailable; 40 upstream
+     *         members found by name; 5 upstream methods fingerprinted"
+     */
+    private static String capabilitySummary(TransformReport report) {
+        if (report.capabilities.isEmpty()) {
+            return "no extension capabilities";
+        }
+        long available = report.capabilities.stream().filter(TransformReport.Capability::available).count();
+        long absent = report.capabilities.stream()
+            .filter(capability -> capability.value().equals(CapabilityReport.ABSENT)).count();
+        long fingerprinted = report.capabilities.stream().flatMap(capability -> capability.relies().stream())
+            .map(TransformReport.Reliance::member).distinct().count();
+        return "extension capabilities: " + available + " available, " + absent + " absent, "
+            + (report.capabilities.size() - available - absent) + " unavailable; "
+            + count(report.upstreamMemberCount, "upstream member") + " found by name; "
+            + count(fingerprinted, "upstream method") + " fingerprinted";
+    }
+
+    private static String count(long count, String noun) {
+        return count + " " + noun + (count == 1 ? "" : "s");
+    }
 
     /**
      * Print counts per rule and package, then the first findings in detail.
@@ -160,9 +193,13 @@ public final class Main {
     }
 
     /**
-     * @return a class's top three package segments, or an inventory item as is
+     * @return a class's top three package segments, the kind of a capability
+     *         key, or an inventory item as is
      */
     private static String group(String site) {
+        if (site.contains(" ")) {
+            return site.substring(0, site.indexOf(' '));
+        }
         int hash = site.indexOf('#');
         String className = hash < 0 ? site : site.substring(0, hash);
         if (!className.contains("/") || className.contains(":")) {

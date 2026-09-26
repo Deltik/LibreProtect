@@ -29,6 +29,7 @@ import org.objectweb.asm.tree.MethodNode;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -51,6 +52,13 @@ final class Transformer {
     /**
      * @param extensionsJar LibreProtect's extension implementations, which reach
      *                      upstream only by reflection, or {@code null} for none
+     * @param capabilities the extensions build's capability report, which it
+     *                     probed against {@code upstreamJar}, or {@code null}
+     *                     if the extensions JAR has no classes
+     * @param upstreamDirectory upstream's source checkout, for the
+     *                          documentation that the capability report
+     *                          names; {@code null} only for a report that
+     *                          names none
      * @param translations upstream's {@code lang/} directory, whose translations LibreProtect bundles
      * @param description plugin.yml's description, or {@code null} to derive it from upstream's
      */
@@ -59,6 +67,8 @@ final class Transformer {
         Path originalJar,
         Path runtimeJar,
         Path extensionsJar,
+        Path capabilities,
+        Path upstreamDirectory,
         Path translations,
         Path outputJar,
         String version,
@@ -178,6 +188,7 @@ final class Transformer {
         }
         bundleTranslations(upstreamClasses);
         checkIsolation(runtime, extensions);
+        bundleCapabilities(extensions);
 
         String generatedEntry = SubclassGenerator.CLASS_NAME + ".class";
         ContractViolation.require(!output.contains(generatedEntry), "Upstream ships " + generatedEntry);
@@ -457,6 +468,42 @@ final class Transformer {
         }
         ContractViolation.require(isolation.violations().isEmpty(), "LibreProtect's classes use upstream's classes "
             + "directly:\n  " + String.join("\n  ", isolation.violations()));
+    }
+
+    /**
+     * Read the capability report of the extensions' build, which must have
+     * probed this upstream JAR, and bundle it.
+     */
+    private void bundleCapabilities(JarContents extensions) throws IOException {
+        if (options.capabilities() == null) {
+            ContractViolation.require(extensions.names().stream().noneMatch(JarContents::isClass),
+                "The extensions JAR has classes, but no capability report was given. Pass the report that the "
+                    + "extensions' build writes, target/capabilities.tsv, with --capabilities.");
+            return;
+        }
+        ContractViolation.require(Files.isRegularFile(options.capabilities()),
+            "The capability report " + options.capabilities() + " doesn't exist");
+        ContractViolation.require(options.upstreamDirectory() == null || Files.isDirectory(options.upstreamDirectory()),
+            "Upstream's source tree " + options.upstreamDirectory() + " doesn't exist");
+        byte[] bytes = Files.readAllBytes(options.capabilities());
+        String text = CapabilityReport.decode(bytes);
+        String probed = CapabilityReport.probedSha256(text);
+        String upstreamSha256 = CapabilityReport.sha256(Files.readAllBytes(options.upstreamJar()));
+        ContractViolation.require(probed.equals(upstreamSha256),
+            "The capability report was probed against another CoreProtect JAR: it names SHA-256 " + probed + ", but "
+                + options.upstreamJar() + " has " + upstreamSha256
+                + ". Build the extensions against the upstream JAR being transformed.");
+        CapabilityReport capabilities = CapabilityReport.read(text, upstream, options.upstreamDirectory());
+        ContractViolation.require(!capabilities.capabilities.isEmpty()
+                || extensions.names().stream().noneMatch(JarContents::isClass),
+            "The capability report lists no capabilities, but the extensions JAR has classes");
+        report.capabilities.addAll(capabilities.capabilities);
+        report.upstreamMemberCount = CapabilityReport.memberCount(capabilities.capabilities);
+
+        ContractViolation.require(!output.contains(CapabilityReport.ENTRY), "LibreProtect's " + CapabilityReport.ENTRY
+            + " would overwrite a file that upstream now ships, or that LibreProtect adds twice");
+        output.put(CapabilityReport.ENTRY, bytes);
+        report.injectedEntries.add(CapabilityReport.ENTRY);
     }
 
     private void checkRuntime(JarContents runtime) {
