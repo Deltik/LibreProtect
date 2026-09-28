@@ -17,9 +17,9 @@
 # You should have received a copy of the GNU General Public License
 # along with LibreProtect.  If not, see <https://www.gnu.org/licenses/>.
 
-# Refuse a commit that adds or changes a Java file or shell script without
-# LibreProtect's license notice, as CI would. Enable the hooks in .githooks
-# once per clone with:
+# Refuse a commit that adds or changes a Java file, shell script or Python
+# script without LibreProtect's license notice, as CI would. Enable the hooks
+# in .githooks once per clone with:
 #
 #   git config core.hooksPath .githooks
 set -euo pipefail

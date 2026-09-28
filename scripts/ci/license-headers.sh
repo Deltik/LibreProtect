@@ -30,12 +30,13 @@
 # It fails with status 2 if Git can't list or read the files, and, without
 # --staged, if it finds no file to check.
 #
-# Java files and shell scripts are covered: *.java, *.sh, scripts/lp, and any
-# other file with an sh or bash shebang, except the paths in excluded().
-# A Java file begins with the notice as a /* */ comment. A shell script has it
-# as # comments after its shebang and any shellcheck directives that follow
-# the shebang, or after a "# shellcheck shell=" directive that stands in for
-# one. A blank line follows the notice.
+# Java files, shell scripts and Python scripts are covered: *.java, *.sh,
+# *.py, *.pyi, scripts/lp, and any other file with an sh, bash, python or
+# uv run shebang, except the paths in excluded(). A Java file begins with the
+# notice as a /* */ comment. A shell or Python script has it as # comments
+# after its shebang and any shellcheck directives that follow the shebang, or
+# after a "# shellcheck shell=" directive that stands in for one. A blank
+# line follows the notice.
 #
 # {YEAR} in the text may be one year or a range, such as 2026 or 2026-2027.
 # --fix writes the current year.
@@ -47,7 +48,7 @@ YEAR_FIELD="{YEAR}"
 # Lines read from the top of each file: the notice after a shebang, and
 # room for another notice before the code starts
 WINDOW=80
-SHEBANG='^#![[:space:]]*(/usr/bin/env[[:space:]]+(-S[[:space:]]+)?)?(/[^[:space:]]*/)?(ba)?sh([[:space:]]|$)'
+SHEBANG='^#![[:space:]]*(/usr/bin/env[[:space:]]+(-S[[:space:]]+)?)?(/[^[:space:]]*/)?((ba)?sh|python[0-9.]*|uv[[:space:]]+run)([[:space:]]|$)'
 # What another license notice says, in lowercase
 OTHER_NOTICE='copyright|spdx-license-identifier|public license|licensed under'
 
@@ -55,7 +56,7 @@ die() { printf 'error: %s\n' "$*" >&2; exit 2; }
 
 usage() {
     printf 'Usage: %s [--fix | --staged]\n' "${0##*/}"
-    printf 'Checks that Java files and shell scripts begin with the license notice in %s.\n' "$TEMPLATE"
+    printf 'Checks that Java files, shell scripts and Python scripts begin with the license notice in %s.\n' "$TEMPLATE"
     printf '  --fix     Add the notice to files that have none\n'
     printf '  --staged  Check the staged files that the next commit adds or changes\n'
 }
@@ -74,9 +75,9 @@ excluded() {
     return 1
 }
 
-# Set KIND to how path $1 takes comments: java, shell, or empty if the path
-# isn't covered. Without the path's first line as $2, KIND is unknown if
-# only that can tell.
+# Set KIND to how path $1 takes comments: java, shell (# comments, which
+# Python scripts take too), or empty if the path isn't covered. Without the
+# path's first line as $2, KIND is unknown if only that can tell.
 classify() {
     KIND=""
     if excluded "$1"; then
@@ -84,7 +85,7 @@ classify() {
     fi
     case "$1" in
         *.java) KIND=java ;;
-        *.sh | scripts/lp) KIND=shell ;;
+        *.sh | *.py | *.pyi | scripts/lp) KIND=shell ;;
         *)
             if (( $# < 2 )); then
                 KIND=unknown
@@ -271,7 +272,7 @@ main() {
             fi
         done < "$WORK/list"
         # Every checkout has Java files and shell scripts, so finding none means the listing went wrong
-        (( count > 0 )) || die "found no Java files or shell scripts in $ROOT"
+        (( count > 0 )) || die "found no Java files, shell scripts or Python scripts in $ROOT"
     fi
 
     if (( ${#added[@]} )); then
@@ -280,7 +281,7 @@ main() {
     fi
     if (( ${#problems[@]} == 0 )); then
         if [[ "$mode" != staged ]]; then
-            printf 'All %d Java files and shell scripts begin with the license notice.\n' "$count"
+            printf 'All %d Java files, shell scripts and Python scripts begin with the license notice.\n' "$count"
         fi
         return 0
     fi

@@ -37,7 +37,7 @@
 #   scripts/lp sources              Archive the complete source of the last build (needs a clean commit)
 #   scripts/lp sbom                 Write a CycloneDX software bill of materials of the last build (needs jq)
 #   scripts/lp clean                Remove build output
-#   scripts/lp headers [--fix]      Check that Java files and shell scripts begin with the
+#   scripts/lp headers [--fix]      Check that Java, shell and Python files begin with the
 #                                   license notice, or add it to those that have none
 #
 # Options for build:

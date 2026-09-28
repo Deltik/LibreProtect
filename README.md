@@ -384,7 +384,7 @@ A development build's version is what `git describe --tags --long` says about th
 | [`upstream.lock`](upstream.lock)             | The upstream release that releases are built from                                                                                                                                       |
 | [`scripts/`](scripts/)                       | `lp`, which developers and CI both use, plus CI helpers and the one-time `setup-github.sh`                                                                                              |
 
-LibreProtect's own Java files and shell scripts begin with its license notice, the text in [`scripts/license-header.txt`](scripts/license-header.txt). CI checks this with `scripts/lp headers`, and `scripts/lp headers --fix` adds the notice to new files. To have Git check the files in each commit too, enable the repository's hooks once per clone with `git config core.hooksPath .githooks`.
+LibreProtect's own Java files, shell scripts and Python scripts begin with its license notice, the text in [`scripts/license-header.txt`](scripts/license-header.txt). CI checks this with `scripts/lp headers`, and `scripts/lp headers --fix` adds the notice to new files. To have Git check the files in each commit too, enable the repository's hooks once per clone with `git config core.hooksPath .githooks`.
 
 </details>
 
