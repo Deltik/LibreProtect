@@ -28,7 +28,7 @@
 # Upstream decides which Minecraft versions and server software a release
 # supports: they are copied from the version that upstream published on
 # Modrinth for the same CoreProtect release. So are the project's categories
-# and environment. The description comes from README.md.
+# and environment. The description is branding/description.md.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -50,8 +50,7 @@ upstream_ref="$(jq -r .upstreamRef "$work/transform-report.json")"
 
 echo "==> Syncing the project's details"
 upstream_project="$(modrinth GET "/project/$UPSTREAM_MODRINTH_PROJECT")"
-store_description > "$work/body.md"
-jq -n --argjson upstream "$upstream_project" --rawfile body "$work/body.md" \
+jq -n --argjson upstream "$upstream_project" --rawfile body "$ROOT/branding/description.md" \
     --arg summary "$STORE_SUMMARY" --arg repository "$REPOSITORY_URL" '{
         description: $summary,
         body: $body,

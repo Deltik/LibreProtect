@@ -57,13 +57,3 @@ spiget_resource() {
 release_upstream_ref() {
     gh release download "$1" --pattern transform-report.json --output - | jq -r .upstreamRef
 }
-
-# The user-facing parts of the README, marked with "begin store description"
-# and "end store description" comments, with links that work outside GitHub
-store_description() {
-    awk '/<!-- end store description -->/ {keep = 0} keep {print} /<!-- begin store description -->/ {keep = 1; if (blocks++) print ""}' \
-        "$ROOT/README.md" \
-        | perl -pe 's{\]\(#}{]($ENV{REPOSITORY_URL}#}g; s{\]\((?![a-z]+:|#)([^)]+)\)}{]($ENV{REPOSITORY_URL}/blob/main/$1)}g'
-    printf '\nSource code, documentation and issues: %s\n' "$REPOSITORY_URL"
-}
-export REPOSITORY_URL

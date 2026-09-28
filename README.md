@@ -1,4 +1,4 @@
-# LibreProtect
+![LibreProtect: free, private block logging, rollbacks and restores](branding/banner.svg)
 
 [![GitHub release](https://img.shields.io/github/v/release/Deltik/LibreProtect)](https://github.com/Deltik/LibreProtect/releases)
 [![GitHub downloads](https://img.shields.io/github/downloads/Deltik/LibreProtect/total?label=GitHub%20downloads)](https://github.com/Deltik/LibreProtect/releases)
@@ -7,7 +7,8 @@
 [![SpigotMC rating](https://img.shields.io/spiget/rating/139087)](https://www.spigotmc.org/resources/libreprotect.139087/)
 [![CI status](https://img.shields.io/github/actions/workflow/status/Deltik/LibreProtect/ci.yml?branch=main&label=CI)](https://github.com/Deltik/LibreProtect/actions/workflows/ci.yml)
 
-<!-- begin store description -->
+# LibreProtect
+
 **LibreProtect** is a privacy-hardened build of [CoreProtect](https://github.com/PlayPro/CoreProtect), the block logging and rollback plugin for Minecraft servers. It is rebuilt from each CoreProtect release, automatically when possible.
 
 * **No telemetry.** CoreProtect contacts coreprotect.net for update checks, usage statistics, error reports, donation-key checks and translations, and it bundles bStats. LibreProtect sends each of those requests through a [network policy](#configuration). By default, it answers translation requests itself, from translations it bundles, and blocks everything else except update checks. It answers those by asking GitHub or Modrinth for LibreProtect's latest release, without sending your version number, server port or license key. The `privacy-first` preset blocks update checks too.
@@ -15,7 +16,6 @@
 * **Drop-in.** LibreProtect keeps CoreProtect's commands, permissions, API, data folder and database. Add-ons that depend on CoreProtect keep working, and you can switch back and forth between the two.
 
 LibreProtect is an independent project. It isn't affiliated with or endorsed by CoreProtect or its authors.
-<!-- end store description -->
 
 ## Table of Contents
 
@@ -28,7 +28,6 @@ LibreProtect is an independent project. It isn't affiliated with or endorsed by 
 * [Database Migration](#database-migration)
 * [License](#license)
 
-<!-- begin store description -->
 ## Installation
 
 1. Download `LibreProtect-<version>.jar` from [GitHub Releases](https://github.com/Deltik/LibreProtect/releases), [Modrinth](https://modrinth.com/plugin/libreprotect) or [SpigotMC](https://www.spigotmc.org/resources/libreprotect.139087/).
@@ -300,7 +299,6 @@ Between SQLite or MySQL and DuckDB or ClickHouse, CoreProtect's own conversions 
 When it switches, LibreProtect checks that CoreProtect actually uses the new database. Then `config.yml` selects the new database, with `database-type`, or with `use-mysql` on CoreProtect versions without `database-type`. The old database is left as it was, so you can archive or delete it once you're satisfied. If the migration fails, or the server stops during it, CoreProtect keeps using the old database, and the new one is marked as unfinished so that CoreProtect won't start on it. Delete the new database before you try again.
 
 If the CoreProtect that LibreProtect was built from lacks something that a migration needs, the command says so instead of starting: `/co migrate-db isn't available with this CoreProtect build: <reason>`, or `Migrating to <database> isn't available with this CoreProtect build: <reason>` when only some migrations are affected. For example, if CoreProtect's ClickHouse writer changed, migrating to ClickHouse is refused, but migrating from ClickHouse to another database still works.
-<!-- end store description -->
 
 ## For Developers
 
@@ -348,7 +346,7 @@ Builds are reproducible: the same inputs produce a byte-identical JAR.
 
 A bump pull request merges by itself only when CI passes: the build, the contract checks, the license notice check and the integration test must pass, and the audit must find nothing unreviewed. [CI](.github/workflows/ci.yml) also builds and tests upstream's default branch in a separate job, which shows early what CoreProtect's next release breaks, and which may fail without failing the workflow. When a release, development build or distribution fails, it opens an issue labeled `pipeline-failure`, and closes it once that pipeline passes again. A failing bump pull request shows its failure on the pull request.
 
-Modrinth gets the Minecraft versions and server software that upstream declares for the same CoreProtect release on Modrinth, as well as upstream's categories. The Modrinth description is the part of this README between `begin store description` and `end store description` comments.
+Modrinth gets the Minecraft versions and server software that upstream declares for the same CoreProtect release on Modrinth, as well as upstream's categories. The Modrinth description is [`branding/description.md`](branding/description.md).
 
 To accept upstream changes that need review, open the failing CI run's summary and review what changed. Then update `audit/baseline.json` in the pull request with the reviewed values from `audit-observed.json`, which the `dist` artifact includes, and merge it. For `capabilities`, add the reviewed values and keep the other upstream line's, rather than copying the list, since the baseline accepts both lines. Changes under `audit/` need a code owner's approval. To release changes to LibreProtect alone, increase `FORK_REVISION` in `upstream.lock`.
 
@@ -394,7 +392,6 @@ The Python code must pass Ruff's formatter, all of Ruff's lints and all of ty's 
 
 </details>
 
-<!-- begin store description -->
 ## License
 
 LibreProtect is free software under the [GNU General Public License, version 3 or later](LICENSE).
@@ -406,4 +403,3 @@ Every release includes `DIFFERENCES.md`, which describes how it differs from Cor
 ### Trademarks
 
 CoreProtect's license doesn't grant rights to its name. LibreProtect uses the name "CoreProtect" only to say what LibreProtect is built from and compatible with, and as the technical plugin name that other plugins and existing data folders depend on. Everything that LibreProtect presents as its own, including its messages, is named LibreProtect.
-<!-- end store description -->
