@@ -32,14 +32,18 @@ import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AuditTest {
@@ -347,15 +351,6 @@ class AuditTest {
         }
 
         @Test
-        @DisplayName("a changed LICENSE")
-        void license() throws Exception {
-            AuditBaseline baseline = cleanBaseline();
-            Files.writeString(upstreamDirectory.resolve("LICENSE"), "All rights reserved\n");
-            AuditReport report = audit(upstream -> { }, baseline);
-            assertTrue(has(report, Severity.REVIEW, "license-change", "LICENSE"));
-        }
-
-        @Test
         @DisplayName("a new Maven repository")
         void repository() throws Exception {
             AuditBaseline baseline = cleanBaseline();
@@ -383,6 +378,240 @@ class AuditTest {
             Exception thrown = org.junit.jupiter.api.Assertions.assertThrows(Exception.class,
                 () -> audit(upstream -> { }, baseline));
             assertTrue(thrown.getMessage().contains("DOCTYPE"), thrown.getMessage());
+        }
+    }
+
+    @Nested
+    @DisplayName("FAIL on a change to upstream's license")
+    class License {
+
+        private static final String HEADER = """
+            /*
+             * Copyright (C) 2024 Intelli
+             * All rights reserved.
+             */
+            package net.coreprotect;
+
+            """;
+
+        private void write(String path, String content) throws IOException {
+            Path file = upstreamDirectory.resolve(path);
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, content);
+        }
+
+        private static boolean fails(AuditReport report, String site, String detailFragment) {
+            return report.findings.stream().anyMatch(finding -> finding.severity() == Severity.FAIL
+                && finding.rule().equals(Audit.RULE_LICENSE) && finding.site().equals(site)
+                && finding.detail().contains(detailFragment));
+        }
+
+        private static String sha256(String text) throws Exception {
+            return HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8)));
+        }
+
+        @Test
+        @DisplayName("a changed LICENSE")
+        void changed() throws Exception {
+            AuditBaseline baseline = cleanBaseline();
+            Files.writeString(upstreamDirectory.resolve("LICENSE"), "All rights reserved\n");
+            AuditReport report = audit(upstream -> { }, baseline);
+            assertTrue(report.failed, report.findings.toString());
+            assertTrue(fails(report, "LICENSE", "license file changed from "
+                + sha256("The Artistic License 2.0\n") + " to " + sha256("All rights reserved\n")));
+        }
+
+        @Test
+        @DisplayName("an upstream without a license file at its root")
+        void deleted() throws Exception {
+            AuditBaseline baseline = cleanBaseline();
+            Files.delete(upstreamDirectory.resolve("LICENSE"));
+            AuditReport report = audit(upstream -> { }, baseline);
+            assertTrue(fails(report, "LICENSE", "at its root"));
+        }
+
+        @Test
+        @DisplayName("a LICENSE renamed, even with the same text, but not as a missing license")
+        void renamed() throws Exception {
+            AuditBaseline baseline = cleanBaseline();
+            Files.move(upstreamDirectory.resolve("LICENSE"), upstreamDirectory.resolve("LICENSE.md"));
+            AuditReport report = audit(upstream -> { }, baseline);
+            assertTrue(fails(report, "LICENSE.md", "new license file"));
+            assertFalse(fails(report, "LICENSE", "at its root"));
+        }
+
+        @Test
+        @DisplayName("a LICENSE replaced by other license files, which don't license the whole of upstream")
+        void rootReplaced() throws Exception {
+            write("LICENSES/CC0-1.0.txt", "CC0\n");
+            AuditBaseline baseline = cleanBaseline();
+            Files.delete(upstreamDirectory.resolve("LICENSE"));
+            write("license-header.txt", "Copyright Intelli\n");
+            AuditReport report = audit(upstream -> { }, baseline);
+            assertTrue(fails(report, "LICENSE", "at its root"));
+            assertTrue(fails(report, "license-header.txt", "new license file"));
+        }
+
+        @Test
+        @DisplayName("a new license file anywhere in upstream's source, or at any depth in a LICENSES directory")
+        void newFile() throws Exception {
+            AuditBaseline baseline = cleanBaseline();
+            List<String> paths = List.of("lang/COPYING.txt", "LICENSING.md", "MIT-LICENSE", "COPYING3",
+                "docs/THIRD_PARTY_NOTICES.md", "TERMS_OF_USE.md", "EULA.txt", "src/main/resources/target/eula.yml",
+                "LICENSES/LicenseRef-Proprietary.txt", "LICENSES/extra/Proprietary.txt");
+            for (String path : paths) {
+                write(path, "All rights reserved\n");
+            }
+            write("src/main/resources/illegal-blocks.yml", "- bedrock\n");
+            AuditReport report = audit(upstream -> { }, baseline);
+            for (String path : paths) {
+                assertTrue(fails(report, path, "new license file"), path + ": " + report.findings);
+            }
+            assertEquals(paths.size(), report.count(Severity.FAIL), report.findings.toString());
+        }
+
+        @Test
+        @DisplayName("a change to the file that a license's symbolic link points to")
+        void symlink() throws Exception {
+            write("legal-texts/artistic.txt", "The Artistic License 2.0\n");
+            Files.delete(upstreamDirectory.resolve("LICENSE"));
+            Files.createSymbolicLink(upstreamDirectory.resolve("LICENSE"), Path.of("legal-texts/artistic.txt"));
+            AuditBaseline baseline = cleanBaseline();
+            assertFalse(audit(upstream -> { }, baseline).failed);
+            write("legal-texts/artistic.txt", "All rights reserved\n");
+            AuditReport report = audit(upstream -> { }, baseline);
+            assertTrue(fails(report, "LICENSE", "symlink to legal-texts/artistic.txt, " + sha256("All rights reserved\n")));
+        }
+
+        @Test
+        @DisplayName("licenses that upstream's pom declares")
+        void pom() throws Exception {
+            AuditBaseline baseline = cleanBaseline();
+            Files.writeString(upstreamDirectory.resolve("pom.xml"), POM.replace("<repositories>",
+                "<licenses><license><name>Proprietary</name><url>https://example.invalid/terms</url></license>"
+                    + "</licenses><repositories>"));
+            AuditReport report = audit(upstream -> { }, baseline);
+            assertTrue(fails(report, "pom.xml",
+                "changed from absent to name: Proprietary, url: https://example.invalid/terms"));
+            Files.writeString(upstreamDirectory.resolve("pom.xml"), POM.replace("<repositories>",
+                "<licenses><license><name>Proprietary</name><url>https://example.invalid/terms</url>"
+                    + "<comments>Noncommercial use only</comments></license></licenses><repositories>"));
+            baseline.licenses.addAll(report.observed.licenses);
+            assertTrue(fails(audit(upstream -> { }, baseline), "pom.xml", "comments: Noncommercial use only"));
+        }
+
+        @Test
+        @DisplayName("a new comment at the start of upstream's Java files")
+        void header() throws Exception {
+            AuditBaseline baseline = cleanBaseline();
+            write("src/main/java/net/coreprotect/A.java", HEADER + "class A {}\n");
+            write("src/main/java/net/coreprotect/B.java", HEADER + "class B {}\n");
+            write("src/main/java/net/coreprotect/C.java", "package net.coreprotect;\n\n/* All rights reserved */\n");
+            AuditReport report = audit(upstream -> { }, baseline);
+            assertTrue(fails(report, "src/main/java/net/coreprotect/A.java",
+                "2 Java files, such as this one, which may state a license: Copyright (C) # Intelli All rights reserved."));
+            assertEquals(1, report.count(Severity.FAIL), report.findings.toString());
+        }
+
+        @Test
+        @DisplayName("needs nothing for an accepted comment with other copyright years")
+        void headerYears() throws Exception {
+            write("src/main/java/net/coreprotect/A.java", HEADER + "class A {}\n");
+            AuditBaseline baseline = cleanBaseline();
+            write("src/main/java/net/coreprotect/A.java", HEADER.replace("2024", "2019-2026") + "class A {}\n");
+            write("src/main/java/net/coreprotect/B.java", HEADER.replace("2024", "2021, 2026") + "class B {}\n");
+            AuditReport report = audit(upstream -> { }, baseline);
+            assertFalse(report.failed, report.findings.toString());
+        }
+
+        @Test
+        @DisplayName("ignores Git's files and the build's output")
+        void notSource() throws Exception {
+            AuditBaseline baseline = cleanBaseline();
+            write(".git/COPYING", "x\n");
+            write("target/classes/LICENSE", "x\n");
+            write("target/generated-sources/A.java", "// All rights reserved\nclass A {}\n");
+            AuditReport report = audit(upstream -> { }, baseline);
+            assertFalse(report.failed, report.findings.toString());
+        }
+
+        @Test
+        @DisplayName("accepts a value for each upstream line")
+        void valuesOfEachLine() throws Exception {
+            AuditBaseline baseline = cleanBaseline();
+            Files.writeString(upstreamDirectory.resolve("LICENSE"), "The Artistic License 2.0, revised\n");
+            baseline.licenses.addAll(audit(upstream -> { }, baseline).observed.licenses);
+            assertFalse(audit(upstream -> { }, baseline).failed);
+            Files.writeString(upstreamDirectory.resolve("LICENSE"), "The Artistic License 2.0\n");
+            assertFalse(audit(upstream -> { }, baseline).failed);
+        }
+
+        @Test
+        @DisplayName("needs nothing for an accepted license file that this line doesn't have")
+        void keysOfAnotherLine() throws Exception {
+            AuditBaseline baseline = cleanBaseline();
+            baseline.licenses.add(Audit.LICENSE_FILE_KEY + "lang/LICENSE=" + "0".repeat(64));
+            AuditReport report = audit(upstream -> { }, baseline);
+            assertFalse(report.failed, report.findings.toString());
+        }
+
+        @Test
+        @DisplayName("an allowance accepts exactly the license that it names")
+        void allowance() throws Exception {
+            AuditBaseline baseline = cleanBaseline();
+            baseline.allow.add(new AuditBaseline.Allowance(Audit.RULE_LICENSE,
+                Audit.LICENSE_FILE_KEY + "LICENSE=" + sha256("Revised\n"), "test"));
+            Files.writeString(upstreamDirectory.resolve("LICENSE"), "Revised\n");
+            assertFalse(audit(upstream -> { }, baseline).failed);
+            Files.writeString(upstreamDirectory.resolve("LICENSE"), "Revised again\n");
+            assertTrue(audit(upstream -> { }, baseline).failed);
+        }
+
+        @Test
+        @DisplayName("records what it observed, so that it can be copied into the baseline")
+        void observed() throws Exception {
+            write("src/main/java/net/coreprotect/A.java", HEADER + "class A {}\n");
+            assertEquals(Set.of(
+                    Audit.LICENSE_FILE_KEY + "LICENSE=" + sha256("The Artistic License 2.0\n"),
+                    Audit.POM_LICENSES_KEY + "=absent",
+                    Audit.HEADER_KEY + "=" + sha256("Copyright (C) # Intelli All rights reserved.")),
+                cleanBaseline().licenses);
+        }
+
+        @Test
+        @DisplayName("reads the comments before a Java file's code and among its imports, whatever their markers")
+        void headerText() {
+            assertEquals("", Audit.header("package net.coreprotect;\nimport java.util.List;\n/** The class */\nclass A {}\n"));
+            assertEquals("SPDX-License-Identifier: Artistic-2.0 Copyright # Intelli",
+                Audit.header("\uFEFF// SPDX-License-Identifier: Artistic-2.0\n/**\n * Copyright 2024 Intelli\n **/\n"
+                    + "package net.coreprotect;\n"));
+            assertEquals("Proprietary All rights reserved", Audit.header("package net.coreprotect;\n// Proprietary\n"
+                + "import java.util.List;\n/* All rights reserved */\nimport java.util.Map;\n/** The class */\nclass A {}\n"));
+            assertEquals("unterminated", Audit.header("/* unterminated"));
+            assertEquals("All rights reserved", Audit.header("// All rights reserved\rclass A {\r}\r"));
+        }
+
+        @Test
+        @DisplayName("reads a header written in Unicode escapes, as the Java compiler does")
+        void headerUnicodeEscapes() {
+            String slash = "\\" + "u002f";
+            String star = "\\" + "u002a";
+            assertEquals("All rights reserved", Audit.header(slash + star + " All rights reserved " + star + slash
+                + " package net.coreprotect;"));
+        }
+
+        @Test
+        @DisplayName("tells a license's versions and dates apart, though not copyright years")
+        void headerVersions() {
+            assertNotEquals(Audit.header("// GPL-2.0-or-later\n"), Audit.header("// GPL-3.0-or-later\n"));
+            assertNotEquals(Audit.header("// Artistic License 1.0\n"), Audit.header("// Artistic License 2.0\n"));
+            assertNotEquals(Audit.header("// Business Source License 1.1, Change Date: 2030-01-01\n"),
+                Audit.header("// Business Source License 1.1, Change Date: 2099-01-01\n"));
+            assertNotEquals(Audit.header("// Licensed under https://example.invalid/terms/2024\n"),
+                Audit.header("// Licensed under https://example.invalid/terms/2026\n"));
+            assertEquals(Audit.header("// (C) 2024 Intelli\n"), Audit.header("// (C) 2019\u20132026 Intelli\n"));
+            assertEquals(Audit.header("// Copyright 2024 Intelli\n"), Audit.header("// Copyright 2021, 2024 Intelli\n"));
         }
     }
 

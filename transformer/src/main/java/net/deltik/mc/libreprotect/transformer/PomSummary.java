@@ -38,7 +38,7 @@ import java.util.TreeSet;
  * The parts of upstream's {@code pom.xml} that decide what code ends up in
  * the JAR or runs during the build: dependencies, repositories, build plugins
  * and profiles. Versions are kept apart, so routine version bumps don't need
- * a review.
+ * a review. Also the licenses that the pom declares.
  */
 final class PomSummary {
 
@@ -47,6 +47,11 @@ final class PomSummary {
     final TreeSet<String> repositories = new TreeSet<>();
     final TreeSet<String> buildPlugins = new TreeSet<>();
     final TreeSet<String> profiles = new TreeSet<>();
+    /**
+     * Each {@code <license>}, in the pom's order, as all of its fields:
+     * {@code name: ..., url: ..., comments: ...}
+     */
+    final List<String> licenses = new ArrayList<>();
 
     static PomSummary read(Path pom) throws Exception {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
@@ -63,6 +68,13 @@ final class PomSummary {
         PomSummary summary = new PomSummary();
         Element project = document.getDocumentElement();
         summary.readSection(project, "");
+        for (Element license : children(child(project, "licenses"), "license")) {
+            List<String> fields = new ArrayList<>();
+            for (Element field : children(license, null)) {
+                fields.add(field.getTagName() + ": " + text(field).replaceAll("\\s+", " "));
+            }
+            summary.licenses.add(String.join(", ", fields));
+        }
         for (Element profile : children(child(project, "profiles"), "profile")) {
             String id = text(child(profile, "id"));
             summary.profiles.add(id);

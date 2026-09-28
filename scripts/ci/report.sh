@@ -45,7 +45,7 @@ if [[ "$pipeline" == "Distribution" ]]; then
 - **Track the SpigotMC update**: SpigotMC's or Spiget's public API may have been unavailable. The next run of upstream-watch tries again."
 else
     hints="- **CONTRACT VIOLATION** in the build step: upstream changed something that LibreProtect depends on. The message says what and where.
-- **AUDIT FAILED** or **Require a reviewed audit baseline**: upstream added code that needs review; see the job summary.
+- **AUDIT FAILED** or **Require a reviewed audit baseline**: upstream added code that needs review, or changed its license; see the job summary.
 - **Integration test**: see the \`integration-logs\` artifact."
 fi
 

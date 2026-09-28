@@ -838,6 +838,12 @@ coreprotect/LICENSE (Artistic-2.0).
     git -C "$ROOT" archive --format=tar \
         --add-virtual-file="$top/README.txt:$readme" \
         --prefix="$top/libreprotect/" -o "$archive" "$fork_commit"
+    # Upstream's files as the audit read them: its .gitattributes may neither leave files out (export-ignore),
+    # such as its LICENSE, nor rewrite them (export-subst). The repository's own attributes file overrides it.
+    local attributes
+    attributes="$(git -C "$UPSTREAM_DIR" rev-parse --path-format=absolute --git-path info/attributes)"
+    mkdir -p "$(dirname "$attributes")"
+    printf '* -export-ignore -export-subst\n' > "$attributes"
     git -C "$UPSTREAM_DIR" archive --format=tar --prefix="$top/coreprotect/" -o "$archive.upstream" "$upstream_commit"
     tar --concatenate --file="$archive" "$archive.upstream"
     rm -f "$archive.upstream"

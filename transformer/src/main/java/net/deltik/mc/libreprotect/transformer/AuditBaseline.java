@@ -105,8 +105,25 @@ final class AuditBaseline {
      * reported has an empty value.
      */
     TreeSet<String> capabilities = new TreeSet<>();
-    /** SHA-256 of upstream's LICENSE file */
-    String licenseSha256;
+    /**
+     * Upstream's licensing, as the {@code key=value} lines accepted after
+     * review: {@code file <path>=<sha256>} for each license-like file in
+     * upstream's source tree, such as {@code LICENSE}, {@code COPYING.md},
+     * {@code THIRD_PARTY_NOTICES.txt} or a file in a {@code LICENSES/}
+     * directory (a symbolic link gives where it points, and the SHA-256 of
+     * that file); {@code pom licenses=} the fields of each license that
+     * upstream's pom declares, joined by {@code "; "}, or {@code absent}; and
+     * {@code header=<sha256>} for each distinct header of upstream's Java
+     * files, as {@link Audit#header} reads it. A key may be accepted with
+     * several values, one for each upstream line that LibreProtect builds. In
+     * {@code audit-observed.json}, it's what one build observed.
+     *
+     * <p>Any observed {@code key=value} that isn't listed fails the build, a
+     * development build too, since LibreProtect may no longer be allowed to
+     * distribute it. An {@link #allow} entry for the {@code license-change}
+     * rule names the whole {@code key=value} that it accepts as its site.
+     */
+    TreeSet<String> licenses = new TreeSet<>();
     /**
      * SHA-256 of the upstream JARs whose ways the extensions' unit tests
      * expect exactly, as their capability report's {@code upstream sha256}

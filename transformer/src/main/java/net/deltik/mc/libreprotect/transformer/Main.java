@@ -117,7 +117,8 @@ public final class Main {
             printAudit(audit);
 
             if (audit.failed) {
-                System.err.println("AUDIT FAILED: upstream uses APIs that LibreProtect can't make private. No JAR written.");
+                System.err.println("AUDIT FAILED: upstream uses APIs that LibreProtect can't make private, "
+                    + "or changed its license. No JAR written.");
                 System.exit(2);
             }
             transformer.write(audit);

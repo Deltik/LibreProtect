@@ -34,10 +34,16 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.TypeInsnNode;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.HashSet;
@@ -60,14 +66,16 @@ import java.util.regex.Pattern;
  *       launching processes, replacing JVM-wide network or output state, and
  *       reflection that reaches network APIs. The build fails unless
  *       {@code audit/baseline.json} allows that exact rule at that exact
- *       site.</li>
+ *       site. So does any change to upstream's license, since LibreProtect
+ *       may no longer be allowed to distribute it, until the baseline accepts
+ *       it.</li>
  *   <li><b>REVIEW</b>: new hosts, DNS lookups, dynamic class loading, new
  *       closed-source extension points, new reads of a plugin's version or
  *       of plugin.yml, signs of fork detection or obfuscation, changes to
- *       upstream's dependencies, build, or license, and changes to how the
- *       extensions work with upstream: the strategies in the capability
- *       report, and the code and documentation of upstream's that they rely
- *       on. Development builds still ship; releases wait for approval.</li>
+ *       upstream's dependencies or build, and changes to how the extensions
+ *       work with upstream: the strategies in the capability report, and the
+ *       code and documentation of upstream's that they rely on. Development
+ *       builds still ship; releases wait for approval.</li>
  * </ul>
  *
  * <p>FAIL rules cover upstream's own code and bundled libraries. The rest only
@@ -92,6 +100,7 @@ final class Audit {
     static final String RULE_OBFUSCATION = "obfuscation";
     static final String RULE_CUSTOM_BOOTSTRAP = "custom-bootstrap";
     static final String RULE_CAPABILITY = "capability-change";
+    static final String RULE_LICENSE = "license-change";
 
     private static final Set<String> NETWORK_CLASSES = Set.of(
         "java/net/Socket", "java/net/ServerSocket", "java/net/DatagramSocket", "java/net/MulticastSocket",
@@ -169,6 +178,43 @@ final class Audit {
     private static final Pattern URL_HOST = Pattern.compile("(?i)\\b(?:https?|wss?|ftp)://([a-z0-9.-]+)");
     private static final Pattern ENCODED_BLOB = Pattern.compile("[A-Za-z0-9+/=_-]{200,}");
 
+    /**
+     * A file name that may state a license or terms like one: a word such as
+     * LICENSE, LICENSING, COPYING, NOTICE, EULA or TERMS at its start or
+     * after a separator, as in LICENCE.md, COPYING3, MIT-LICENSE or
+     * THIRD_PARTY_NOTICES.md
+     */
+    private static final Pattern LICENSE_FILE = Pattern.compile(
+        "(?i)(?:.*[._\\- ])?(?:(?:un)?licen[cs]|copying|copyright|notice|patent|eula|legal|terms).*");
+    /** A directory whose files state licenses, at any depth, such as the LICENSES/ of the REUSE specification */
+    private static final Pattern LICENSE_DIRECTORY = Pattern.compile("(?i)licen[cs]es?");
+    /** A file at upstream's root that states the license of the whole of upstream */
+    private static final Pattern ROOT_LICENSE = Pattern.compile("(?i)(?:(?:un)?licen[cs]e|copying)(?:\\.[a-z0-9]+)?");
+    /**
+     * The years of a copyright notice, such as 2024, 2019-2026 or
+     * 2021, 2024 after "Copyright", "(C)" or the copyright sign. Other
+     * years, such as a license's change date, are part of its terms.
+     */
+    private static final Pattern COPYRIGHT_YEARS = Pattern.compile("(?i)((?:copyright|\\(c\\)|\\x{A9})"
+        + "(?:\\s*(?:\\(c\\)|\\x{A9}))?[\\s:]*)(?:19|20)\\d\\d(?:\\s*[-\\x{2013},]\\s*(?:19|20)\\d\\d)*\\b");
+    /** A Unicode escape that the Java compiler translates before it reads comments */
+    private static final Pattern UNICODE_ESCAPE = Pattern.compile("(?<!\\\\)((?:\\\\\\\\)*)\\\\u+([0-9a-fA-F]{4})");
+    static final String LICENSE_FILE_KEY = "file ";
+    static final String POM_LICENSES_KEY = "pom licenses";
+    static final String HEADER_KEY = "header";
+    private static final String LICENSE_REVIEW = "makes sure that LibreProtect may still distribute CoreProtect under "
+        + "the GPL, as section 4(c)(ii) of the Artistic License 2.0 allows";
+
+    /**
+     * A {@code key=value} of upstream's licensing that this build observed,
+     * the site that a finding about it names, and what it is
+     */
+    private record LicenseObservation(String key, String value, String site, String description) {
+        String entry() {
+            return key + "=" + value;
+        }
+    }
+
     private final JarContents jar;
     private final Map<String, Origin> origins;
     private final TransformReport transformReport;
@@ -176,13 +222,14 @@ final class Audit {
     private final AuditBaseline baseline;
     private final AuditReport report = new AuditReport();
     private final AuditBaseline observed = new AuditBaseline();
+    private final List<LicenseObservation> licenseObservations = new ArrayList<>();
 
     /**
      * @param jar upstream's JAR, before the transformation, so that LibreProtect's own changes don't count as
      *            upstream's
      * @param origins origin of each class entry in the JAR that came from upstream
      * @param transformReport what the transformer did
-     * @param upstreamDirectory upstream's source checkout, for the pom and LICENSE
+     * @param upstreamDirectory upstream's source checkout, for the pom and the licenses
      * @param baseline the reviewed state, or an empty baseline to review everything
      */
     Audit(JarContents jar, Map<String, Origin> origins, TransformReport transformReport, Path upstreamDirectory,
@@ -417,10 +464,156 @@ final class Audit {
             libraries.forEach(library -> observed.pluginLibraries.add(String.valueOf(library)));
         }
 
-        Path license = upstreamDirectory.resolve("LICENSE");
-        if (Files.isRegularFile(license)) {
-            observed.licenseSha256 = HexFormat.of().formatHex(
-                MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(license)));
+        observeLicenses(pom);
+    }
+
+    /**
+     * Records upstream's licensing: each license-like file in its source
+     * tree, the licenses that its pom declares, and each distinct header of
+     * a Java file. The whole tree counts, since the source archive of each
+     * build ships all of it, except Git's files and the build's output.
+     */
+    private void observeLicenses(PomSummary pom) throws IOException {
+        // Sorted, so that the findings come in the same order on any file system
+        Map<String, String> licenseFiles = new TreeMap<>();
+        Map<String, TreeSet<String>> headerPaths = new TreeMap<>();
+        Map<String, String> headerTexts = new TreeMap<>();
+        Path realRoot = upstreamDirectory.toRealPath();
+        Files.walkFileTree(upstreamDirectory, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes) {
+                String name = String.valueOf(directory.getFileName());
+                boolean buildOutput = name.equals("target") && upstreamDirectory.equals(directory.getParent());
+                return name.equals(".git") || buildOutput ? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) throws IOException {
+                Path relative = upstreamDirectory.relativize(file);
+                String path = relative.toString().replace(file.getFileSystem().getSeparator(), "/");
+                String name = file.getFileName().toString();
+                if (name.endsWith(".java")) {
+                    if (attributes.isRegularFile()) {
+                        String header = header(new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
+                        if (!header.isEmpty()) {
+                            String hash = sha256(header.getBytes(StandardCharsets.UTF_8));
+                            headerPaths.computeIfAbsent(hash, key -> new TreeSet<>()).add(path);
+                            headerTexts.put(hash, header);
+                        }
+                    }
+                } else if (LICENSE_FILE.matcher(name).matches() || inLicenseDirectory(relative)) {
+                    if (attributes.isSymbolicLink()) {
+                        licenseFiles.put(path, symlink(file, realRoot));
+                    } else if (attributes.isRegularFile()) {
+                        licenseFiles.put(path, sha256(Files.readAllBytes(file)));
+                    }
+                }
+                return FileVisitResult.CONTINUE;
+            }
+        });
+
+        licenseFiles.forEach((path, value) -> licenseObservations.add(
+            new LicenseObservation(LICENSE_FILE_KEY + path, value, path, "license file")));
+        String pomLicenses = pom.licenses.isEmpty() ? "absent" : String.join("; ", pom.licenses);
+        licenseObservations.add(new LicenseObservation(POM_LICENSES_KEY, pomLicenses, "pom.xml",
+            "licenses that the pom declares"));
+        headerPaths.forEach((hash, paths) -> licenseObservations.add(new LicenseObservation(HEADER_KEY, hash,
+            paths.getFirst(), "new header in " + paths.size() + " Java file"
+            + (paths.size() == 1 ? "" : "s, such as this one") + ", which may state a license: "
+            + headerTexts.get(hash))));
+        licenseObservations.forEach(observation -> observed.licenses.add(observation.entry()));
+    }
+
+    private static boolean inLicenseDirectory(Path relative) {
+        for (Path directory = relative.getParent(); directory != null; directory = directory.getParent()) {
+            if (LICENSE_DIRECTORY.matcher(directory.getFileName().toString()).matches()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @return where a license-like symbolic link points, and the SHA-256 of
+     *         what it points to, if that's a file in upstream's tree, since
+     *         the link states that file's license
+     */
+    private static String symlink(Path link, Path realRoot) throws IOException {
+        String value = "symlink to " + Files.readSymbolicLink(link);
+        try {
+            Path target = link.toRealPath();
+            return target.startsWith(realRoot) && Files.isRegularFile(target)
+                ? value + ", " + sha256(Files.readAllBytes(target)) : value + ", not a file in upstream's tree";
+        } catch (NoSuchFileException e) {
+            return value + ", which doesn't exist";
+        }
+    }
+
+    /**
+     * @return the header of a Java source file: its comments before the
+     *         package statement and among the package and import statements,
+     *         or before the first code if it has neither, without their
+     *         comment markers, with whitespace collapsed and the years of
+     *         copyright notices replaced by {@code #}, so that they can
+     *         change; or an empty string if it has no such comments. The
+     *         comments after the last import, which document the class that
+     *         follows, aren't part of it.
+     */
+    static String header(String javaSource) {
+        String source = UNICODE_ESCAPE.matcher(javaSource).replaceAll(escape -> Matcher.quoteReplacement(
+            escape.group(1) + (char) Integer.parseInt(escape.group(2), 16)));
+        StringBuilder header = new StringBuilder();
+        StringBuilder pending = new StringBuilder();
+        boolean statements = false;
+        int position = 0;
+        while (true) {
+            while (position < source.length()
+                && (Character.isWhitespace(source.charAt(position)) || source.charAt(position) == '\uFEFF')) {
+                position++;
+            }
+            if (source.startsWith("//", position)) {
+                int end = position + 2;
+                while (end < source.length() && source.charAt(end) != '\n' && source.charAt(end) != '\r') {
+                    end++;
+                }
+                pending.append(source, position + 2, end).append('\n');
+                position = end;
+            } else if (source.startsWith("/*", position)) {
+                int end = source.indexOf("*/", position + 2);
+                end = end < 0 ? source.length() : end;
+                pending.append(source, position + 2, end).append('\n');
+                position = Math.min(source.length(), end + 2);
+            } else if (startsWithKeyword(source, position, "package") || startsWithKeyword(source, position, "import")) {
+                int end = source.indexOf(';', position);
+                if (end < 0) {
+                    break;
+                }
+                header.append(pending);
+                pending.setLength(0);
+                statements = true;
+                position = end + 1;
+            } else {
+                break;
+            }
+        }
+        if (!statements) {
+            header.append(pending);
+        }
+        String withoutMarkers = header.toString().replaceAll("(?m)^[\\s*/]+|[\\s*/]+$", " ");
+        return COPYRIGHT_YEARS.matcher(withoutMarkers).replaceAll("$1#").replaceAll("\\s+", " ").trim();
+    }
+
+    private static boolean startsWithKeyword(String source, int position, String keyword) {
+        int end = position + keyword.length();
+        return source.startsWith(keyword, position)
+            && (end == source.length() || !Character.isJavaIdentifierPart(source.charAt(end)));
+    }
+
+    private static String sha256(byte[] bytes) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("Every Java platform supports SHA-256", e);
         }
     }
 
@@ -441,12 +634,47 @@ final class Audit {
             + "if CoreProtect compares its own version there, it compares LibreProtect's, unless the transformer has it "
             + "read upstream's as in getPluginVersion()", baseline.versionReads, observed.versionReads);
         compareCapabilities();
+        compareLicenses();
+    }
 
-        if (observed.licenseSha256 == null) {
-            review("license-change", "LICENSE", "upstream no longer has a LICENSE file");
-        } else if (!observed.licenseSha256.equals(baseline.licenseSha256)) {
-            review("license-change", "LICENSE", "LICENSE changed (SHA-256 " + observed.licenseSha256
-                + "); make sure LibreProtect may still be distributed");
+    /**
+     * Fails on any {@code key=value} of upstream's licensing that the
+     * baseline doesn't accept, and on an upstream without a license file,
+     * such as LICENSE or COPYING, at its root. As with capabilities, a key
+     * may be accepted with a value for each upstream line, and an accepted
+     * key that this build doesn't observe needs nothing: another line may
+     * have it, and a license file that is gone adds no terms. The root's
+     * license is the exception.
+     */
+    private void compareLicenses() {
+        Set<String> accepted = baseline.licenses == null ? Set.of() : baseline.licenses;
+        for (LicenseObservation observation : licenseObservations) {
+            if (accepted.contains(observation.entry())) {
+                continue;
+            }
+            String prefix = observation.key() + "=";
+            List<String> reviewed = accepted.stream().filter(entry -> entry.startsWith(prefix))
+                .map(entry -> entry.substring(prefix.length())).toList();
+            String change;
+            if (observation.key().equals(HEADER_KEY)) {
+                change = observation.description();
+            } else if (reviewed.isEmpty()) {
+                change = "new " + observation.description() + ": " + observation.value();
+            } else {
+                change = observation.description() + " changed from " + String.join(" or ", reviewed) + " to "
+                    + observation.value();
+            }
+            add(Severity.FAIL, RULE_LICENSE, observation.site(), change + ". Nothing is built until a maintainer "
+                + LICENSE_REVIEW + ", and adds \"" + observation.entry() + "\" to the licenses in audit/baseline.json",
+                observation.entry());
+        }
+
+        boolean rootLicense = licenseObservations.stream().anyMatch(observation ->
+            observation.key().startsWith(LICENSE_FILE_KEY) && ROOT_LICENSE.matcher(observation.site()).matches());
+        if (!rootLicense) {
+            fail(RULE_LICENSE, "LICENSE", "upstream has no license file, such as LICENSE or COPYING, at its root, "
+                + "so its code may no longer be licensed to anyone. Nothing is built until it has one again, or a "
+                + "maintainer " + LICENSE_REVIEW + ", and allows this finding in audit/baseline.json");
         }
     }
 
