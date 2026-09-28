@@ -2,3 +2,5 @@
 * text=auto eol=lf
 *.cmd text eol=crlf
 *.jar binary
+# Drawn by branding/generate.py
+branding/*.svg linguist-generated

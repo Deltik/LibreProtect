@@ -1,0 +1,11 @@
+# ty's settings for LibreProtect's Python code. scripts/lp lint runs ty, and
+# passes it the types in stubs/ for the libraries that come without them:
+# ty ignores extra-paths here for scripts with inline dependencies.
+[environment]
+python-version = "3.14"
+
+[rules]
+all = "error"
+
+[terminal]
+error-on-warning = true

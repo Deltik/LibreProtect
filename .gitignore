@@ -1,6 +1,7 @@
 # Build output
 /build/
 /dist/
+/branding/build/
 target/
 dependency-reduced-pom.xml
 # Test classes' run times, which order the next run's
@@ -15,6 +16,9 @@ dependency-reduced-pom.xml
 .project
 .classpath
 .settings/
+
+# Python bytecode
+__pycache__/
 
 # Temporary files
 *.tmp

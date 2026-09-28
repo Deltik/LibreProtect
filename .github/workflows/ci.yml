@@ -121,3 +121,39 @@ jobs:
 
       - name: Check that source files begin with the license notice
         run: scripts/lp headers
+
+  branding:
+    # The images and the store description in branding/. The Python code must
+    # pass its checks, the SVGs must be what generate.py draws, and the
+    # description must convert to BBCode. The PNGs and the BBCode are uploaded
+    # as an artifact.
+    name: Branding
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: 0.12.18
+
+      - name: Check the Python code
+        run: scripts/lp lint
+
+      - name: Check that the SVGs are what generate.py draws
+        run: |
+          branding/generate.py draw
+          git status --short -- branding
+          test -z "$(git status --porcelain -- branding)"
+
+      - name: Render the images, and the description in BBCode
+        run: branding/generate.py
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: branding
+          path: |
+            branding/build/*.png
+            branding/build/description.bbcode

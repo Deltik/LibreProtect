@@ -366,7 +366,10 @@ scripts/lp db up                 # Keep the database containers running between 
 scripts/lp sources               # Archive the complete source code of the last build (build from a clean commit first)
 scripts/lp sbom                  # Write a CycloneDX software bill of materials of the last build (needs jq)
 scripts/lp clean                 # Delete build output
+scripts/lp lint                  # Check the Python code's format, lints and types (needs uv)
 scripts/lp --help                # Show every command and option
+branding/generate.py             # Render the images as PNGs, and the store description as BBCode, into branding/build/ (needs uv)
+branding/generate.py draw        # Redraw the images' SVGs after a change to their design
 DRY_RUN=1 scripts/ci/upstream-watch.sh   # Show what the scheduled reconciler would do now
 ```
 
@@ -383,8 +386,11 @@ A development build's version is what `git describe --tags --long` says about th
 | [`integration/`](integration/)               | The egress-recording Java agent, test plugin and harness                                                                                                                                |
 | [`upstream.lock`](upstream.lock)             | The upstream release that releases are built from                                                                                                                                       |
 | [`scripts/`](scripts/)                       | `lp`, which developers and CI both use, plus CI helpers and the one-time `setup-github.sh`                                                                                              |
+| [`branding/`](branding/)                     | The icon, banners and store description, and `generate.py`, which draws the images as SVGs and renders them as PNGs, and the description as BBCode                                     |
 
 LibreProtect's own Java files, shell scripts and Python scripts begin with its license notice, the text in [`scripts/license-header.txt`](scripts/license-header.txt). CI checks this with `scripts/lp headers`, and `scripts/lp headers --fix` adds the notice to new files. To have Git check the files in each commit too, enable the repository's hooks once per clone with `git config core.hooksPath .githooks`.
+
+The Python code must pass Ruff's formatter, all of Ruff's lints and all of ty's type checks. CI checks this with `scripts/lp lint`, and `scripts/lp lint --fix` formats the code and fixes what Ruff can. CI also checks that the SVGs in `branding/` are what `branding/generate.py draw` draws.
 
 </details>
 

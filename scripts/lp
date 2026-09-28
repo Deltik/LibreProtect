@@ -39,6 +39,9 @@
 #   scripts/lp clean                Remove build output
 #   scripts/lp headers [--fix]      Check that Java, shell and Python files begin with the
 #                                   license notice, or add it to those that have none
+#   scripts/lp lint [--fix]         Check the Python code's format, lints and types, and that
+#                                   its locked dependencies are current, or fix what Ruff can
+#                                   (needs uv)
 #
 # Options for build:
 #   --ref REF        Upstream ref to build instead of the locked release. The build
@@ -930,6 +933,39 @@ cmd_clean() {
     find "$ROOT" -maxdepth 3 -name target -type d -prune -exec rm -rf {} +
 }
 
+# The versions of the Python tools that lint runs
+RUFF_VERSION=0.16.9
+TY_VERSION=0.0.84
+
+cmd_lint() {
+    local fix=false
+    case "${1:-}" in
+        "") ;;
+        --fix) fix=true ;;
+        *) die "Unknown option for lint: $1" ;;
+    esac
+    (( $# <= 1 )) || die "lint takes at most one option"
+    command -v uv >/dev/null 2>&1 || die "lint needs uv: https://docs.astral.sh/uv/"
+    local branding="$ROOT/branding" script="$ROOT/branding/generate.py" python
+
+    if $fix; then
+        # Fixes can leave code to format, so they come first. Lints that remain
+        # fail the command, but only after formatting.
+        local status=0
+        uvx "ruff@$RUFF_VERSION" check --fix "$branding" || status=$?
+        uvx "ruff@$RUFF_VERSION" format "$branding"
+        (( status == 0 )) || exit "$status"
+    else
+        uvx "ruff@$RUFF_VERSION" format --check "$branding"
+        uvx "ruff@$RUFF_VERSION" check "$branding"
+    fi
+    uv lock --quiet --check --script "$script"
+    # ty checks against the script's own environment, with its locked dependencies
+    uv sync --quiet --locked --script "$script"
+    python="$(uv python find --script "$script")"
+    uvx "ty@$TY_VERSION" check --project "$branding" --python "$python" --extra-search-path "$branding/stubs"
+}
+
 main() {
     local command="${1:-}"
     [[ $# -gt 0 ]] && shift
@@ -941,6 +977,7 @@ main() {
         sbom) cmd_sbom "$@" ;;
         clean) cmd_clean "$@" ;;
         headers) exec "$ROOT/scripts/ci/license-headers.sh" "$@" ;;
+        lint) cmd_lint "$@" ;;
         "" | -h | --help | help) usage ;;
         *) die "Unknown command: $command (try --help)" ;;
     esac
