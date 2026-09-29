@@ -20,6 +20,7 @@
 
 package net.deltik.mc.libreprotect.transformer;
 
+import net.deltik.mc.libreprotect.transformer.AuditReport.Resolution;
 import net.deltik.mc.libreprotect.transformer.AuditReport.Severity;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Handle;
@@ -221,7 +222,7 @@ final class Audit {
     private final Path upstreamDirectory;
     private final AuditBaseline baseline;
     private final AuditReport report = new AuditReport();
-    private final AuditBaseline observed = new AuditBaseline();
+    private final AuditBaseline.Line observed = new AuditBaseline.Line();
     private final List<LicenseObservation> licenseObservations = new ArrayList<>();
 
     /**
@@ -266,13 +267,10 @@ final class Audit {
         observeBuild();
         compareInventories();
 
-        // Carry the reviewed decisions over, so the observed file is a baseline of its own. It accepts only this
-        // upstream line's capabilities, so accepting it means adding them to those the baseline accepts
-        // for the other line
-        observed.comment = baseline.comment;
-        observed.allow = baseline.allow;
-        observed.egressExemptPrefixes = baseline.egressExemptPrefixes;
-        observed.reviewedUpstreams = baseline.reviewedUpstreams;
+        // Which build this is, so that accepting it records what a line's reviewed state is of
+        observed.upstream.ref = transformReport.upstreamRef;
+        observed.upstream.commit = transformReport.upstreamCommit;
+        observed.upstream.jarSha256 = transformReport.upstreamSha256;
         report.observed = observed;
         return report;
     }
@@ -457,7 +455,7 @@ final class Audit {
         observed.buildPlugins.addAll(pom.buildPlugins);
         observed.profiles.addAll(pom.profiles);
         pom.dependencyVersions.forEach((dependency, version) ->
-            report.add(Severity.INFO, "dependency-version", dependency, version));
+            report.add(Severity.INFO, "dependency-version", dependency, version, null));
 
         PluginYml pluginYml = new PluginYml(new String(jar.get(PluginYml.ENTRY), StandardCharsets.UTF_8));
         if (pluginYml.get("libraries") instanceof List<?> libraries) {
@@ -617,56 +615,73 @@ final class Audit {
         }
     }
 
+    /**
+     * Compares what this build observed with what any of the baseline's
+     * lines accepts: a line's reviewed state doesn't depend on which line
+     * this build is of.
+     */
     private void compareInventories() {
-        compare("new-host", "URL host in upstream code", baseline.hosts, observed.hosts);
+        compare("new-host", "URL host in upstream code", baseline.accepted(line -> line.hosts), observed.hosts);
         compare("new-extension-point", "closed-source extension class loaded by name",
-            baseline.extensionPoints, observed.extensionPoints);
+            baseline.accepted(line -> line.extensionPoints), observed.extensionPoints);
         compare("new-library-package", "package shaded into the JAR from a library",
-            baseline.libraryPackages, observed.libraryPackages);
+            baseline.accepted(line -> line.libraryPackages), observed.libraryPackages);
         compare("dependency-change", "Maven dependency (groupId:artifactId:scope)",
-            baseline.dependencies, observed.dependencies);
-        compare("repository-change", "Maven repository", baseline.repositories, observed.repositories);
-        compare("build-plugin-change", "Maven build plugin", baseline.buildPlugins, observed.buildPlugins);
-        compare("profile-change", "Maven profile", baseline.profiles, observed.profiles);
+            baseline.accepted(line -> line.dependencies), observed.dependencies);
+        compare("repository-change", "Maven repository", baseline.accepted(line -> line.repositories),
+            observed.repositories);
+        compare("build-plugin-change", "Maven build plugin", baseline.accepted(line -> line.buildPlugins),
+            observed.buildPlugins);
+        compare("profile-change", "Maven profile", baseline.accepted(line -> line.profiles), observed.profiles);
         compare("plugin-libraries-change", "library that plugin.yml asks the server to download",
-            baseline.pluginLibraries, observed.pluginLibraries);
+            baseline.accepted(line -> line.pluginLibraries), observed.pluginLibraries);
         compare("version-read", "method that reads a plugin's version, a name that ends in it, or plugin.yml itself; "
             + "if CoreProtect compares its own version there, it compares LibreProtect's, unless the transformer has it "
-            + "read upstream's as in getPluginVersion()", baseline.versionReads, observed.versionReads);
+            + "read upstream's as in getPluginVersion()", baseline.accepted(line -> line.versionReads),
+            observed.versionReads);
         compareCapabilities();
         compareLicenses();
     }
 
     /**
-     * Fails on any {@code key=value} of upstream's licensing that the
-     * baseline doesn't accept, and on an upstream without a license file,
-     * such as LICENSE or COPYING, at its root. As with capabilities, a key
-     * may be accepted with a value for each upstream line, and an accepted
-     * key that this build doesn't observe needs nothing: another line may
-     * have it, and a license file that is gone adds no terms. The root's
-     * license is the exception.
+     * @param values the values that the baseline's lines accept for a key, with the lines that accept each
+     * @return them for a finding, such as {@code abc (release) or def (development)}
+     */
+    private static String reviewed(Map<String, List<String>> values) {
+        List<String> described = new ArrayList<>();
+        values.forEach((value, lines) -> described.add(value + " (" + String.join(", ", lines) + ")"));
+        return String.join(" or ", described);
+    }
+
+    /**
+     * Fails on any {@code key=value} of upstream's licensing that no line of
+     * the baseline accepts, and on an upstream without a license file, such
+     * as LICENSE or COPYING, at its root. As with capabilities, a key is
+     * accepted with the value of any line, and an accepted key that this
+     * build doesn't observe needs nothing: another line may have it, and a
+     * license file that is gone adds no terms. The root's license is the
+     * exception.
      */
     private void compareLicenses() {
-        Set<String> accepted = baseline.licenses == null ? Set.of() : baseline.licenses;
+        Set<String> accepted = baseline.accepted(line -> line.licenses);
         for (LicenseObservation observation : licenseObservations) {
             if (accepted.contains(observation.entry())) {
                 continue;
             }
-            String prefix = observation.key() + "=";
-            List<String> reviewed = accepted.stream().filter(entry -> entry.startsWith(prefix))
-                .map(entry -> entry.substring(prefix.length())).toList();
+            Map<String, List<String>> reviewed = baseline.acceptedValues(line -> line.licenses, observation.key());
             String change;
             if (observation.key().equals(HEADER_KEY)) {
                 change = observation.description();
             } else if (reviewed.isEmpty()) {
                 change = "new " + observation.description() + ": " + observation.value();
             } else {
-                change = observation.description() + " changed from " + String.join(" or ", reviewed) + " to "
+                change = observation.description() + " changed from " + reviewed(reviewed) + " to "
                     + observation.value();
             }
             add(Severity.FAIL, RULE_LICENSE, observation.site(), change + ". Nothing is built until a maintainer "
-                + LICENSE_REVIEW + ", and adds \"" + observation.entry() + "\" to the licenses in audit/baseline.json",
-                observation.entry());
+                + LICENSE_REVIEW + ", and accepts \"" + observation.entry() + "\" into audit/baseline.json with "
+                + "scripts/lp accept --licenses",
+                observation.entry(), Resolution.ACCEPT);
         }
 
         boolean rootLicense = licenseObservations.stream().anyMatch(observation ->
@@ -679,45 +694,51 @@ final class Audit {
     }
 
     /**
-     * The baseline accepts {@code key=value} lines, a key with a value for
-     * each upstream line that LibreProtect builds, such as the locked release
-     * and upstream's default branch. An observed value that the baseline
-     * doesn't accept for its key needs a review: a new key, or a value other
-     * than the accepted ones. So does a capability that the report no longer
-     * has at all. Other accepted keys that this build doesn't observe, such
-     * as the code that only another upstream line has, need nothing. Code,
+     * Each line of the baseline accepts {@code key=value} lines, and a key is
+     * accepted with the value of any line, such as the locked release's or
+     * that of upstream's default branch. An observed value that no line
+     * accepts for its key needs a review: a new key, or a value other than
+     * the accepted ones. So does a capability that the report no longer has
+     * at all. Other accepted keys that this build doesn't observe, such as
+     * the code that only another upstream line has, need nothing. Code,
      * documents, enums and optional members are keyed by the capability and
      * way that use them (see {@link CapabilityReport#observations}), so the
      * code of one line's way is never accepted under another's. Each finding
-     * says which capabilities the key belongs to and why they care.
+     * says which lines accept which values, which capabilities the key
+     * belongs to, and why they care.
      */
     private void compareCapabilities() {
         Map<String, CapabilityReport.Observation> current = CapabilityReport.observations(transformReport.capabilities);
         current.forEach((key, observation) -> observed.capabilities.add(key + "=" + observation.value()));
 
-        Map<String, List<String>> accepted = new TreeMap<>();
-        for (String entry : baseline.capabilities == null ? Set.<String>of() : baseline.capabilities) {
-            int equals = entry.indexOf('=');
-            accepted.computeIfAbsent(equals < 0 ? entry : entry.substring(0, equals), key -> new ArrayList<>())
-                .add(equals < 0 ? "" : entry.substring(equals + 1));
-        }
-
+        Set<String> accepted = baseline.accepted(line -> line.capabilities);
         current.forEach((key, observation) -> {
-            List<String> values = accepted.get(key);
-            String context = String.join("; ", observation.contexts());
             String value = observation.value();
-            if (values == null) {
+            if (accepted.contains(key + "=" + value)) {
+                return;
+            }
+            Map<String, List<String>> values = baseline.acceptedValues(line -> line.capabilities, key);
+            String context = String.join("; ", observation.contexts());
+            if (values.isEmpty()) {
                 reviewCapability(key, value, "new: " + value + ". " + context);
-            } else if (!values.contains(value)) {
-                reviewCapability(key, value, "changed from " + String.join(" or ", values) + " to " + value + ". "
-                    + context);
+            } else {
+                reviewCapability(key, value, "changed from " + reviewed(values) + " to " + value + ". " + context);
             }
         });
-        accepted.forEach((key, values) -> {
-            if (!current.containsKey(key) && key.startsWith(CapabilityReport.CAPABILITY_KEY)) {
-                reviewCapability(key, "", "no longer in the capability report; was " + String.join(" or ", values));
+        // Capability IDs have no '=', so the key of a capability's entry ends at its first
+        Set<String> gone = new TreeSet<>();
+        for (String entry : accepted) {
+            String key = entry.contains("=") ? entry.substring(0, entry.indexOf('=')) : entry;
+            if (key.startsWith(CapabilityReport.CAPABILITY_KEY) && !current.containsKey(key)) {
+                gone.add(key);
             }
-        });
+        }
+        for (String key : gone) {
+            // The extensions' own change, which the capability report of every line's build shows
+            reviewCapability(key, "", "no longer in the capability report; was "
+                + reviewed(baseline.acceptedValues(line -> line.capabilities, key))
+                + ". Accepting a build of each of those lines resolves it");
+        }
     }
 
     /**
@@ -725,38 +746,36 @@ final class Audit {
      * accepts, so that it doesn't accept the key's later values too.
      */
     private void reviewCapability(String key, String value, String detail) {
-        add(Severity.REVIEW, RULE_CAPABILITY, key, detail, key + "=" + value);
+        add(Severity.REVIEW, RULE_CAPABILITY, key, detail, key + "=" + value, Resolution.ACCEPT);
     }
 
     private void compare(String rule, String what, Set<String> reviewed, Set<String> current) {
         for (String added : new TreeSet<>(current)) {
             if (!reviewed.contains(added)) {
-                review(rule, added, "new " + what);
+                add(Severity.REVIEW, rule, added, "new " + what, added, Resolution.ACCEPT);
             }
         }
         for (String removed : reviewed) {
             if (!current.contains(removed)) {
-                report.add(Severity.INFO, rule, removed, "no longer present: " + what);
+                report.add(Severity.INFO, rule, removed, "no longer present: " + what, null);
             }
         }
     }
 
     private void fail(String rule, String site, String detail) {
-        add(Severity.FAIL, rule, site, detail);
+        add(Severity.FAIL, rule, site, detail, site, Resolution.ALLOW);
     }
 
     private void review(String rule, String site, String detail) {
-        add(Severity.REVIEW, rule, site, detail);
-    }
-
-    private void add(Severity severity, String rule, String site, String detail) {
-        add(severity, rule, site, detail, site);
+        add(Severity.REVIEW, rule, site, detail, site, Resolution.ALLOW);
     }
 
     /**
      * @param allowedSite what an allowance must name as its site to accept the finding
+     * @param resolution  what resolves the finding if no allowance does
      */
-    private void add(Severity severity, String rule, String site, String detail, String allowedSite) {
+    private void add(Severity severity, String rule, String site, String detail, String allowedSite,
+                     Resolution resolution) {
         boolean duplicate = report.findings.stream().anyMatch(finding ->
             finding.rule().equals(rule) && finding.site().equals(site) && finding.detail().equals(detail));
         if (duplicate) {
@@ -767,11 +786,11 @@ final class Audit {
                 ? allowedSite.startsWith(allowance.site.substring(0, allowance.site.length() - 1))
                 : allowedSite.equals(allowance.site);
             if (rule.equals(allowance.rule) && siteMatches) {
-                report.add(Severity.INFO, rule, site, detail + " (allowed: " + allowance.reason + ")");
+                report.add(Severity.INFO, rule, site, detail + " (allowed: " + allowance.reason + ")", null);
                 return;
             }
         }
-        report.add(severity, rule, site, detail);
+        report.add(severity, rule, site, detail, resolution);
     }
 
     private static boolean isNetworkClass(String internalName) {

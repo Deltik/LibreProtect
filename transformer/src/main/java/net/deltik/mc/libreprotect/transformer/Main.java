@@ -124,8 +124,8 @@ public final class Main {
             transformer.write(audit);
             System.out.println("Wrote " + options.outputJar());
             if (audit.reviewRequired) {
-                System.out.println("REVIEW REQUIRED before release: compare " + single(arguments, "observed")
-                    + " with " + baselineFile + " and update the baseline in a reviewed pull request.");
+                System.out.println("REVIEW REQUIRED before release: once its findings are reviewed, scripts/lp accept "
+                    + "accepts this build into " + baselineFile + ".");
             }
         } catch (ContractViolation e) {
             System.err.println("CONTRACT VIOLATION: " + e.getMessage());

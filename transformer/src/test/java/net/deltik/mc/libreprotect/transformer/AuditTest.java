@@ -20,6 +20,7 @@
 
 package net.deltik.mc.libreprotect.transformer;
 
+import net.deltik.mc.libreprotect.transformer.AuditReport.Resolution;
 import net.deltik.mc.libreprotect.transformer.AuditReport.Severity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -95,12 +96,22 @@ class AuditTest {
         return new Audit(transformer.upstream(), transformer.origins(), report, upstreamDirectory, baseline).run();
     }
 
-    /** @return a baseline that accepts the unchanged synthetic upstream */
+    /** The line of {@link #cleanBaseline()} */
+    private static final String LINE = "reviewed";
+    /** Another line, as upstream's default branch is to the locked release */
+    private static final String OTHER = "other";
+
+    /** @return a baseline whose one line, {@value #LINE}, accepts the unchanged synthetic upstream */
     private AuditBaseline cleanBaseline() throws Exception {
-        AuditBaseline exempt = new AuditBaseline();
-        exempt.egressExemptPrefixes.add("com/example/jdbc/");
-        AuditReport first = audit(upstream -> { }, exempt);
-        return first.observed;
+        AuditBaseline baseline = new AuditBaseline();
+        baseline.egressExemptPrefixes.add("com/example/jdbc/");
+        baseline.lines.put(LINE, audit(upstream -> { }, baseline).observed);
+        return baseline;
+    }
+
+    /** @return the baseline's reviewed state of a line, which is new and empty if the baseline has no such line */
+    private static AuditBaseline.Line line(AuditBaseline baseline, String name) {
+        return baseline.lines.computeIfAbsent(name, key -> new AuditBaseline.Line());
     }
 
     private static boolean has(AuditReport report, Severity severity, String rule, String siteFragment) {
@@ -158,17 +169,63 @@ class AuditTest {
     }
 
     @Test
-    @DisplayName("never asks about the reviewed upstream JARs, whichever upstream it audits, and carries them over")
-    void reviewedUpstreams() throws Exception {
+    @DisplayName("records which upstream build it observed: its ref, its commit and its JAR's SHA-256")
+    void observedUpstream() throws Exception {
+        AuditBaseline.Upstream upstream = audit(change -> { }, cleanBaseline()).observed.upstream;
+        assertEquals("v24.1", upstream.ref);
+        assertEquals("0000000", upstream.commit);
+        assertEquals(sha256(Files.readAllBytes(directory.resolve("CoreProtect-24.1.jar"))), upstream.jarSha256);
+    }
+
+    @Test
+    @DisplayName("never asks about the upstream builds that the lines name, whichever upstream it audits")
+    void linesUpstreams() throws Exception {
         AuditBaseline baseline = cleanBaseline();
-        baseline.reviewedUpstreams.add("0".repeat(64));
+        AuditBaseline.Upstream other = line(baseline, OTHER).upstream;
+        other.ref = "v1.0";
+        other.commit = "1".repeat(40);
+        other.jarSha256 = "0".repeat(64);
+        line(baseline, LINE).upstream = new AuditBaseline.Upstream();
 
         AuditReport report = audit(upstream -> { }, baseline);
 
         assertFalse(report.reviewRequired, report.findings.toString());
-        assertTrue(report.findings.stream().noneMatch(finding -> finding.site().contains("0".repeat(64))),
+        assertTrue(report.findings.stream().noneMatch(finding -> finding.detail().contains("0".repeat(64))),
             report.findings::toString);
-        assertEquals(baseline.reviewedUpstreams, report.observed.reviewedUpstreams);
+    }
+
+    private static String sha256(byte[] bytes) throws Exception {
+        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+    }
+
+    @Test
+    @DisplayName("says what resolves each finding: accepting the build, or only an allowance or a fix")
+    void resolutions() throws Exception {
+        AuditBaseline baseline = cleanBaseline();
+        Files.writeString(upstreamDirectory.resolve("LICENSE"), "Revised\n");
+        AuditReport report = audit(upstream -> {
+            upstream.loadDatabaseClearsPurge = true;
+            upstream.upstreamExtra.put("net/coreprotect/Phone.class",
+                stringClass("net/coreprotect/Phone", "https://telemetry.example/collect?id="));
+            upstream.upstreamExtra.put("net/coreprotect/Fork.class", stringClass("net/coreprotect/Fork", "LibreProtect"));
+        }, baseline);
+
+        assertEquals(Resolution.ACCEPT, only(report, "new-host", "telemetry.example").resolution());
+        assertEquals(Resolution.ACCEPT, only(report, Audit.RULE_CAPABILITY, "#loadDatabase()V").resolution());
+        assertEquals(Resolution.ACCEPT, only(report, Audit.RULE_LICENSE, "LICENSE").resolution());
+        assertEquals(Resolution.ALLOW, only(report, Audit.RULE_FORK_DETECTION, "net/coreprotect/Fork").resolution());
+        assertTrue(report.findings.stream().filter(finding -> finding.rule().equals("dependency-version"))
+            .allMatch(finding -> finding.resolution() == null), report.findings::toString);
+    }
+
+    /**
+     * @return the only finding of a rule at a site that the fragment is part of
+     */
+    private static AuditReport.Finding only(AuditReport report, String rule, String siteFragment) {
+        List<AuditReport.Finding> findings = report.findings.stream()
+            .filter(finding -> finding.rule().equals(rule) && finding.site().contains(siteFragment)).toList();
+        assertEquals(1, findings.size(), report.findings::toString);
+        return findings.get(0);
     }
 
     @Nested
@@ -274,7 +331,7 @@ class AuditTest {
         void newVersionRead() throws Exception {
             AuditBaseline baseline = cleanBaseline();
             assertEquals(Set.of(SyntheticUpstream.VERSION_UTILS + "#getPluginVersion()Ljava/lang/String;"),
-                baseline.versionReads, "the read that the transformer rewrites is inventoried too");
+                line(baseline, LINE).versionReads, "the read that the transformer rewrites is inventoried too");
 
             AuditReport report = audit(upstream -> upstream.upstreamExtra.put("net/coreprotect/Compare.class",
                 method("net/coreprotect/Compare", code -> {
@@ -419,7 +476,7 @@ class AuditTest {
             AuditReport report = audit(upstream -> { }, baseline);
             assertTrue(report.failed, report.findings.toString());
             assertTrue(fails(report, "LICENSE", "license file changed from "
-                + sha256("The Artistic License 2.0\n") + " to " + sha256("All rights reserved\n")));
+                + sha256("The Artistic License 2.0\n") + " (" + LINE + ") to " + sha256("All rights reserved\n")));
         }
 
         @Test
@@ -429,6 +486,8 @@ class AuditTest {
             Files.delete(upstreamDirectory.resolve("LICENSE"));
             AuditReport report = audit(upstream -> { }, baseline);
             assertTrue(fails(report, "LICENSE", "at its root"));
+            assertTrue(report.findings.stream().allMatch(finding -> finding.severity() != Severity.FAIL
+                || finding.resolution() == Resolution.ALLOW), "accepting the build can't license it");
         }
 
         @Test
@@ -493,11 +552,11 @@ class AuditTest {
                     + "</licenses><repositories>"));
             AuditReport report = audit(upstream -> { }, baseline);
             assertTrue(fails(report, "pom.xml",
-                "changed from absent to name: Proprietary, url: https://example.invalid/terms"));
+                "changed from absent (" + LINE + ") to name: Proprietary, url: https://example.invalid/terms"));
             Files.writeString(upstreamDirectory.resolve("pom.xml"), POM.replace("<repositories>",
                 "<licenses><license><name>Proprietary</name><url>https://example.invalid/terms</url>"
                     + "<comments>Noncommercial use only</comments></license></licenses><repositories>"));
-            baseline.licenses.addAll(report.observed.licenses);
+            line(baseline, OTHER).licenses.addAll(report.observed.licenses);
             assertTrue(fails(audit(upstream -> { }, baseline), "pom.xml", "comments: Noncommercial use only"));
         }
 
@@ -541,17 +600,35 @@ class AuditTest {
         void valuesOfEachLine() throws Exception {
             AuditBaseline baseline = cleanBaseline();
             Files.writeString(upstreamDirectory.resolve("LICENSE"), "The Artistic License 2.0, revised\n");
-            baseline.licenses.addAll(audit(upstream -> { }, baseline).observed.licenses);
+            line(baseline, OTHER).licenses.addAll(audit(upstream -> { }, baseline).observed.licenses);
             assertFalse(audit(upstream -> { }, baseline).failed);
             Files.writeString(upstreamDirectory.resolve("LICENSE"), "The Artistic License 2.0\n");
             assertFalse(audit(upstream -> { }, baseline).failed);
         }
 
         @Test
+        @DisplayName("accepts a license whose path or terms have an '=', as they were observed")
+        void equalsSigns() throws Exception {
+            write("LICENSES/MIT=x.txt", "MIT\n");
+            Files.writeString(upstreamDirectory.resolve("pom.xml"), POM.replace("<repositories>",
+                "<licenses><license><name>Artistic-2.0</name><url>https://example.invalid/terms?v=2</url></license>"
+                    + "</licenses><repositories>"));
+            AuditBaseline baseline = cleanBaseline();
+            assertTrue(line(baseline, LINE).licenses.contains(Audit.LICENSE_FILE_KEY + "LICENSES/MIT=x.txt=" + sha256("MIT\n")),
+                line(baseline, LINE).licenses::toString);
+            AuditReport report = audit(upstream -> { }, baseline);
+            assertFalse(report.failed, report.findings.toString());
+
+            write("LICENSES/MIT=x.txt", "Proprietary\n");
+            assertTrue(fails(audit(upstream -> { }, baseline), "LICENSES/MIT=x.txt",
+                "license file changed from " + sha256("MIT\n") + " (" + LINE + ") to " + sha256("Proprietary\n")));
+        }
+
+        @Test
         @DisplayName("needs nothing for an accepted license file that this line doesn't have")
         void keysOfAnotherLine() throws Exception {
             AuditBaseline baseline = cleanBaseline();
-            baseline.licenses.add(Audit.LICENSE_FILE_KEY + "lang/LICENSE=" + "0".repeat(64));
+            line(baseline, OTHER).licenses.add(Audit.LICENSE_FILE_KEY + "lang/LICENSE=" + "0".repeat(64));
             AuditReport report = audit(upstream -> { }, baseline);
             assertFalse(report.failed, report.findings.toString());
         }
@@ -576,7 +653,7 @@ class AuditTest {
                     Audit.LICENSE_FILE_KEY + "LICENSE=" + sha256("The Artistic License 2.0\n"),
                     Audit.POM_LICENSES_KEY + "=absent",
                     Audit.HEADER_KEY + "=" + sha256("Copyright (C) # Intelli All rights reserved.")),
-                cleanBaseline().licenses);
+                line(cleanBaseline(), LINE).licenses);
         }
 
         @Test
@@ -655,7 +732,7 @@ class AuditTest {
             AuditReport report = audit(upstream -> { }, extensions -> extensions.report.replaceAll(line ->
                 line.replace("\tuse-mysql\tReads CoreProtect's use-mysql setting",
                     "\tdatabase-type\tReads CoreProtect's database type")), cleanBaseline());
-            assertEquals("changed from use-mysql to database-type. Reads CoreProtect's database type",
+            assertEquals("changed from use-mysql (" + LINE + ") to database-type. Reads CoreProtect's database type",
                 change(report, "capability database.selector").detail());
             // What the new way uses is new too, whatever the old way used
             assertEquals("new: SQLITE,MYSQL. database.selector uses its constants: Reads CoreProtect's database type",
@@ -677,23 +754,24 @@ class AuditTest {
         void missingCapability() throws Exception {
             AuditReport report = audit(upstream -> { }, extensions -> extensions.report.removeIf(line ->
                 line.contains("\tclickhouse.writes\t")), cleanBaseline());
-            assertEquals("no longer in the capability report; was absent",
-                change(report, "capability clickhouse.writes").detail());
+            assertEquals("no longer in the capability report; was absent (" + LINE + "). Accepting a build of each of "
+                + "those lines resolves it", change(report, "capability clickhouse.writes").detail());
         }
 
         @Test
-        @DisplayName("accepts each value that the baseline accepts for a key, one per upstream line, and no other")
+        @DisplayName("accepts the value of a key that any line accepts, and no other, naming the lines")
         void valuesOfEachLine() throws Exception {
             AuditBaseline baseline = cleanBaseline();
-            baseline.capabilities.add("capability database.selector=database-type");
+            line(baseline, OTHER).capabilities.addAll(List.of("capability database.selector=database-type",
+                "capability database.selector=use-mysql"));
             AuditReport report = audit(upstream -> { }, baseline);
             assertEquals(0, changes(report), report.findings::toString);
 
             AuditReport changed = audit(upstream -> { }, extensions -> extensions.report.replaceAll(line ->
                 line.replace("\tuse-mysql\tReads CoreProtect's use-mysql setting", "\tpostgres\tReads another setting")),
                 baseline);
-            assertEquals("changed from database-type or use-mysql to postgres. Reads another setting",
-                change(changed, "capability database.selector").detail());
+            assertEquals("changed from database-type (" + OTHER + ") or use-mysql (" + OTHER + ", " + LINE
+                + ") to postgres. Reads another setting", change(changed, "capability database.selector").detail());
             change(changed, "enum database.selector/postgres " + SyntheticUpstream.DATABASE_TYPE);
             assertEquals(2, changes(changed), changed.findings::toString);
         }
@@ -702,17 +780,18 @@ class AuditTest {
         @DisplayName("asks nothing about keys that only another upstream line has, but about a capability gone")
         void keysOfAnotherLine() throws Exception {
             AuditBaseline baseline = cleanBaseline();
-            baseline.capabilities.addAll(List.of("code consumer.gate/cooperative-flags net/coreprotect/Other#run()V"
-                + "=0123456789ab", "optional other.thing/some-way net/coreprotect/Other#flag:Z=present",
+            line(baseline, OTHER).capabilities.addAll(List.of(
+                "code consumer.gate/cooperative-flags net/coreprotect/Other#run()V=0123456789ab",
+                "optional other.thing/some-way net/coreprotect/Other#flag:Z=present",
                 "enum database.selector/database-type net/coreprotect/OtherType=ONE,TWO",
                 "doc migrate-db.target.duckdb/jdbc docs/other.md=0123456789ab"));
             AuditReport report = audit(upstream -> { }, baseline);
             assertEquals(0, changes(report), report.findings::toString);
 
-            baseline.capabilities.add("capability something.gone=some-way");
+            line(baseline, OTHER).capabilities.add("capability something.gone=some-way");
             report = audit(upstream -> { }, baseline);
-            assertEquals("no longer in the capability report; was some-way",
-                change(report, "capability something.gone").detail());
+            assertEquals("no longer in the capability report; was some-way (" + OTHER + "). Accepting a build of each "
+                + "of those lines resolves it", change(report, "capability something.gone").detail());
             assertEquals(1, changes(report), report.findings::toString);
         }
 
@@ -728,7 +807,7 @@ class AuditTest {
                 .replace("\tconsumer.gate\tbackground-claims\t", "\tconsumer.gate\tcooperative-flags\t")
                 .replace("\tmigrate-db.target.duckdb\tunavailable\t", "\tmigrate-db.target.duckdb\tjdbc\t"));
             AuditBaseline baseline = cleanBaseline();
-            baseline.capabilities.addAll(audit(otherLine, otherWays, baseline).observed.capabilities);
+            line(baseline, OTHER).capabilities.addAll(audit(otherLine, otherWays, baseline).observed.capabilities);
             AuditReport other = audit(otherLine, otherWays, baseline);
             assertEquals(0, changes(other), other.findings::toString);
             AuditReport same = audit(upstream -> { }, baseline);
@@ -738,8 +817,8 @@ class AuditTest {
             AuditReport reverted = audit(otherLine, baseline);
             String code = change(reverted, "code consumer.gate/background-claims " + CONFIG_HANDLER
                 + "#loadDatabase()V").detail();
-            assertTrue(code.matches("changed from [0-9a-f]{12} to [0-9a-f]{12}\\. consumer\\.gate relies on it: "
-                + "Reloading the database leaves purgeRunning alone"), code);
+            assertTrue(code.matches("changed from [0-9a-f]{12} \\(" + LINE + "\\) to [0-9a-f]{12}\\. consumer\\.gate "
+                + "relies on it: Reloading the database leaves purgeRunning alone"), code);
             String doc = change(reverted, "doc migrate-db.target.duckdb/unavailable docs/database-migration.md")
                 .detail();
             assertTrue(doc.endsWith("migrate-db.target.duckdb follows it: The flag protocol for migration tools"), doc);
@@ -777,8 +856,8 @@ class AuditTest {
                 .replaceAll(line -> line.startsWith("optional\t") ? line.replace("\tpresent", "\tabsent") : line),
                 cleanBaseline());
             assertTrue(change(report, "optional consumer.gate/background-claims " + CONFIG_HANDLER
-                + "#purgeRunning:Z").detail().startsWith(
-                "changed from present to absent. consumer.gate uses it if it exists: Pauses CoreProtect's consumer"));
+                + "#purgeRunning:Z").detail().startsWith("changed from present (" + LINE + ") to absent. consumer.gate "
+                + "uses it if it exists: Pauses CoreProtect's consumer"));
         }
 
         @Test
@@ -787,8 +866,8 @@ class AuditTest {
             AuditReport report = audit(upstream -> upstream.loadDatabaseClearsPurge = true, cleanBaseline());
             String detail = change(report, "code consumer.gate/background-claims " + CONFIG_HANDLER
                 + "#loadDatabase()V").detail();
-            assertTrue(detail.matches("changed from [0-9a-f]{12} to [0-9a-f]{12}\\. consumer\\.gate relies on it: "
-                + "Reloading the database leaves purgeRunning alone"), detail);
+            assertTrue(detail.matches("changed from [0-9a-f]{12} \\(" + LINE + "\\) to [0-9a-f]{12}\\. consumer\\.gate "
+                + "relies on it: Reloading the database leaves purgeRunning alone"), detail);
         }
 
         @Test
@@ -796,7 +875,7 @@ class AuditTest {
         void removedCode() throws Exception {
             AuditReport report = audit(upstream -> upstream.loadDatabase = false, cleanBaseline());
             assertTrue(change(report, "code consumer.gate/background-claims " + CONFIG_HANDLER + "#loadDatabase()V")
-                .detail().matches("changed from [0-9a-f]{12} to absent\\..*"));
+                .detail().matches("changed from [0-9a-f]{12} \\(" + LINE + "\\) to absent\\..*"));
         }
 
         @Test
@@ -813,7 +892,8 @@ class AuditTest {
         void changedEnum() throws Exception {
             AuditReport report = audit(upstream -> upstream.databaseTypes.add("DUCKDB"), extensions -> extensions.report
                 .replaceAll(line -> line.replace("\tSQLITE,MYSQL", "\tSQLITE,MYSQL,DUCKDB")), cleanBaseline());
-            assertEquals("changed from SQLITE,MYSQL to SQLITE,MYSQL,DUCKDB. database.selector uses its constants: "
+            assertEquals("changed from SQLITE,MYSQL (" + LINE + ") to SQLITE,MYSQL,DUCKDB. database.selector uses its "
+                + "constants: "
                 + "Reads CoreProtect's use-mysql setting", change(report, "enum database.selector/use-mysql "
                 + SyntheticUpstream.DATABASE_TYPE).detail());
         }
@@ -822,7 +902,8 @@ class AuditTest {
         @DisplayName("everything, with a baseline that has no capabilities")
         void noBaselineCapabilities() throws Exception {
             AuditBaseline baseline = cleanBaseline();
-            baseline.capabilities = null;
+            line(baseline, LINE).capabilities = null;
+            baseline.lines.put(OTHER, null);
             AuditReport report = audit(upstream -> { }, baseline);
             assertEquals(report.observed.capabilities.size(), changes(report), report.findings::toString);
             assertTrue(report.reviewRequired);
@@ -831,7 +912,7 @@ class AuditTest {
         @Test
         @DisplayName("records what it observed, so that it can be copied into the baseline")
         void observed() throws Exception {
-            AuditBaseline observed = cleanBaseline();
+            AuditBaseline.Line observed = line(cleanBaseline(), LINE);
             List<String> keys = observed.capabilities.stream()
                 .map(entry -> entry.replaceAll("=[0-9a-f]{12}$", "=<hash>")).toList();
             assertEquals(List.of(
@@ -847,11 +928,14 @@ class AuditTest {
     }
 
     @Test
-    @DisplayName("writes the observed state as a baseline, which reads back unchanged")
+    @DisplayName("writes the observed state as a line of a baseline, which both read back unchanged")
     void observedRoundTrips() throws Exception {
         AuditBaseline baseline = cleanBaseline();
         String json = Reports.toJson(baseline);
-        AuditBaseline parsed = Reports.fromJson(json, AuditBaseline.class);
-        assertEquals(json, Reports.toJson(parsed));
+        assertEquals(json, Reports.toJson(Reports.fromJson(json, AuditBaseline.class)));
+
+        String observed = Reports.toJson(audit(upstream -> { }, baseline).observed);
+        assertEquals(observed, Reports.toJson(Reports.fromJson(observed, AuditBaseline.Line.class)));
+        assertEquals(Reports.toJson(line(baseline, LINE)), observed);
     }
 }

@@ -50,8 +50,8 @@ public final class AssumeCapability {
 
     /** The reviewed state of upstream; tests run in the module's directory */
     private static final Path BASELINE = Path.of("..", "audit", "baseline.json");
-    private static final Pattern REVIEWED_UPSTREAMS = Pattern.compile("\"reviewedUpstreams\"\\s*:\\s*\\[([^\\]]*)\\]");
-    private static final Pattern SHA256 = Pattern.compile("\"([0-9a-f]{64})\"");
+    /** The SHA-256 of the upstream JAR whose build a line of the baseline was accepted from */
+    private static final Pattern JAR_SHA256 = Pattern.compile("\"jarSha256\"\\s*:\\s*\"([0-9a-f]{64})\"");
 
     private static String upstreamSha256;
 
@@ -72,23 +72,24 @@ public final class AssumeCapability {
 
     /**
      * Skip a test whose exact expectations are those of the upstream JARs
-     * that {@code audit/baseline.json} lists as {@code reviewedUpstreams},
-     * unless the CoreProtect being built is one of them. On one of them,
-     * such a test fails whenever LibreProtect takes another way, as when a
-     * change to the extensions breaks one. On another upstream, such as a
-     * development build of a changed one, the features whose needs changed
-     * turn off and its audit reports the change, and its unit tests don't
-     * fail it for that.
+     * whose builds the lines of {@code audit/baseline.json} were accepted
+     * from, unless the CoreProtect being built is one of them. On one of
+     * them, such a test fails whenever LibreProtect takes another way, as
+     * when a change to the extensions breaks one. On another upstream, such
+     * as a development build of a changed one, the features whose needs
+     * changed turn off and its audit reports the change, and its unit tests
+     * don't fail it for that.
      */
     public static void reviewedUpstream() {
         String sha256 = upstreamSha256();
         assumeTrue(reviewedUpstreams().contains(sha256), () -> "The upstream JAR being built, whose SHA-256 is "
-            + sha256 + ", isn't among the reviewedUpstreams of audit/baseline.json, whose ways these tests expect"
+            + sha256 + ", isn't the jarSha256 of a line of audit/baseline.json, whose ways these tests expect"
             + " exactly");
     }
 
     /**
-     * @return the SHA-256 of the upstream JARs that {@code audit/baseline.json} lists as reviewed
+     * @return the SHA-256 of the upstream JARs whose builds the lines of
+     *         {@code audit/baseline.json} were accepted from
      */
     static Set<String> reviewedUpstreams() {
         String baseline;
@@ -98,12 +99,9 @@ public final class AssumeCapability {
             throw new UncheckedIOException("Can't read the audit baseline at " + BASELINE.toAbsolutePath(), e);
         }
         Set<String> reviewed = new HashSet<>();
-        Matcher list = REVIEWED_UPSTREAMS.matcher(baseline);
-        if (list.find()) {
-            Matcher sha256 = SHA256.matcher(list.group(1));
-            while (sha256.find()) {
-                reviewed.add(sha256.group(1));
-            }
+        Matcher sha256 = JAR_SHA256.matcher(baseline);
+        while (sha256.find()) {
+            reviewed.add(sha256.group(1));
         }
         return reviewed;
     }

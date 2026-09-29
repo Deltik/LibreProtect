@@ -53,9 +53,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 /**
  * Every capability on the CoreProtect being built: the ways it takes, which
  * depend on its generation, and what they do with CoreProtect's state. The
- * exact ways expected are those of the upstream JARs that
- * {@code audit/baseline.json} lists as {@code reviewedUpstreams}; on another
- * upstream, those tests are skipped.
+ * exact ways expected are those of the upstream JARs whose builds the lines
+ * of {@code audit/baseline.json} were accepted from; on another upstream,
+ * those tests are skipped.
  */
 class CapabilitiesTest {
 
@@ -75,7 +75,7 @@ class CapabilitiesTest {
     }
 
     @Test
-    @DisplayName("should know the upstream JAR for reviewedUpstreams by the SHA-256 that its capability report gives")
+    @DisplayName("should know the upstream JAR of a baseline line by the SHA-256 that its capability report gives")
     void upstreamIdentity() throws Exception {
         String jar = System.getProperty("upstream.jar");
         assumeTrue(jar != null, "scripts/lp passes the upstream JAR as -Dupstream.jar");

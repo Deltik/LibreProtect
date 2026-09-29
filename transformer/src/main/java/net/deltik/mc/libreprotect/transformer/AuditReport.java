@@ -37,16 +37,31 @@ final class AuditReport {
         INFO
     }
 
-    record Finding(Severity severity, String rule, String site, String detail) {
+    /** What resolves a finding once a maintainer has reviewed it */
+    enum Resolution {
+        /**
+         * Accepting the build into the baseline ({@code scripts/lp accept}),
+         * since its line then has what the build observed
+         */
+        ACCEPT,
+        /** Only an allowance in the baseline, with a reason, or a change to upstream or to LibreProtect */
+        ALLOW
+    }
+
+    /**
+     * @param resolution what resolves it, or {@code null} for a finding that is only for the record
+     */
+    record Finding(Severity severity, String rule, String site, String detail, Resolution resolution) {
     }
 
     boolean failed;
     boolean reviewRequired;
     final List<Finding> findings = new ArrayList<>();
-    AuditBaseline observed;
+    /** What this build observed, which accepting it makes its line's reviewed state */
+    AuditBaseline.Line observed;
 
-    void add(Severity severity, String rule, String site, String detail) {
-        findings.add(new Finding(severity, rule, site, detail));
+    void add(Severity severity, String rule, String site, String detail, Resolution resolution) {
+        findings.add(new Finding(severity, rule, site, detail, resolution));
         if (severity == Severity.FAIL) {
             failed = true;
         } else if (severity == Severity.REVIEW) {

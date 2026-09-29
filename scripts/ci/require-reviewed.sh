@@ -31,12 +31,14 @@ if jq -e '.failed == false and .reviewRequired == false' "$report" >/dev/null; t
 fi
 
 echo "The audit found upstream changes that need a maintainer's review:" >&2
-jq -r '.findings[] | select(.severity != "INFO") | "  \(.severity) \(.rule) at \(.site): \(.detail)"' "$report" >&2
+jq -r '.findings[] | select(.severity != "INFO")
+    | "  \(.severity) \(.rule) at \(.site): \(.detail)\(if .resolution == "ALLOW" then " [needs an allowance]" else "" end)"' \
+    "$report" >&2
 cat >&2 <<'EOF'
 
 To accept them after review, update audit/baseline.json in this branch:
-  - copy the reviewed values from dist/audit-observed.json (in the build artifact); for
-    "capabilities" and "licenses", add the reviewed key=value lines, keeping the other upstream line's, or
-  - add an "allow" entry with a reason for a specific rule and site.
+  - put this build's dist artifact in dist/ and run scripts/lp accept, which makes its upstream line
+    what the build observed (with --licenses for a change to upstream's licensing), and
+  - add an "allow" entry with a reason for each finding that needs an allowance.
 EOF
 exit 1

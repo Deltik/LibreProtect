@@ -37,11 +37,11 @@ jq -r '"Audit: \([.findings[] | select(.severity == "FAIL")] | length) fail, \([
 echo
 
 if jq -e '[.findings[] | select(.severity != "INFO")] | length > 0' "$AUDIT" >/dev/null; then
-    echo "| Severity | Rule | Where | Detail |"
-    echo "|---|---|---|---|"
-    jq -r '[.findings[] | select(.severity != "INFO")] | sort_by(.rule == "capability-change") | .[:100][] | "| \(.severity) | \(.rule) | `\(.site)` | \(.detail | gsub("\\|"; "\\\\|")) |"' "$AUDIT"
+    echo "| Severity | Rule | Where | Detail | Resolved by |"
+    echo "|---|---|---|---|---|"
+    jq -r '[.findings[] | select(.severity != "INFO")] | sort_by(.rule == "capability-change") | .[:100][] | "| \(.severity) | \(.rule) | `\(.site)` | \(.detail | gsub("\\|"; "\\\\|")) | \(if .resolution == "ACCEPT" then "accepting" else "an allowance" end) |"' "$AUDIT"
     echo
-    echo "Accepting reviewed changes: compare \`dist/audit-observed.json\` (in the \`dist\` artifact) with \`audit/baseline.json\` and commit what you have reviewed."
+    echo "Accepting reviewed changes: put this build's output (in the \`dist\` artifact) in \`dist/\`, run \`scripts/lp accept\`, and commit \`audit/baseline.json\`. A finding resolved by an allowance needs an \`allow\` entry with a reason instead."
     echo
 fi
 

@@ -34,6 +34,12 @@
 #                                   While they are up, build lets unit tests use them too.
 #   scripts/lp db env               Print their endpoints and credentials (build/containers.env)
 #   scripts/lp db down              Remove them
+#   scripts/lp accept [--line NAME] [--licenses]
+#                                   Once its audit findings are reviewed, accept the last
+#                                   build into audit/baseline.json as the reviewed state of
+#                                   its upstream line: release for a release build, else
+#                                   development. --licenses accepts a change to upstream's
+#                                   licensing too. Needs jq.
 #   scripts/lp sources              Archive the complete source of the last build (needs a clean commit)
 #   scripts/lp sbom                 Write a CycloneDX software bill of materials of the last build (needs jq)
 #   scripts/lp clean                Remove build output
@@ -109,9 +115,8 @@ find_jdk() {
 # shellcheck source=scripts/lib/lock.sh
 source "$ROOT/scripts/lib/lock.sh"
 
-# Check out an upstream ref into $UPSTREAM_DIR and print its commit SHA
-checkout_upstream() {
-    local ref="$1" sha
+# Clone upstream into $UPSTREAM_DIR if it isn't there, and fetch its branches and tags, leaving its checkout alone
+fetch_upstream() {
     if [[ ! -d "$UPSTREAM_DIR/.git" ]]; then
         log "Cloning $UPSTREAM_REPO"
         git clone --quiet --filter=blob:none --no-checkout "$UPSTREAM_REPO" "$UPSTREAM_DIR"
@@ -119,6 +124,12 @@ checkout_upstream() {
     git -C "$UPSTREAM_DIR" remote set-url origin "$UPSTREAM_REPO"
     # With every tag, including those on no branch, since builds are named after upstream's nearest release tag
     git -C "$UPSTREAM_DIR" fetch --quiet --force --tags origin '+refs/heads/*:refs/remotes/origin/*'
+}
+
+# Check out an upstream ref into $UPSTREAM_DIR and print its commit SHA
+checkout_upstream() {
+    local ref="$1" sha
+    fetch_upstream
 
     sha="$(git -C "$UPSTREAM_DIR" rev-parse --verify --quiet "refs/remotes/origin/$ref^{commit}" \
         || git -C "$UPSTREAM_DIR" rev-parse --verify --quiet "$ref^{commit}")" \
@@ -238,8 +249,8 @@ upstream_generation() {
 # Upstream's builds for development builds, kept by what went into them, so
 # that building the same upstream commit with the same settings again takes a
 # copy rather than another Maven build. Upstream's build is reproducible: it
-# would give the same bytes again, which the audit's reviewedUpstreams
-# recognizes by hash. Releases never use them. scripts/lp clean removes them,
+# would give the same bytes again, which the audit baseline's lines recognize
+# by their jarSha256. Releases never use them. scripts/lp clean removes them,
 # like all build output.
 UPSTREAM_BUILDS="$BUILD_DIR/upstream-builds"
 
@@ -939,6 +950,119 @@ cmd_clean() {
     find "$ROOT" -maxdepth 3 -name target -type d -prune -exec rm -rf {} +
 }
 
+# Accept the last build into the audit baseline, once a maintainer has
+# reviewed what its audit found: its upstream line's reviewed state becomes
+# what the build observed. That resolves each finding whose resolution is
+# ACCEPT. A FAIL whose resolution is ALLOW needs a fix, or an allowance with a
+# reason, first; so does a REVIEW whose resolution is ALLOW, which this only
+# lists. A change to upstream's licensing fails every build, and is accepted
+# only with --licenses, once a maintainer is sure that LibreProtect may still
+# distribute CoreProtect.
+cmd_accept() {
+    local line="" licenses=false
+    while (( $# )); do
+        case "$1" in
+            --line)
+                (( $# >= 2 )) || die "--line needs a name, such as release or development"
+                line="$2"
+                shift 2
+                ;;
+            --licenses) licenses=true; shift ;;
+            *) die "Unknown option for accept: $1" ;;
+        esac
+    done
+    command -v jq >/dev/null 2>&1 || die "accept needs jq"
+    local baseline="$ROOT/audit/baseline.json" report="$DIST_DIR/audit-report.json" \
+        observed="$DIST_DIR/audit-observed.json" transform="$DIST_DIR/transform-report.json"
+    [[ -f "$report" && -f "$observed" && -f "$transform" ]] \
+        || die "No audited build in $DIST_DIR: run scripts/lp build, or download a CI run's dist artifact into it"
+    jq -e '.upstream.commit | type == "string"' "$observed" >/dev/null \
+        || die "$observed is from a build before the baseline had lines; build again"
+    local built
+    built="$(jq -r .upstream.commit "$observed")"
+    [[ "$built" == "$(jq -r .upstreamCommit "$transform")" ]] \
+        || die "$observed and $transform are of different builds; build again"
+
+    if [[ -z "$line" ]]; then
+        # A release build, or any build of the commit that upstream.lock pins, is of the release line
+        read_lock "$ROOT/upstream.lock"
+        if [[ "$(jq -r .forkVersion "$transform")" != *-libre-dev || "$built" == "$UPSTREAM_SHA" ]]; then
+            line=release
+        else
+            line=development
+        fi
+    fi
+    [[ "$line" =~ ^[a-z0-9][a-z0-9.-]*$ ]] || die "A line's name is made of lowercase letters, digits, '.' and '-'"
+
+    # The findings that remain after accepting: those that accepting doesn't resolve, unless an allowance in the
+    # baseline now covers them, matched as the audit matches it, since what the build observed doesn't depend on it
+    # shellcheck disable=SC2016 # A jq program, whose variables are jq's
+    local remaining='($baseline[0].allow // []) as $allow
+        | def allowed: . as $finding | any($allow[]; . as $allowance | $allowance.rule == $finding.rule
+            and (if $allowance.site | endswith("*") then $finding.site | startswith($allowance.site[:-1])
+            else $allowance.site == $finding.site end));
+        .findings[] | select(.resolution != "ACCEPT" and (allowed | not))'
+    local findings
+    findings="$(jq -r --slurpfile baseline "$baseline" "$remaining"' | select(.severity == "FAIL")
+        | "  \(.rule) at \(.site): \(.detail)"' "$report")"
+    [[ -z "$findings" ]] || die "The audit failed, which accepting the build doesn't resolve. Fix it and build again, or add an allowance with a reason to audit/baseline.json and accept the build then:
+$findings"
+    if ! $licenses; then
+        findings="$(jq -r '.findings[] | select(.severity == "FAIL" and .resolution == "ACCEPT")
+            | "  \(.rule) at \(.site): \(.detail)"' "$report")"
+        [[ -z "$findings" ]] || die "Upstream's licensing changed. Once you're sure that LibreProtect may still distribute CoreProtect under the GPL, as section 4(c)(ii) of the Artistic License 2.0 allows, accept the build with --licenses:
+$findings"
+    fi
+
+    # The ways that the line takes now and didn't before, which the extensions' exact tests will expect on the JAR
+    local ways
+    ways="$(jq -r --arg line "$line" --slurpfile observed "$observed" '
+        [(.lines[$line].capabilities // [])[] | select(startswith("capability "))] as $old
+        | [$observed[0].capabilities[] | select(startswith("capability "))] - $old | .[] | "  \(.)"' "$baseline")"
+
+    local accepted
+    accepted="$(mktemp)"
+    jq --arg line "$line" --slurpfile observed "$observed" \
+        '.lines[$line] = $observed[0] | .lines |= (to_entries | sort_by(.key) | from_entries)' \
+        "$baseline" > "$accepted"
+    # What the line accepted before, and what it accepts now: each entry, unless the line is new
+    jq -r --arg line "$line" --slurpfile before "$baseline" '
+        def build: if .ref == .commit then .commit[:12] else "\(.ref) (\(.commit[:12]))" end;
+        ($before[0].lines[$line] // {}) as $old | .lines[$line] as $new
+        | "==> Accepted upstream \($new.upstream | build) as the \($line) line"
+            + (if $old.upstream then ", which was \($old.upstream | build)" else ", which is new" end),
+          ($new | to_entries[] | select(.value | type == "array") | .key as $field
+            | ($new[$field] - ($old[$field] // [])) as $added | (($old[$field] // []) - $new[$field]) as $removed
+            | select(($added + $removed) | length > 0)
+            | "  \($field): \($added | length) added, \($removed | length) removed",
+              (if $old.upstream then ($removed[] | "    - \(.)"), ($added[] | "    + \(.)") else empty end))' \
+        "$accepted" >&2
+    # Written over, rather than moved, so that the baseline keeps its permissions
+    cat "$accepted" > "$baseline"
+    rm -f "$accepted"
+
+    findings="$(jq -r --slurpfile baseline "$baseline" "$remaining"' | select(.severity == "REVIEW")
+        | "  \(.rule) at \(.site): \(.detail)"' "$report")"
+    if [[ -n "$findings" ]]; then
+        log "Accepting the build doesn't resolve these, which only a fix, or an allowance with a reason, does:"
+        printf '%s\n' "$findings" >&2
+    fi
+    # A capability that the extensions no longer report stays in question while another line has it
+    findings="$(jq -r --arg line "$line" --slurpfile baseline "$baseline" '
+        .findings[] | select(.rule == "capability-change" and (.site | startswith("capability "))) | .site as $key
+        | [$baseline[0].lines | to_entries[] | select(.key != $line)
+            | select(any(.value.capabilities[]?; startswith($key + "="))) | .key]
+        | select(length > 0) | "  \($key), until the \(join(", ")) line is accepted too"' "$report")"
+    if [[ -n "$findings" ]]; then
+        log "The extensions no longer report these, which other lines still have:"
+        printf '%s\n' "$findings" >&2
+    fi
+    if [[ -n "$ways" ]]; then
+        log "The extensions' unit tests now expect exactly the ways of this build's JAR, which differ from the line's before; update their expectations, such as in CapabilitiesTest, where a way changed:"
+        printf '%s\n' "$ways" >&2
+    fi
+}
+
 # The versions of the Python tools that lint runs
 RUFF_VERSION=0.16.9
 TY_VERSION=0.0.84
@@ -981,6 +1105,7 @@ main() {
         db) cmd_db "$@" ;;
         sources) cmd_sources "$@" ;;
         sbom) cmd_sbom "$@" ;;
+        accept) cmd_accept "$@" ;;
         clean) cmd_clean "$@" ;;
         headers) exec "$ROOT/scripts/ci/license-headers.sh" "$@" ;;
         lint) cmd_lint "$@" ;;

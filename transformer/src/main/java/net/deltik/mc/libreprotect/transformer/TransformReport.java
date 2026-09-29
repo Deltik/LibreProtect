@@ -134,6 +134,8 @@ final class TransformReport {
 
     String upstreamRef;
     String upstreamCommit;
+    /** SHA-256 of the upstream JAR, as upstream built it */
+    String upstreamSha256;
     String upstreamVersion;
     String forkVersion;
     String forkCommit;

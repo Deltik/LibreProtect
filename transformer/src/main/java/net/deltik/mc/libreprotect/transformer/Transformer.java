@@ -133,6 +133,7 @@ final class Transformer {
 
         report.upstreamRef = options.upstreamRef();
         report.upstreamCommit = options.upstreamCommit();
+        report.upstreamSha256 = CapabilityReport.sha256(Files.readAllBytes(options.upstreamJar()));
         report.forkVersion = options.version();
         report.forkCommit = options.forkCommit();
         report.exemptPrefixes = options.exemptPrefixes();
@@ -494,10 +495,9 @@ final class Transformer {
         byte[] bytes = Files.readAllBytes(options.capabilities());
         String text = CapabilityReport.decode(bytes);
         String probed = CapabilityReport.probedSha256(text);
-        String upstreamSha256 = CapabilityReport.sha256(Files.readAllBytes(options.upstreamJar()));
-        ContractViolation.require(probed.equals(upstreamSha256),
+        ContractViolation.require(probed.equals(report.upstreamSha256),
             "The capability report was probed against another CoreProtect JAR: it names SHA-256 " + probed + ", but "
-                + options.upstreamJar() + " has " + upstreamSha256
+                + options.upstreamJar() + " has " + report.upstreamSha256
                 + ". Build the extensions against the upstream JAR being transformed.");
         CapabilityReport capabilities = CapabilityReport.read(text, upstream, options.upstreamDirectory());
         ContractViolation.require(!capabilities.capabilities.isEmpty()
