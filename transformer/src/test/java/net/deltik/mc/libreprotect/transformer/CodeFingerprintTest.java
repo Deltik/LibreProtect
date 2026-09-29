@@ -39,6 +39,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -281,20 +282,192 @@ class CodeFingerprintTest {
         assertNotEquals(fingerprint, run(chainClass(access, 3, 2, 100)), "a helper of a helper");
     }
 
-    @Test
-    @DisplayName("doesn't cover methods of its class that subclasses may override")
-    void nonPrivateMethods() {
-        assertEquals(run(chainClass(Opcodes.ACC_PUBLIC, 3, -1, 0)), run(chainClass(Opcodes.ACC_PUBLIC, 3, 0, 100)));
+    /**
+     * @return a class whose instance method {@code run()} calls its instance method {@code helper()}, which
+     *         stores the value
+     */
+    private static byte[] virtualClass(int classAccess, int helperAccess, int value) {
+        ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        writer.visit(Opcodes.V17, classAccess | Opcodes.ACC_SUPER, OWNER, null, "java/lang/Object", null);
+        MethodVisitor run = writer.visitMethod(Opcodes.ACC_PUBLIC, "run", "()V", null, null);
+        run.visitCode();
+        run.visitVarInsn(Opcodes.ALOAD, 0);
+        run.visitMethodInsn(Opcodes.INVOKEVIRTUAL, OWNER, "helper", "()V", false);
+        run.visitInsn(Opcodes.RETURN);
+        run.visitMaxs(0, 0);
+        run.visitEnd();
+        storing(writer, helperAccess, "helper", value, null);
+        writer.visitEnd();
+        return writer.toByteArray();
+    }
+
+    /**
+     * @return a class whose {@code run()} creates one of it, with a constructor that stores the value
+     */
+    private static byte[] constructorClass(int value) {
+        ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, OWNER, null, "java/lang/Object", null);
+        MethodVisitor run = writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "run", "()V", null, null);
+        run.visitCode();
+        run.visitTypeInsn(Opcodes.NEW, OWNER);
+        run.visitInsn(Opcodes.DUP);
+        run.visitMethodInsn(Opcodes.INVOKESPECIAL, OWNER, "<init>", "()V", false);
+        run.visitInsn(Opcodes.POP);
+        run.visitInsn(Opcodes.RETURN);
+        run.visitMaxs(0, 0);
+        run.visitEnd();
+        MethodVisitor constructor = writer.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
+        constructor.visitCode();
+        constructor.visitVarInsn(Opcodes.ALOAD, 0);
+        constructor.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false);
+        constructor.visitLdcInsn(value);
+        constructor.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "state", "I");
+        constructor.visitInsn(Opcodes.RETURN);
+        constructor.visitMaxs(0, 0);
+        constructor.visitEnd();
+        writer.visitEnd();
+        return writer.toByteArray();
     }
 
     @Test
-    @DisplayName("covers at most " + CodeFingerprint.MAX_METHODS + " methods, the first ones it refers to")
+    @DisplayName("covers the static methods and constructors of its class, which no subclass overrides, and theirs")
+    void staticMethodsAndConstructors() {
+        int access = Opcodes.ACC_PUBLIC;
+        String fingerprint = run(chainClass(access, 3, -1, 0));
+        assertNotEquals(fingerprint, run(chainClass(access, 3, 0, 100)));
+        assertNotEquals(fingerprint, run(chainClass(access, 3, 2, 100)), "a helper of a helper");
+        assertNotEquals(run(constructorClass(1)), run(constructorClass(2)));
+    }
+
+    @Test
+    @DisplayName("covers the final methods of its class, and the methods of a final class")
+    void finalMethods() {
+        assertNotEquals(run(virtualClass(Opcodes.ACC_PUBLIC, Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL, 1)),
+            run(virtualClass(Opcodes.ACC_PUBLIC, Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL, 2)));
+        assertNotEquals(run(virtualClass(Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL, Opcodes.ACC_PUBLIC, 1)),
+            run(virtualClass(Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL, Opcodes.ACC_PUBLIC, 2)));
+    }
+
+    @Test
+    @DisplayName("doesn't cover methods of its class that subclasses may override")
+    void overridableMethods() {
+        assertEquals(run(virtualClass(Opcodes.ACC_PUBLIC, Opcodes.ACC_PUBLIC, 1)),
+            run(virtualClass(Opcodes.ACC_PUBLIC, Opcodes.ACC_PUBLIC, 2)));
+        assertEquals(run(virtualClass(Opcodes.ACC_PUBLIC, Opcodes.ACC_PROTECTED, 1)),
+            run(virtualClass(Opcodes.ACC_PUBLIC, Opcodes.ACC_PROTECTED, 2)));
+    }
+
+    @Test
+    @DisplayName("covers at most " + CodeFingerprint.MAX_METHODS + " methods, the first ones it refers to, and says so")
     void bounded() {
         int access = Opcodes.ACC_PRIVATE;
-        String fingerprint = run(chainClass(access, 100, -1, 0));
-        assertNotEquals(fingerprint, run(chainClass(access, 100, CodeFingerprint.MAX_METHODS - 2, 1000)));
-        assertEquals(fingerprint, run(chainClass(access, 100, CodeFingerprint.MAX_METHODS - 1, 1000)));
-        assertEquals(fingerprint, run(chainClass(access, 100, 90, 1000)));
+        int length = CodeFingerprint.MAX_METHODS + 36;
+        String fingerprint = run(chainClass(access, length, -1, 0));
+        assertTrue(CodeFingerprint.truncated(fingerprint), fingerprint);
+        assertNotEquals(fingerprint, run(chainClass(access, length, CodeFingerprint.MAX_METHODS - 2, 1000)));
+        assertEquals(fingerprint, run(chainClass(access, length, CodeFingerprint.MAX_METHODS - 1, 1000)));
+        assertEquals(fingerprint, run(chainClass(access, length, CodeFingerprint.MAX_METHODS + 26, 1000)));
+
+        String all = run(chainClass(access, CodeFingerprint.MAX_METHODS - 1, -1, 0));
+        assertFalse(CodeFingerprint.truncated(all), "the method and " + (CodeFingerprint.MAX_METHODS - 1) + " more");
+        assertTrue(all.matches("[0-9a-f]{" + CodeFingerprint.LENGTH + "}"), all);
+    }
+
+    /**
+     * @return a class whose {@code run()} reads a static field that its static initializer sets to the value
+     */
+    private static byte[] initializedClass(int value) {
+        ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, OWNER, null, "java/lang/Object", null);
+        writer.visitField(Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL, "TABLES", "I", null, null)
+            .visitEnd();
+        MethodVisitor run = writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "run", "()V", null, null);
+        run.visitCode();
+        run.visitFieldInsn(Opcodes.GETSTATIC, OWNER, "TABLES", "I");
+        run.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "state", "I");
+        run.visitInsn(Opcodes.RETURN);
+        run.visitMaxs(0, 0);
+        run.visitEnd();
+        MethodVisitor initializer = writer.visitMethod(Opcodes.ACC_STATIC, "<clinit>", "()V", null, null);
+        initializer.visitCode();
+        initializer.visitLdcInsn(value);
+        initializer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "TABLES", "I");
+        initializer.visitInsn(Opcodes.RETURN);
+        initializer.visitMaxs(0, 0);
+        initializer.visitEnd();
+        writer.visitEnd();
+        return writer.toByteArray();
+    }
+
+    @Test
+    @DisplayName("covers the static initializer that gives the static fields it reads their values")
+    void staticInitializer() {
+        assertNotEquals(run(initializedClass(1)), run(initializedClass(2)));
+    }
+
+    private static final String BASE = OWNER + "$Base";
+    private static final String SUB = OWNER + "$Sub";
+
+    /**
+     * @param helperAccess the access of the base class's {@code helper()}, which stores the value
+     * @param opcode       how the subclass's {@code run()} calls it: {@code invokestatic} or
+     *                     {@code invokevirtual} naming the subclass, or {@code invokespecial} naming the base
+     *                     class, as {@code super.helper()} does
+     * @return a JAR with a base class and a subclass of it, of one nest
+     */
+    private static JarContents inherited(int helperAccess, int opcode, int value) {
+        ClassWriter base = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        base.visit(Opcodes.V1_8, Opcodes.ACC_SUPER, BASE, null, "java/lang/Object", null);
+        storing(base, helperAccess, "helper", value, null);
+        base.visitEnd();
+
+        ClassWriter sub = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        sub.visit(Opcodes.V1_8, Opcodes.ACC_SUPER, SUB, null, BASE, null);
+        MethodVisitor run = sub.visitMethod(Opcodes.ACC_PUBLIC, "run", "()V", null, null);
+        run.visitCode();
+        if (opcode != Opcodes.INVOKESTATIC) {
+            run.visitVarInsn(Opcodes.ALOAD, 0);
+        }
+        run.visitMethodInsn(opcode, opcode == Opcodes.INVOKESPECIAL ? BASE : SUB, "helper", "()V", false);
+        run.visitInsn(Opcodes.RETURN);
+        run.visitMaxs(0, 0);
+        run.visitEnd();
+        sub.visitEnd();
+
+        JarContents jar = new JarContents();
+        jar.put(BASE + ".class", base.toByteArray());
+        jar.put(SUB + ".class", sub.toByteArray());
+        return jar;
+    }
+
+    @Test
+    @DisplayName("covers the inherited static and final methods that it calls, and those that super calls")
+    void inheritedMethods() {
+        for (int[] call : new int[][] {{Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, Opcodes.INVOKESTATIC},
+            {Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL, Opcodes.INVOKEVIRTUAL}, {Opcodes.ACC_PUBLIC, Opcodes.INVOKESPECIAL}}) {
+            assertNotEquals(CodeFingerprint.of(inherited(call[0], call[1], 1), SUB + "#run()V"),
+                CodeFingerprint.of(inherited(call[0], call[1], 2), SUB + "#run()V"), Integer.toString(call[1]));
+        }
+        assertEquals(CodeFingerprint.of(inherited(Opcodes.ACC_PUBLIC, Opcodes.INVOKEVIRTUAL, 1), SUB + "#run()V"),
+            CodeFingerprint.of(inherited(Opcodes.ACC_PUBLIC, Opcodes.INVOKEVIRTUAL, 2), SUB + "#run()V"),
+            "a method that another subclass may override");
+    }
+
+    @Test
+    @DisplayName("tells which method of which class it runs, though not how the compiler numbered lambdas and accessors")
+    void names() {
+        int access = Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC | Opcodes.ACC_SYNCHRONIZED;
+        String helper = nestedRun(nestedCall(Opcodes.V1_8, OWNER, access, "helper", 1));
+        assertNotEquals(helper, nestedRun(nestedCall(Opcodes.V1_8, OWNER, access, "other", 1)), "renamed");
+        assertNotEquals(helper, nestedRun(nestedCall(Opcodes.V1_8, OWNER + "$Other", access, "helper", 1)),
+            "moved to another class of the nest, whose lock it takes");
+    }
+
+    @Test
+    @DisplayName("doesn't cover a bridge method, which a subclass may override")
+    void bridgeMethods() {
+        int bridge = Opcodes.ACC_PUBLIC | Opcodes.ACC_BRIDGE | Opcodes.ACC_SYNTHETIC;
+        assertEquals(run(virtualClass(Opcodes.ACC_PUBLIC, bridge, 1)), run(virtualClass(Opcodes.ACC_PUBLIC, bridge, 2)));
     }
 
     private static final String NESTED = OWNER + "$1Task";
@@ -338,7 +511,7 @@ class CodeFingerprintTest {
     }
 
     @Test
-    @DisplayName("covers the accessors and private methods of its outer class that a nested class calls")
+    @DisplayName("covers the accessors and the private and static methods of its outer class that a nested class calls")
     void outerClass() {
         int accessor = Opcodes.ACC_SYNTHETIC;
         String fingerprint = nestedRun(nestedCall(Opcodes.V1_8, OWNER, accessor, "access$000", 1));
@@ -350,18 +523,20 @@ class CodeFingerprintTest {
         String nestmate = nestedRun(nestedCall(Opcodes.V11, OWNER, Opcodes.ACC_PRIVATE, "helper", 1));
         assertNotEquals(nestmate, nestedRun(nestedCall(Opcodes.V11, OWNER, Opcodes.ACC_PRIVATE, "helper", 2)),
             "a private method, which nestmates call directly");
+        assertNotEquals(nestedRun(nestedCall(Opcodes.V1_8, OWNER, Opcodes.ACC_PUBLIC, "helper", 1)),
+            nestedRun(nestedCall(Opcodes.V1_8, OWNER, Opcodes.ACC_PUBLIC, "helper", 2)), "a static method");
     }
 
     @Test
-    @DisplayName("doesn't cover methods of another nest, nor the non-private methods of its outer class")
+    @DisplayName("doesn't cover methods of another nest")
     void otherClasses() {
         String other = "net/coreprotect/Other";
         assertEquals(nestedRun(nestedCall(Opcodes.V1_8, other, Opcodes.ACC_SYNTHETIC, "access$000", 1)),
             nestedRun(nestedCall(Opcodes.V1_8, other, Opcodes.ACC_SYNTHETIC, "access$000", 2)));
         assertEquals(nestedRun(nestedCall(Opcodes.V11, other, Opcodes.ACC_SYNTHETIC, "access$000", 1)),
             nestedRun(nestedCall(Opcodes.V11, other, Opcodes.ACC_SYNTHETIC, "access$000", 2)));
-        assertEquals(nestedRun(nestedCall(Opcodes.V1_8, OWNER, Opcodes.ACC_PUBLIC, "helper", 1)),
-            nestedRun(nestedCall(Opcodes.V1_8, OWNER, Opcodes.ACC_PUBLIC, "helper", 2)));
+        assertEquals(nestedRun(nestedCall(Opcodes.V11, other, Opcodes.ACC_PUBLIC, "helper", 1)),
+            nestedRun(nestedCall(Opcodes.V11, other, Opcodes.ACC_PUBLIC, "helper", 2)), "a static method");
     }
 
     @Test

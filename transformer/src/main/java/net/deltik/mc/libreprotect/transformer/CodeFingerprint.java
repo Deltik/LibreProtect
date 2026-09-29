@@ -73,23 +73,35 @@ import java.util.function.Function;
  * line numbers or local variable names, keeps the fingerprint.
  *
  * <p>It also covers the code that the method runs in its nest without
- * dispatch: the private and synthetic methods that it calls or refers to, of
- * its own class or of another class of the JAR in the same nest (its outer
- * class, or a class nested in the same outermost class), such as the bodies
- * of its lambdas, of its method references to private methods, of the
- * private helpers that it calls, and of the synthetic {@code access$...}
- * methods through which a nested class compiled for Java 8 reaches its outer
- * class's private members, and in turn theirs, up to {@value #MAX_METHODS}
- * methods in all, in the order they are first referred to. They count by that
- * order, not by name, so renumbering lambdas or accessors elsewhere in the
- * nest keeps the fingerprint. A class's nest is its {@code NestHost}, or for
- * a class file without one, the class named before the first {@code $} of its
- * name.
+ * dispatch, and in turn the code that that runs, up to
+ * {@value #MAX_METHODS} methods in all, in the order they are first referred
+ * to: the methods of its own class, or of another class of the JAR in the
+ * same nest (its outer class, or a class nested in the same outermost
+ * class), that it calls or refers to and that no subclass can override.
+ * Those are private, static and final methods and constructors, the methods
+ * of final classes, and the methods that {@code super} calls, found in the
+ * class named or the nearest superclass that declares them, as the JVM
+ * resolves them. The bodies of lambdas are private, and the synthetic
+ * {@code access$...} methods through which a nested class compiled for Java
+ * 8 reaches its outer class's private members are static. It covers the
+ * static initializer of each class of the nest whose static fields they use
+ * too, which gives those fields their values. So a method that builds its
+ * result with its class's constructor or static helpers, as
+ * {@code ClickHouseJdbcConfig.forMigrationReads()} does, or that returns a
+ * list that its class builds when it's initialized, as
+ * {@code PurgePolicy.getPurgeableTables()} does, changes with them. Each
+ * method is written with its class and, unless the compiler named it, its
+ * name, and references count it by that order, so renumbering lambdas or
+ * accessors elsewhere in the nest keeps the fingerprint. A class's nest is
+ * its {@code NestHost}, or for a class file without one, the class named
+ * before the first {@code $} of its name.
  *
- * <p>It doesn't cover the other code of nested and anonymous classes that the
- * method creates, nor non-private methods, which subclasses may override. The
- * author of the capability report lists those as their own {@code relies}
- * lines where their behavior matters.
+ * <p>It doesn't cover the other methods of the nested and anonymous classes
+ * that the method creates, nor methods that subclasses may override, such as
+ * bridge methods, nor methods of other nests. The author of the capability
+ * report lists those as their own {@code relies} lines where their behavior
+ * matters. A fingerprint that would cover more than {@value #MAX_METHODS}
+ * methods ends with {@value #TRUNCATED}, and the audit reports it.
  */
 final class CodeFingerprint {
 
@@ -98,8 +110,21 @@ final class CodeFingerprint {
     /** How many hex digits of the SHA-256 to keep */
     static final int LENGTH = 12;
 
-    /** How many methods a fingerprint covers at most, counting the method itself */
-    static final int MAX_METHODS = 64;
+    /**
+     * How many methods a fingerprint covers at most, counting the method
+     * itself. EntityDataCodec's canonicalize covered 63 on CoreProtect 25's
+     * development branch, with its conversions of each kind of entity data.
+     */
+    static final int MAX_METHODS = 128;
+
+    /**
+     * Ends a fingerprint that covers only the first {@value #MAX_METHODS}
+     * methods that the method runs, so that the audit can say so
+     */
+    static final String TRUNCATED = "+";
+
+    /** How many superclasses to look through for a member, which a class file whose superclasses loop can't exhaust */
+    private static final int MAX_DEPTH = 64;
 
     /** Markers that separate the parts of the encoding */
     private static final int METHOD = -1;
@@ -157,13 +182,22 @@ final class CodeFingerprint {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }
+        Encoder encoder;
         try (DataOutputStream out = new DataOutputStream(new DigestOutputStream(OutputStream.nullOutputStream(),
             digest))) {
-            new Encoder(out, owner, method, classes).write();
+            encoder = new Encoder(out, owner, method, classes);
+            encoder.write();
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
-        return HexFormat.of().formatHex(digest.digest()).substring(0, LENGTH);
+        return HexFormat.of().formatHex(digest.digest()).substring(0, LENGTH) + (encoder.truncated ? TRUNCATED : "");
+    }
+
+    /**
+     * @return whether a fingerprint covers only the first {@value #MAX_METHODS} methods that the method runs
+     */
+    static boolean truncated(String fingerprint) {
+        return fingerprint.endsWith(TRUNCATED);
     }
 
     /**
@@ -194,24 +228,30 @@ final class CodeFingerprint {
      * a length prefix.
      */
     private static final class Encoder {
+        /** A method to write, with the class that declares it */
+        private record Followed(ClassNode owner, MethodNode method) {
+        }
+
         private final DataOutputStream out;
-        /** The nest of the method's class, whose private and synthetic methods it runs without dispatch */
+        /** The nest of the method's class, whose methods that it runs without dispatch it covers */
         private final String nest;
         private final Function<String, byte[]> classes;
-        /** The classes of the nest read so far, by internal name; {@code null} for one the JAR hasn't */
-        private final Map<String, ClassNode> nestClasses = new HashMap<>();
+        /** The classes of the JAR read so far, by internal name; {@code null} for one the JAR hasn't */
+        private final Map<String, ClassNode> jarClasses = new HashMap<>();
         /** The methods to write, in the order they were first referred to */
-        private final List<MethodNode> methods = new ArrayList<>();
+        private final List<Followed> methods = new ArrayList<>();
         private final Map<MethodNode, Integer> numbers = new HashMap<>();
         /** Jump targets of the method being written */
         private final Map<LabelNode, Integer> ordinals = new HashMap<>();
+        /** Whether the method runs more methods of its nest without dispatch than the fingerprint covers */
+        boolean truncated;
 
         Encoder(DataOutputStream out, ClassNode owner, MethodNode method, Function<String, byte[]> classes) {
             this.out = out;
             this.nest = nest(owner);
             this.classes = classes;
-            nestClasses.put(owner.name, owner);
-            methods.add(method);
+            jarClasses.put(owner.name, owner);
+            methods.add(new Followed(owner, method));
             numbers.put(method, 0);
         }
 
@@ -222,8 +262,13 @@ final class CodeFingerprint {
             }
         }
 
-        private void write(MethodNode method) throws IOException {
+        private void write(Followed followed) throws IOException {
+            MethodNode method = followed.method();
             out.writeInt(METHOD);
+            // Which method it is, unless the compiler named it, as it numbers lambdas and accessors: a static method
+            // moved to another class locks and initializes that one
+            string(followed.owner().name);
+            string((method.access & Opcodes.ACC_SYNTHETIC) != 0 ? "" : method.name);
             // Ignore ASM's pseudo-flags, such as ACC_DEPRECATED, which come from attributes
             out.writeInt(method.access & 0xFFFF);
             string(method.desc);
@@ -264,46 +309,102 @@ final class CodeFingerprint {
         }
 
         /**
+         * @param special whether the reference runs exactly the method that it
+         *                resolves to, as {@code invokespecial} does for a
+         *                constructor, a private method or {@code super}'s
          * @return the number of the method of the nest that a reference runs
-         *         without dispatch, a private or synthetic one, such as a
-         *         lambda of the class or an accessor of its outer class,
-         *         added to the methods to write if it is new; or -1 if it is
-         *         another method, or there are too many
+         *         without dispatch, such as a static helper, a lambda of the
+         *         class or an accessor of its outer class, added to the
+         *         methods to write if it is new; or -1 if it is another
+         *         method, or there are too many
          */
-        private int local(String methodOwner, String name, String descriptor) {
-            ClassNode targetClass = nestClass(methodOwner);
-            if (targetClass == null) {
+        private int local(String methodOwner, String name, String descriptor, boolean special) {
+            // Resolved as the JVM resolves it: in the class named, or the nearest superclass that declares it
+            ClassNode named = jarClass(methodOwner);
+            ClassNode declaring = named;
+            MethodNode target = declaring == null ? null : declared(declaring, name, descriptor);
+            for (int depth = 0; target == null && declaring != null && depth < MAX_DEPTH; depth++) {
+                declaring = superclass(declaring);
+                target = declaring == null ? null : declared(declaring, name, descriptor);
+            }
+            if (target == null || !nest(declaring).equals(nest)) {
                 return -1;
             }
-            MethodNode target = declared(targetClass, name, descriptor);
-            if (target == null || (target.access & (Opcodes.ACC_PRIVATE | Opcodes.ACC_SYNTHETIC)) == 0) {
-                return target != null && numbers.containsKey(target) ? numbers.get(target) : -1;
-            }
-            Integer number = numbers.get(target);
+            // Of a final class named, a call runs what the class resolves, which no subclass overrides
+            boolean fixed = special || withoutDispatch(declaring, target) || (named.access & Opcodes.ACC_FINAL) != 0;
+            return fixed ? follow(declaring, target) : numbers.getOrDefault(target, -1);
+        }
+
+        /**
+         * @return the method's number, added to the methods to write if it is
+         *         new; or -1 if there are too many
+         */
+        private int follow(ClassNode owner, MethodNode method) {
+            Integer number = numbers.get(method);
             if (number == null) {
                 if (methods.size() >= MAX_METHODS) {
+                    truncated = true;
                     return -1;
                 }
                 number = methods.size();
-                methods.add(target);
-                numbers.put(target, number);
+                methods.add(new Followed(owner, method));
+                numbers.put(method, number);
             }
             return number;
         }
 
         /**
-         * @return the class if it's of the method's nest and at hand, or {@code null}
+         * Covers the static initializer of the nest's class whose static
+         * field an instruction reads or writes, which gives the field its
+         * value, as a list of tables that a method returns.
          */
-        private ClassNode nestClass(String className) {
-            if (nestClasses.containsKey(className)) {
-                return nestClasses.get(className);
+        private void initializer(FieldInsnNode field) {
+            if (field.getOpcode() != Opcodes.GETSTATIC && field.getOpcode() != Opcodes.PUTSTATIC) {
+                return;
+            }
+            // The class that declares the field, which the JVM initializes: the class named, or a superclass
+            ClassNode declaring = jarClass(field.owner);
+            for (int depth = 0; declaring != null && declaring.fields.stream().noneMatch(declared ->
+                declared.name.equals(field.name) && declared.desc.equals(field.desc)); depth++) {
+                declaring = depth < MAX_DEPTH ? superclass(declaring) : null;
+            }
+            if (declaring != null && nest(declaring).equals(nest)) {
+                MethodNode initializer = declared(declaring, "<clinit>", "()V");
+                if (initializer != null) {
+                    follow(declaring, initializer);
+                }
+            }
+        }
+
+        /**
+         * @return whether a call runs this very method, since no subclass can
+         *         override it: a private, static or final method, a
+         *         constructor, or a method of a final class. Lambdas' bodies
+         *         and accessors are private or static; a bridge method, which
+         *         the compiler writes too, may be overridden.
+         */
+        private static boolean withoutDispatch(ClassNode owner, MethodNode method) {
+            return (method.access & (Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL)) != 0
+                || method.name.equals("<init>") || (owner.access & Opcodes.ACC_FINAL) != 0;
+        }
+
+        /**
+         * @return a class's superclass, if the JAR has it
+         */
+        private ClassNode superclass(ClassNode node) {
+            return node.superName == null ? null : jarClass(node.superName);
+        }
+
+        /**
+         * @return a class of the JAR, of any nest, or {@code null} if the JAR hasn't it
+         */
+        private ClassNode jarClass(String className) {
+            if (jarClasses.containsKey(className)) {
+                return jarClasses.get(className);
             }
             byte[] bytes = classes.apply(className);
             ClassNode node = bytes == null ? null : read(bytes);
-            if (node != null && !nest(node).equals(nest)) {
-                node = null;
-            }
-            nestClasses.put(className, node);
+            jarClasses.put(className, node);
             return node;
         }
 
@@ -324,12 +425,13 @@ final class CodeFingerprint {
                 case VarInsnNode variable -> out.writeInt(variable.var);
                 case TypeInsnNode type -> string(type.desc);
                 case FieldInsnNode field -> {
+                    initializer(field);
                     string(field.owner);
                     string(field.name);
                     string(field.desc);
                 }
                 case MethodInsnNode call -> {
-                    int local = local(call.owner, call.name, call.desc);
+                    int local = local(call.owner, call.name, call.desc, call.getOpcode() == Opcodes.INVOKESPECIAL);
                     if (local >= 0) {
                         out.writeByte('L');
                         out.writeInt(local);
@@ -420,7 +522,9 @@ final class CodeFingerprint {
                 case Handle handle -> {
                     // Field handles and methods of other classes count by name
                     int local = handle.getTag() >= Opcodes.H_INVOKEVIRTUAL
-                        ? local(handle.getOwner(), handle.getName(), handle.getDesc()) : -1;
+                        ? local(handle.getOwner(), handle.getName(), handle.getDesc(),
+                            handle.getTag() == Opcodes.H_INVOKESPECIAL || handle.getTag() == Opcodes.H_NEWINVOKESPECIAL)
+                        : -1;
                     if (local >= 0) {
                         out.writeByte('h');
                         out.writeInt(handle.getTag());

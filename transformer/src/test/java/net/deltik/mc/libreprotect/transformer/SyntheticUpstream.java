@@ -83,6 +83,8 @@ final class SyntheticUpstream {
     boolean loadDatabase = true;
     /** Whether {@code ConfigHandler.loadDatabase()} clears {@code purgeRunning}, rather than just returning */
     boolean loadDatabaseClearsPurge = false;
+    /** How many private static helpers {@code ConfigHandler.loadDatabase()} runs, one after another */
+    int loadDatabaseHelpers = 0;
     boolean consumer = true;
     /** Constants of the database engine enum */
     final List<String> databaseTypes = new ArrayList<>(List.of("SQLITE", "MYSQL"));
@@ -162,7 +164,8 @@ final class SyntheticUpstream {
         authored.put(LANGUAGE + ".class", languageClass(defaults));
         authored.put(CONFIG_FILE + ".class", classWithStrings(CONFIG_FILE, List.of(languageCache)));
         authored.put(CHAT + ".class", chatClass(messageOutput));
-        authored.put(CONFIG_HANDLER + ".class", configHandler(purgeRunning, loadDatabase, loadDatabaseClearsPurge));
+        authored.put(CONFIG_HANDLER + ".class", configHandler(purgeRunning, loadDatabase, loadDatabaseClearsPurge,
+            loadDatabaseHelpers));
         if (consumer) {
             authored.put(CONSUMER + ".class", consumerClass());
         }
@@ -359,6 +362,13 @@ final class SyntheticUpstream {
      * @return a class with some of the internals that LibreProtect's extensions use
      */
     static byte[] configHandler(boolean purgeRunning, boolean loadDatabase, boolean clearsPurge) {
+        return configHandler(purgeRunning, loadDatabase, clearsPurge, 0);
+    }
+
+    /**
+     * @param helpers how many private static helpers {@code loadDatabase()} runs, each calling the next
+     */
+    static byte[] configHandler(boolean purgeRunning, boolean loadDatabase, boolean clearsPurge, int helpers) {
         ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
         writer.visit(Opcodes.V11, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, CONFIG_HANDLER, null, "java/lang/Object", null);
         if (purgeRunning) {
@@ -373,9 +383,23 @@ final class SyntheticUpstream {
                 method.visitInsn(Opcodes.ICONST_0);
                 method.visitFieldInsn(Opcodes.PUTSTATIC, CONFIG_HANDLER, "purgeRunning", "Z");
             }
+            if (helpers > 0) {
+                method.visitMethodInsn(Opcodes.INVOKESTATIC, CONFIG_HANDLER, "helper0", "()V", false);
+            }
             method.visitInsn(Opcodes.RETURN);
             method.visitMaxs(0, 0);
             method.visitEnd();
+        }
+        for (int i = 0; i < helpers; i++) {
+            MethodVisitor helper = writer.visitMethod(Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC, "helper" + i, "()V",
+                null, null);
+            helper.visitCode();
+            if (i + 1 < helpers) {
+                helper.visitMethodInsn(Opcodes.INVOKESTATIC, CONFIG_HANDLER, "helper" + (i + 1), "()V", false);
+            }
+            helper.visitInsn(Opcodes.RETURN);
+            helper.visitMaxs(0, 0);
+            helper.visitEnd();
         }
         writer.visitEnd();
         return writer.toByteArray();

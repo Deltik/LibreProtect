@@ -101,6 +101,7 @@ final class Audit {
     static final String RULE_OBFUSCATION = "obfuscation";
     static final String RULE_CUSTOM_BOOTSTRAP = "custom-bootstrap";
     static final String RULE_CAPABILITY = "capability-change";
+    static final String RULE_FINGERPRINT_TRUNCATED = "fingerprint-truncated";
     static final String RULE_LICENSE = "license-change";
 
     private static final Set<String> NETWORK_CLASSES = Set.of(
@@ -739,6 +740,20 @@ final class Audit {
                 + reviewed(baseline.acceptedValues(line -> line.capabilities, key))
                 + ". Accepting a build of each of those lines resolves it");
         }
+
+        // A fingerprint that covers only part of what its method runs would miss a change to the rest
+        Map<String, Set<String>> truncated = new TreeMap<>();
+        for (TransformReport.Capability capability : transformReport.capabilities) {
+            for (TransformReport.Reliance reliance : capability.relies()) {
+                if (CodeFingerprint.truncated(reliance.fingerprint())) {
+                    truncated.computeIfAbsent(reliance.member(), member -> new TreeSet<>()).add(capability.id());
+                }
+            }
+        }
+        truncated.forEach((member, ids) -> review(RULE_FINGERPRINT_TRUNCATED, member, "the fingerprint of this "
+            + "method, which " + String.join(", ", ids) + " relies on, covers only the first "
+            + CodeFingerprint.MAX_METHODS + " methods that it runs, so a change to the others goes unseen. Raise "
+            + "CodeFingerprint.MAX_METHODS, or rely on less"));
     }
 
     /**

@@ -871,6 +871,22 @@ class AuditTest {
         }
 
         @Test
+        @DisplayName("a fingerprint that covers only part of what its method runs")
+        void truncatedFingerprint() throws Exception {
+            String member = CONFIG_HANDLER + "#loadDatabase()V";
+            AuditReport report = audit(upstream -> upstream.loadDatabaseHelpers = CodeFingerprint.MAX_METHODS,
+                cleanBaseline());
+            assertTrue(has(report, Severity.REVIEW, Audit.RULE_FINGERPRINT_TRUNCATED, member), report.findings::toString);
+            assertTrue(report.observed.capabilities.stream().anyMatch(entry -> entry.startsWith("code ")
+                && entry.contains(member) && entry.endsWith(CodeFingerprint.TRUNCATED)), report.observed::toString);
+
+            AuditReport covered = audit(upstream -> upstream.loadDatabaseHelpers = CodeFingerprint.MAX_METHODS - 1,
+                cleanBaseline());
+            assertFalse(has(covered, Severity.REVIEW, Audit.RULE_FINGERPRINT_TRUNCATED, member),
+                covered.findings::toString);
+        }
+
+        @Test
         @DisplayName("upstream removed code that the extensions rely on")
         void removedCode() throws Exception {
             AuditReport report = audit(upstream -> upstream.loadDatabase = false, cleanBaseline());
