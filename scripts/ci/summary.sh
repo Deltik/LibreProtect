@@ -21,8 +21,11 @@
 # No -e: this runs after failed steps too, and reports what it can.
 set -uo pipefail
 
-DIST="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/dist"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+DIST="$ROOT/dist"
 AUDIT="$DIST/audit-report.json"
+# How many bytes of scripts/lp review to show, well within the 1 MiB that a step summary may have
+REVIEW_BYTES=600000
 
 if [[ ! -f "$AUDIT" ]]; then
     echo "## No Build Output"
@@ -41,8 +44,29 @@ if jq -e '[.findings[] | select(.severity != "INFO")] | length > 0' "$AUDIT" >/d
     echo "|---|---|---|---|---|"
     jq -r '[.findings[] | select(.severity != "INFO")] | sort_by(.rule == "capability-change") | .[:100][] | "| \(.severity) | \(.rule) | `\(.site)` | \(.detail | gsub("\\|"; "\\\\|")) | \(if .resolution == "ACCEPT" then "accepting" else "an allowance" end) |"' "$AUDIT"
     echo
+    jq -r '[.findings[] | select(.severity != "INFO")] | length | select(. > 100)
+        | "\(. - 100) more findings are in `audit-report.json`, and `scripts/lp review` shows them all.\n"' "$AUDIT"
     echo "Accepting reviewed changes: put this build's output (in the \`dist\` artifact) in \`dist/\`, run \`scripts/lp accept\`, and commit \`audit/baseline.json\`. A finding resolved by an allowance needs an \`allow\` entry with a reason instead."
     echo
+
+    # What changed upstream, as scripts/lp review shows it, without the findings again
+    review="$("$ROOT/scripts/lp" review 2>/dev/null \
+        | awk '/^Upstream `/ || /^## What Changed Upstream/ { show = 1 } /^## Findings/ { show = 0 } show')"
+    if [[ -n "$review" ]]; then
+        echo "<details><summary>What changed upstream that the findings name</summary>"
+        echo
+        # Whole sections, one per file, so that a code block is never cut off
+        LC_ALL=C awk -v max="$REVIEW_BYTES" '
+            function flush() { if (used + length(section) <= max) { printf "%s", section; used += length(section) }
+                else if (section != "") left++; section = "" }
+            /^### / { flush() }
+            { sub(/^## /, "#### "); sub(/^### /, "##### "); section = section $0 "\n" }
+            END { flush(); if (left) print "\n" left " more " (left == 1 ? "file isn'\''t" : "files aren'\''t") \
+                " shown here: run scripts/lp review." }' <<<"$review"
+        echo
+        echo "</details>"
+        echo
+    fi
 fi
 
 if [[ -f "$DIST/DIFFERENCES.md" ]]; then

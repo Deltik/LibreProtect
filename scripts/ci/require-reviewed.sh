@@ -36,6 +36,7 @@ jq -r '.findings[] | select(.severity != "INFO")
     "$report" >&2
 cat >&2 <<'EOF'
 
+The job's summary, like scripts/lp review, shows what changed upstream that they name.
 To accept them after review, update audit/baseline.json in this branch:
   - put this build's dist artifact in dist/ and run scripts/lp accept, which makes its upstream line
     what the build observed (with --licenses for a change to upstream's licensing), and

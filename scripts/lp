@@ -34,6 +34,12 @@
 #                                   While they are up, build lets unit tests use them too.
 #   scripts/lp db env               Print their endpoints and credentials (build/containers.env)
 #   scripts/lp db down              Remove them
+#   scripts/lp review [--since REF] [--full]
+#                                   Show what the last build's audit found that needs review,
+#                                   with the upstream commits and diffs of the files that the
+#                                   findings name, since the build of the nearest upstream
+#                                   line in audit/baseline.json, or since REF. --full shows
+#                                   diffs of any length. Needs jq.
 #   scripts/lp accept [--line NAME] [--licenses]
 #                                   Once its audit findings are reviewed, accept the last
 #                                   build into audit/baseline.json as the reviewed state of
@@ -115,25 +121,32 @@ find_jdk() {
 # shellcheck source=scripts/lib/lock.sh
 source "$ROOT/scripts/lib/lock.sh"
 
-# Clone upstream into $UPSTREAM_DIR if it isn't there, and fetch its branches and tags, leaving its checkout alone
+# Clone upstream into $UPSTREAM_DIR if it isn't there, and fetch its branches and tags, leaving its checkout alone.
+# Returns nonzero if it can't; even so, git never falls back to the repository that build/ is in.
 fetch_upstream() {
     if [[ ! -d "$UPSTREAM_DIR/.git" ]]; then
         log "Cloning $UPSTREAM_REPO"
-        git clone --quiet --filter=blob:none --no-checkout "$UPSTREAM_REPO" "$UPSTREAM_DIR"
+        git clone --quiet --filter=blob:none --no-checkout "$UPSTREAM_REPO" "$UPSTREAM_DIR" || return 1
     fi
-    git -C "$UPSTREAM_DIR" remote set-url origin "$UPSTREAM_REPO"
+    local git=(git --git-dir="$UPSTREAM_DIR/.git")
+    "${git[@]}" remote set-url origin "$UPSTREAM_REPO" || return 1
     # With every tag, including those on no branch, since builds are named after upstream's nearest release tag
-    git -C "$UPSTREAM_DIR" fetch --quiet --force --tags origin '+refs/heads/*:refs/remotes/origin/*'
+    "${git[@]}" fetch --quiet --force --tags origin '+refs/heads/*:refs/remotes/origin/*' || return 1
+}
+
+# Print the commit of an upstream ref: a branch as upstream has it, or a tag or commit
+upstream_ref_commit() {
+    local git=(git --git-dir="$UPSTREAM_DIR/.git")
+    "${git[@]}" rev-parse --verify --quiet "refs/remotes/origin/$1^{commit}" \
+        || "${git[@]}" rev-parse --verify --quiet "$1^{commit}"
 }
 
 # Check out an upstream ref into $UPSTREAM_DIR and print its commit SHA
 checkout_upstream() {
     local ref="$1" sha
-    fetch_upstream
+    fetch_upstream || die "Couldn't fetch upstream from $UPSTREAM_REPO into $UPSTREAM_DIR"
 
-    sha="$(git -C "$UPSTREAM_DIR" rev-parse --verify --quiet "refs/remotes/origin/$ref^{commit}" \
-        || git -C "$UPSTREAM_DIR" rev-parse --verify --quiet "$ref^{commit}")" \
-        || die "Upstream ref '$ref' not found"
+    sha="$(upstream_ref_commit "$ref")" || die "Upstream ref '$ref' not found"
 
     git -C "$UPSTREAM_DIR" checkout --quiet --force --detach "$sha"
     git -C "$UPSTREAM_DIR" clean -xfdq
@@ -950,6 +963,231 @@ cmd_clean() {
     find "$ROOT" -maxdepth 3 -name target -type d -prune -exec rm -rf {} +
 }
 
+# How many lines of one file's diff review shows, unless --full
+REVIEW_DIFF_LINES=400
+
+# Print stdin in a Markdown code block, with the info string $1, fenced by
+# more backquotes than any run of them in it, so that nothing in it can end
+# the block: upstream's files are untrusted, and have Markdown of their own
+markdown_block() {
+    local text fence
+    text="$(cat)"
+    fence="$(awk '{ while (match($0, /`+/)) { if (RLENGTH > longest) longest = RLENGTH; $0 = substr($0, RSTART + RLENGTH) } }
+        END { for (i = 0; i < (longest < 3 ? 3 : longest + 1); i++) printf "`" }' <<<"$text")"
+    printf '%s%s\n%s\n%s\n' "$fence" "$1" "$text" "$fence"
+}
+
+# Escape what would be HTML, a link or a code span in stdin's Markdown, such as upstream's commit messages
+markdown_escape() {
+    sed 's/[\\<>&`[]/\\&/g; s/]/\\]/g' | tr -d '\000-\010\013-\037'
+}
+
+# Keep the hunks of a diff on stdin that fit in $1 lines, after its header: first those that name one of the
+# methods in $2, one per line, as a hunk's header names the method that it's in, then the others. Prints how many
+# lines it left out last, on a line of its own.
+select_hunks() {
+    NAMES="$2" awk -v max="$1" '
+        BEGIN { count = split(ENVIRON["NAMES"], names, "\n") }
+        /^@@/ { hunk++ }
+        { if (hunk == 0) { header = header $0 "\n"; used++ } else { text[hunk] = text[hunk] $0 "\n"; size[hunk]++ } }
+        END {
+            for (pass = 1; pass <= 2; pass++) {
+                for (i = 1; i <= hunk; i++) {
+                    named = 0
+                    for (j = 1; j <= count; j++) if (names[j] != "" && index(text[i], names[j] "(")) named = 1
+                    if ((pass == 1) != named || chosen[i]) continue
+                    if (used + size[i] <= max) { chosen[i] = 1; used += size[i] } else left += size[i]
+                }
+            }
+            printf "%s", header
+            for (i = 1; i <= hunk; i++) if (chosen[i]) printf "%s", text[i]
+            print left + 0
+        }'
+}
+
+# Show what the last build's audit found that needs a maintainer, and what
+# changed upstream that the findings point to: the commits and diffs of the
+# upstream files that they name, since the build that the nearest line of the
+# audit baseline was accepted from, or since --since. A diff shows whole
+# methods where it's short enough, and otherwise, first the parts that name
+# the findings' methods. Markdown, for a terminal or a CI summary.
+# shellcheck disable=SC2016 # Backquotes in single quotes are Markdown's
+cmd_review() {
+    local since="" full=false
+    while (( $# )); do
+        case "$1" in
+            --since)
+                (( $# >= 2 )) || die "--since needs an upstream commit"
+                since="$2"
+                shift 2
+                ;;
+            --full) full=true; shift ;;
+            *) die "Unknown option for review: $1" ;;
+        esac
+    done
+    command -v jq >/dev/null 2>&1 || die "review needs jq"
+    local report="$DIST_DIR/audit-report.json" transform="$DIST_DIR/transform-report.json" \
+        baseline="$ROOT/audit/baseline.json"
+    [[ -f "$report" && -f "$transform" ]] \
+        || die "No audited build in $DIST_DIR: run scripts/lp build, or download a CI run's dist artifact into it"
+    read_lock "$ROOT/upstream.lock"
+    fetch_upstream || log "Couldn't fetch upstream; reviewing with what $UPSTREAM_DIR has"
+    [[ -d "$UPSTREAM_DIR/.git" ]] || die "No upstream repository at $UPSTREAM_DIR"
+    # Upstream's repository, and never the one that build/ is in; paths from findings are paths, not patterns
+    local git=(git --literal-pathspecs --git-dir="$UPSTREAM_DIR/.git") built
+    built="$(jq -r .upstreamCommit "$transform")"
+    "${git[@]}" cat-file -e "$built^{commit}" 2>/dev/null || die "Upstream has no commit $built, which was built"
+
+    # What to compare the build with: --since, or the commit that the nearest line was accepted from
+    local base="" base_line="" name commit distance best=""
+    if [[ -n "$since" ]]; then
+        base="$(upstream_ref_commit "$since")" || die "Upstream has no ref or commit $since"
+    else
+        while IFS=$'\t' read -r name commit; do
+            "${git[@]}" cat-file -e "$commit^{commit}" 2>/dev/null || continue
+            if "${git[@]}" merge-base --is-ancestor "$commit" "$built"; then
+                distance="$("${git[@]}" rev-list --count "$commit..$built")"
+            else
+                # Such as a release that upstream tagged on a branch of its own: after every ancestor
+                distance=$(( 1000000 + $("${git[@]}" rev-list --count "$commit...$built") ))
+            fi
+            if [[ -z "$best" ]] || (( distance < best )); then
+                best="$distance" base="$commit" base_line="$name"
+            fi
+        done < <(jq -r '.lines // {} | to_entries[] | select(.value.upstream.commit | type == "string")
+            | "\(.key)\t\(.value.upstream.commit)"' "$baseline")
+    fi
+
+    local short_built short_base=""
+    short_built="$("${git[@]}" rev-parse --short=7 "$built")"
+    printf '# Audit of LibreProtect %s\n\n' "$(jq -r .forkVersion "$transform")"
+    if [[ -z "$base" ]]; then
+        printf 'Upstream `%s`. No line of the audit baseline names an upstream commit to compare it with.\n\n' \
+            "$short_built"
+    else
+        local web="${UPSTREAM_REPO%.git}" what=""
+        short_base="$("${git[@]}" rev-parse --short=7 "$base")"
+        [[ -z "$base_line" ]] || what=", which the $base_line line was accepted from"
+        printf 'Upstream `%s`, compared with `%s`%s: %s commits since, %s before.' "$short_built" "$short_base" \
+            "$what" "$("${git[@]}" rev-list --count "$base..$built")" "$("${git[@]}" rev-list --count "$built..$base")"
+        [[ "$web" == https://github.com/* ]] && printf ' [Compare on GitHub](%s/compare/%s...%s)' "$web" "$base" "$built"
+        printf '\n\n'
+    fi
+
+    if ! jq -e '[.findings[] | select(.severity != "INFO")] | length > 0' "$report" >/dev/null; then
+        printf 'The audit found nothing that needs review.\n'
+        return
+    fi
+    # Sites and details come from upstream: as code spans that nothing in them ends, and as text without HTML,
+    # links or code spans
+    local markdown='
+        def printable: gsub("[[:cntrl:]]"; "?");
+        def code: printable | ([scan("`+") | length] | max // 0) as $longest | ("`" * ($longest + 1)) as $fence
+            | if $longest > 0 then "\($fence) \(.) \($fence)" else "\($fence)\(.)\($fence)" end;
+        def text: printable | gsub("(?<c>[\\\\<>&`\\[\\]])"; "\\\(.c)");'
+    local findings='[.findings[] | select(.severity != "INFO")] | sort_by(.severity != "FAIL", .rule == "capability-change")[]'
+    printf '## Findings\n\n'
+    jq -r "$markdown $findings"'
+        | "- **\(.severity)** \(.rule) at \(.site | code), resolved by "
+            + (if .resolution == "ACCEPT" then "accepting the build" else "an allowance or a fix" end)
+            + ": \(.detail | text)"' "$report"
+    printf '\n'
+    [[ -n "$base" ]] || return 0
+
+    # Where upstream changed what each finding names: a file to diff, or a string to find; and the finding's site
+    # as a code span, and the name of the method that it names, if any
+    local subjects
+    subjects="$(jq -r "$markdown $findings"'
+        | def source: "src/main/java/" + (split("#")[0] | split("$")[0]) + ".java";
+          def method: capture("(?<owner>[^ ]*)#(?<name>[^(]+)\\(") // null
+              | if . == null or .name == "<clinit>" then "" elif .name == "<init>"
+                then .owner | split("/")[-1] | split("$")[-1] else .name end;
+        .site as $site
+        | if .rule == "capability-change" then
+              ($site | capture("^(?<kind>[a-z]+) (?:(?<way>\\S+) )?(?<subject>.+)$")) as $key
+              | if $key.kind == "doc" then ["file", $key.subject]
+                elif ($key.kind | IN("code", "optional", "enum")) then ["file", ($key.subject | source)]
+                else empty end
+          elif (.rule | IN("dependency-change", "repository-change", "build-plugin-change", "profile-change",
+              "new-library-package")) then ["file", "pom.xml"]
+          elif .rule == "plugin-libraries-change" then ["file", "src/main/resources/plugin.yml"]
+          elif .rule == "license-change" then ["file", $site]
+          elif (.rule | IN("new-host", "new-extension-point")) then ["string", $site]
+          elif .rule == "extension-not-requested" then ["file", ("net/coreprotect/utility/Extensions" | source)]
+          elif ($site | test("^[A-Za-z_$][A-Za-z0-9_$]*(/[A-Za-z_$][A-Za-z0-9_$]*)+(#|$)")) then
+              ["file", ($site | source)]
+          else empty end
+        | select(.[1] | test("[[:cntrl:]]") | not)
+        | . + [($site | code), ($site | method | printable)] | join("\t")' "$report")"
+    [[ -n "$subjects" ]] || return 0
+
+    printf '## What Changed Upstream\n'
+    local attributes errors kind subject sites names commits diff at_base at_built left
+    attributes="$(mktemp)"
+    errors="$(mktemp)"
+    printf '*.java diff=java\n' > "$attributes"
+    while IFS=$'\t' read -r kind subject; do
+        sites="$(awk -F '\t' -v kind="$kind" -v subject="$subject" '$1 == kind && $2 == subject { print $3 }' \
+            <<<"$subjects" | awk '!seen[$0]++' | paste -sd ',' - | sed 's/,/, /g')"
+        names="$(awk -F '\t' -v kind="$kind" -v subject="$subject" '$1 == kind && $2 == subject && $4 != "" { print $4 }' \
+            <<<"$subjects" | awk '!seen[$0]++')"
+        printf '\n### %s\n\nFor %s\n\n' "$(jq -rn --arg subject "$subject" "$markdown"' $subject | code')" "$sites"
+
+        if [[ "$kind" == string ]]; then
+            # The commits that added or removed it, and where the built upstream's code has it, as the audit found it
+            # in any case; code may still build it from parts
+            log "Looking for $subject in upstream's code, which may fetch its files first"
+            if commits="$("${git[@]}" log -S"$subject" --format='- %h %s' "$base..$built" -- src/main 2>"$errors" \
+                | markdown_escape)"; then
+                [[ -z "$commits" ]] || printf '%s\n\n' "$commits"
+            fi
+            local status=0
+            diff="$("${git[@]}" grep -n -i -F -e "$subject" "$built" -- src/main 2>"$errors" | sed "s/^$built://")" \
+                || status=$?
+            if (( status == 0 )); then
+                awk 'NR <= 20' <<<"$diff" | tr -d '\000-\010\013-\037' | markdown_block ""
+            elif (( status == 1 )); then
+                printf "Upstream's code at \`%s\` doesn't have it as it is, which it may build from parts.\n" "$short_built"
+            else
+                printf "Couldn't search upstream's code: %s\n" "$(head -n 1 "$errors")"
+            fi
+            continue
+        fi
+
+        at_base="$("${git[@]}" ls-tree --name-only "$base" -- "$subject" 2>/dev/null)"
+        at_built="$("${git[@]}" ls-tree --name-only "$built" -- "$subject" 2>/dev/null)"
+        if [[ -z "$at_base" && -z "$at_built" ]]; then
+            printf 'Upstream has no such file at `%s` or `%s`, as for a bundled library.\n' "$short_base" "$short_built"
+            continue
+        fi
+        if commits="$("${git[@]}" log --format='- %h %s' "$base..$built" -- "$subject" 2>"$errors" | markdown_escape)"
+        then
+            [[ -z "$commits" ]] || printf '%s\n\n' "$commits"
+        fi
+        # Whole methods if that isn't too long, else first the parts that name the findings' methods
+        if ! diff="$("${git[@]}" -c core.attributesFile="$attributes" diff --function-context "$base" "$built" \
+            -- "$subject" 2>"$errors")"; then
+            printf "Couldn't compare it: %s\n" "$(head -n 1 "$errors")"
+            continue
+        fi
+        if [[ -z "$diff" ]]; then
+            printf 'Upstream has no change to it between `%s` and `%s`. A fingerprint changes with code that the compiler copied into its method from another class too, such as a constant.\n' \
+                "$short_base" "$short_built"
+            continue
+        fi
+        left=0
+        if ! $full && (( $(wc -l <<<"$diff") > REVIEW_DIFF_LINES )); then
+            diff="$("${git[@]}" -c core.attributesFile="$attributes" diff -U10 "$base" "$built" -- "$subject" \
+                | select_hunks "$REVIEW_DIFF_LINES" "$names")"
+            left="$(tail -n 1 <<<"$diff")"
+            diff="$(sed '$d' <<<"$diff")"
+        fi
+        markdown_block diff <<<"$diff"
+        (( left == 0 )) || printf '\n%s more lines not shown; scripts/lp review --full shows them.\n' "$left"
+    done < <(cut -f 1,2 <<<"$subjects" | awk '!seen[$0]++')
+    rm -f "$attributes" "$errors"
+}
+
 # Accept the last build into the audit baseline, once a maintainer has
 # reviewed what its audit found: its upstream line's reviewed state becomes
 # what the build observed. That resolves each finding whose resolution is
@@ -1105,6 +1343,7 @@ main() {
         db) cmd_db "$@" ;;
         sources) cmd_sources "$@" ;;
         sbom) cmd_sbom "$@" ;;
+        review) cmd_review "$@" ;;
         accept) cmd_accept "$@" ;;
         clean) cmd_clean "$@" ;;
         headers) exec "$ROOT/scripts/ci/license-headers.sh" "$@" ;;
