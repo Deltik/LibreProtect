@@ -250,6 +250,11 @@ class ClickHouseMigrationTest {
             // CoreProtect stores sign colors as Color.asRGB(), 0 to 0xFFFFFF; TestDatabases' negative ones can't exist
             try (java.sql.Statement statement = connection.createStatement()) {
                 statement.executeUpdate("UPDATE co_sign SET color = 16777215 - rowid, color_secondary = rowid");
+                if (ClickHouseFixture.SIGN_ROLLBACKS) {
+                    // As CoreProtect's patch adds it to an older database, with some signs rolled back since
+                    statement.executeUpdate("ALTER TABLE co_sign ADD COLUMN rolled_back INTEGER DEFAULT 0");
+                    statement.executeUpdate("UPDATE co_sign SET rolled_back = 1 WHERE rowid % 2 = 0");
+                }
             }
         }
     }

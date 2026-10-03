@@ -22,6 +22,7 @@ package net.deltik.mc.libreprotect.extension.upstream.clickhouse;
 
 import net.deltik.mc.libreprotect.extension.migration.Row;
 import net.deltik.mc.libreprotect.extension.migration.TableStats;
+import net.deltik.mc.libreprotect.extension.upstream.reflect.Upstream;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -44,6 +45,13 @@ final class ClickHouseFixture {
     static final long BLOCK_HIGH_WATER = 5_000_000_100L;
     static final long CHAT_HIGH_WATER = 900;
     static final long USER_HIGH_WATER = 50;
+
+    /**
+     * Whether CoreProtect rolls signs back, which put {@code rolled_back} on
+     * its sign table as on block's
+     */
+    static final boolean SIGN_ROLLBACKS =
+        Upstream.coreProtect().has("net.coreprotect.model.rollback.RollbackUpdateTargets#SIGN");
 
     /** Each table's columns, in the view's order */
     final Map<String, List<String>> columns = new LinkedHashMap<>();
@@ -123,7 +131,12 @@ final class ClickHouseFixture {
         table("sign", List.of("time", "user", "wid", "x", "y", "z", "action", "color", "color_secondary", "data",
                 "waxed", "face", "line_1", "line_2", "line_3", "line_4", "line_5", "line_6", "line_7", "line_8"),
             row(3, 1_700_000_000L, 1L, 1L, 0L, 64L, 0L, 1L, 16_777_215L, 0L, 1L, 0L, 1L, "Line ☃", "", null,
-                "4", "5", "6", "7", longText.substring(0, 16)));
+                "4", "5", "6", "7", longText.substring(0, 16)),
+            row(4, 1_700_000_001L, 2L, 1L, 0L, 64L, 0L, 1L, 0L, 0L, 0L, 0L, 1L, "Rolled back", null, null, null,
+                "", "", "", ""));
+        if (SIGN_ROLLBACKS) {
+            column("sign", "rolled_back", 0L, 1L);
+        }
         table("skull", List.of("time", "owner", "skin"),
             row(1, 1_700_000_000L, "Notch", longText),
             row(2, 1_700_000_000L, null, null));
@@ -171,6 +184,31 @@ final class ClickHouseFixture {
             copies.add(new Row(row.rowId(), row.values().clone()));
         }
         expected.put(table, copies);
+    }
+
+    /**
+     * Add a column to a table, with a value for each of its rows in turn
+     */
+    private void column(String table, String column, Object... values) {
+        List<String> tableColumns = new ArrayList<>(columns.get(table));
+        tableColumns.add(column);
+        columns.put(table, tableColumns);
+        written.put(table, withColumn(written.get(table), values));
+        expected.put(table, withColumn(expected.get(table), values));
+    }
+
+    private static List<Row> withColumn(List<Row> rows, Object... values) {
+        if (rows.size() != values.length) {
+            throw new IllegalArgumentException(rows.size() + " rows but " + values.length + " values");
+        }
+        List<Row> extended = new ArrayList<>();
+        for (int index = 0; index < rows.size(); index++) {
+            Row row = rows.get(index);
+            Object[] rowValues = Arrays.copyOf(row.values(), row.values().length + 1);
+            rowValues[rowValues.length - 1] = values[index];
+            extended.add(new Row(row.rowId(), rowValues));
+        }
+        return extended;
     }
 
     /**
