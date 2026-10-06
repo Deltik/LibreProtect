@@ -74,9 +74,9 @@
   "lines": {
     "development": {
       "upstream": {
-        "ref": "af78ea00d43e6a176e4901ef5eda83e093ee94c2",
-        "commit": "af78ea00d43e6a176e4901ef5eda83e093ee94c2",
-        "jarSha256": "5e6195506033009c0b16a4ec1be967798b1675def97dec2bfcf9273a91c449f9"
+        "ref": "4b1e9ab33496d1672946c3ad497c119a0bb08df3",
+        "commit": "4b1e9ab33496d1672946c3ad497c119a0bb08df3",
+        "jarSha256": "3568d3f744137e6e9da174644c789c00c99d07ffec6c75cf2fea41270ad68786"
       },
       "hosts": [
         "coreprotect.net",
@@ -195,7 +195,7 @@
         "capability migrate-db.target.sqlite=jdbc",
         "capability migrate-db.transcoding=statement-codecs",
         "capability server.thread=scheduler",
-        "code auto-purge.coordination/background-claims net/coreprotect/command/PurgeCommand$1BasicThread#run()V=573e6df5baca",
+        "code auto-purge.coordination/background-claims net/coreprotect/command/PurgeCommand$1BasicThread#run()V=43329b895b79",
         "code auto-purge.coordination/background-claims net/coreprotect/consumer/Consumer#beginDatabaseRecovery()Lnet/coreprotect/consumer/Consumer$OperationStartResult;=743ab32fa156",
         "code auto-purge.coordination/background-claims net/coreprotect/consumer/Consumer#beginDatabaseReload()Lnet/coreprotect/consumer/Consumer$OperationStartResult;=551d07c1ef70",
         "code auto-purge.coordination/background-claims net/coreprotect/consumer/Consumer#claimBackgroundPurge(Z)Lnet/coreprotect/consumer/Consumer$OperationStartResult;=ab1e415fe63a",
