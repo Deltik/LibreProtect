@@ -122,8 +122,11 @@ jobs:
           persist-credentials: false
 
       - name: Check that a checkout has no changes
-        # As when a tool that ignores .gitattributes commits a file with other line endings
+        # As when a tool that ignores .gitattributes commits a file with other line endings. Without the
+        # checkout's file times in the index, Git compares every file with what's committed, though the
+        # checkout took more than a second.
         run: |
+          git read-tree HEAD
           git status --short
           if [[ -n "$(git status --porcelain)" ]]; then
             echo "::error::A checkout changes these files, as .gitattributes converts their line endings. Commit them as a checkout leaves them (git add --renormalize), or have .gitattributes keep them as committed (-text)."
