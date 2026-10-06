@@ -1,6 +1,10 @@
 # LF line endings everywhere, including Windows checkouts, except for Windows batch files
 * text=auto eol=lf
 *.cmd text eol=crlf
+# Kept as committed: with CRLF, as Maven's wrapper writes it. Dependabot
+# commits the wrapper's own file, which a checkout would otherwise convert,
+# leaving every checkout with a change to it.
+mvnw.cmd -text
 *.jar binary
 # Drawn by branding/generate.py
 branding/*.svg linguist-generated

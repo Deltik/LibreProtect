@@ -110,7 +110,9 @@ jobs:
 
   license-notices:
     # Branch protection requires this job by name too. It needs neither Java
-    # nor upstream, so it reports within seconds.
+    # nor upstream, so it reports within seconds. It also requires that a
+    # checkout has no changes: a build of one records its commit as dirty,
+    # so development builds and releases would fail at their source archive.
     name: License notices
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -118,6 +120,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Check that a checkout has no changes
+        # As when a tool that ignores .gitattributes commits a file with other line endings
+        run: |
+          git status --short
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "::error::A checkout changes these files, as .gitattributes converts their line endings. Commit them as a checkout leaves them (git add --renormalize), or have .gitattributes keep them as committed (-text)."
+            exit 1
+          fi
 
       - name: Check that source files begin with the license notice
         run: scripts/lp headers
