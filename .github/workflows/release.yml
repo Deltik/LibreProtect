@@ -128,7 +128,9 @@ jobs:
   distribute:
     name: Distribute
     needs: [build, publish]
+    # What its jobs need, which a called workflow can't have unless its caller grants them
     permissions:
+      actions: read
       contents: write
       issues: write
     uses: ./.github/workflows/distribute.yml
@@ -143,6 +145,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      # To name the jobs and steps that failed, with their errors
+      actions: read
       issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
