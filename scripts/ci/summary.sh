@@ -27,10 +27,113 @@ AUDIT="$DIST/audit-report.json"
 # How many bytes of scripts/lp review to show, well within the 1 MiB that a step summary may have
 REVIEW_BYTES=600000
 
+# How many failed unit tests to show
+FAILED_TESTS=20
+
+# The unit tests that failed, from Surefire's XML reports, each with its failure's type and message. Its plain
+# reports leave out the failures of nested test classes. Its XML writer puts each element on a line of its own,
+# with newlines in attribute values as character references, and what tests print, and stack traces, in CDATA
+# sections, which are skipped. Bytes, not characters, so that every awk counts alike.
+# shellcheck disable=SC2016 # The dollar signs in single quotes are awk's
+failed_tests() {
+    # Not in build/, which has upstream's build, nor in hidden directories, such as other worktrees
+    find "$ROOT" \( -path "$ROOT/build" -o -path "$ROOT/.*" \) -prune -o -path '*/target/surefire-reports/TEST-*.xml' \
+        -print0 2>/dev/null \
+        | sort -z | LC_ALL=C xargs -0 -r awk -v root="$ROOT" -v max="$FAILED_TESTS" -v apostrophe="'" '
+        function attribute(line, name) {
+            if (!match(line, " " name "=\"[^\"]*\"")) return ""
+            return substr(line, RSTART + length(name) + 3, RLENGTH - length(name) - 4)
+        }
+        function text(value) {
+            gsub(/&lt;/, "<", value); gsub(/&gt;/, ">", value); gsub(/&quot;/, "\"", value)
+            gsub(/&apos;/, apostrophe, value); gsub(/&#10;/, "\n", value); gsub(/&#9;/, "\t", value)
+            gsub(/&#[0-9]+;/, "?", value); gsub(/&#x[0-9A-Fa-f]+;/, "?", value); gsub(/&amp;/, "\\&", value)
+            gsub(/[\001-\010\013-\037\177]/, "?", value)
+            return value
+        }
+        function simple(name) { sub(/^.*\./, "", name); return name }
+        # The first bytes of a value, without the start of a character that they would cut off
+        function cut(value, bytes,   lead, need) {
+            if (length(value) <= bytes) return value
+            value = substr(value, 1, bytes)
+            for (lead = bytes; lead > 0 && substr(value, lead, 1) ~ /[\200-\277]/; lead--) continue
+            if (lead == 0) return value
+            need = substr(value, lead, 1) ~ /[\360-\367]/ ? 4 : substr(value, lead, 1) ~ /[\340-\357]/ ? 3 \
+                : substr(value, lead, 1) ~ /[\300-\337]/ ? 2 : 1
+            return bytes - lead + 1 < need ? substr(value, 1, lead - 1) : value
+        }
+        # Backquotes longer than any run of them in a value, which nothing in it can end
+        function fence(value, least,   longest, rest, result) {
+            longest = least - 1
+            rest = value
+            while (match(rest, /`+/)) { if (RLENGTH > longest) longest = RLENGTH; rest = substr(rest, RSTART + RLENGTH) }
+            result = ""
+            while (length(result) <= longest) result = result "`"
+            return result
+        }
+        function span(value,   marks, padding) {
+            marks = fence(value, 1)
+            padding = value ~ /^`/ || value ~ /`$/ ? " " : ""
+            return marks padding value padding marks
+        }
+        FNR == 1 {
+            module = FILENAME
+            if (index(module, root "/") == 1) module = substr(module, length(root) + 2)
+            sub(/\/target\/.*/, "", module)
+            cdata = 0
+            test = ""
+        }
+        {
+            # What of the line is outside CDATA sections
+            line = $0
+            outside = ""
+            while (line != "") {
+                if (cdata) {
+                    end = index(line, "]]>")
+                    if (!end) break
+                    cdata = 0
+                    line = substr(line, end + 3)
+                } else {
+                    start = index(line, "<![CDATA[")
+                    if (!start) { outside = outside line; break }
+                    outside = outside substr(line, 1, start - 1)
+                    cdata = 1
+                    line = substr(line, start + 9)
+                }
+            }
+        }
+        outside ~ /<testcase / { test = simple(text(attribute(outside, "classname"))) "." text(attribute(outside, "name")) }
+        outside ~ /<(failure|error)[ >\/]/ && test != "" {
+            if (++count <= max) {
+                message = text(attribute(outside, "message"))
+                lines = split(message, parts, "\n")
+                message = ""
+                for (i = 1; i <= lines && i <= 12 && length(message) < 1500; i++) message = message parts[i] "\n"
+                if (i <= lines || length(message) > 1500) message = cut(message, 1500) "...\n"
+                marks = fence(message, 3)
+                printf "%s in %s, with %s:\n\n%stext\n%s%s\n\n", span(test), span(module),
+                    span(simple(text(attribute(outside, "type")))), marks, message, marks
+            }
+            test = ""
+        }
+        END { if (count > max) printf "%d more failed. The job log lists them all.\n\n", count - max }'
+}
+
+failures="$(failed_tests)"
+if [[ -n "$failures" ]]; then
+    echo "## Failed Unit Tests"
+    echo
+    printf '%s\n\n' "$failures"
+fi
+
 if [[ ! -f "$AUDIT" ]]; then
     echo "## No Build Output"
     echo
-    echo "The build stopped before the transformer finished. See the job log."
+    if [[ -n "$failures" ]]; then
+        echo "The build stopped at the failed unit tests, before the transformer ran."
+    else
+        echo "The build stopped before the transformer finished. See the job log."
+    fi
     exit 0
 fi
 
