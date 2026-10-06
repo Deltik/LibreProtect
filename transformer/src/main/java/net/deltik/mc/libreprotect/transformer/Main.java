@@ -44,7 +44,8 @@ public final class Main {
         "upstream-jar", "original-jar", "runtime-jar", "translations", "upstream-dir", "baseline", "output", "version",
         "upstream-ref", "upstream-commit", "fork-commit", "timestamp", "report", "differences", "audit-report",
         "observed");
-    private static final List<String> OPTIONAL = List.of("extensions-jar", "capabilities", "description", "website");
+    private static final List<String> OPTIONAL = List.of("extensions-jar", "capabilities", "description", "website",
+        "fingerprints");
 
     private Main() {
     }
@@ -90,6 +91,10 @@ public final class Main {
             TransformReport report = transformer.run();
             Files.writeString(Path.of(single(arguments, "report")), Reports.toJson(report), StandardCharsets.UTF_8);
             Files.writeString(Path.of(single(arguments, "differences")), Differences.render(report), StandardCharsets.UTF_8);
+            if (arguments.containsKey("fingerprints")) {
+                Files.writeString(Path.of(single(arguments, "fingerprints")),
+                    Reports.toJson(traces(transformer.upstream(), report)), StandardCharsets.UTF_8);
+            }
 
             AuditReport audit = new Audit(transformer.upstream(), transformer.origins(), report,
                 Path.of(single(arguments, "upstream-dir")), baseline).run();
@@ -137,6 +142,21 @@ public final class Main {
     }
 
     private static final int DETAIL_LIMIT = 25;
+
+    /**
+     * @return the trace of the fingerprint of each upstream method that the
+     *         extensions rely on, by method, for scripts/lp review to show
+     *         what changed in the code that each covers and calls
+     */
+    static Map<String, CodeFingerprint.Trace> traces(JarContents upstream, TransformReport report) {
+        Map<String, CodeFingerprint.Trace> traces = new TreeMap<>();
+        for (TransformReport.Capability capability : report.capabilities) {
+            for (TransformReport.Reliance reliance : capability.relies()) {
+                traces.computeIfAbsent(reliance.member(), member -> CodeFingerprint.trace(upstream, member));
+            }
+        }
+        return traces;
+    }
 
     /**
      * @return how the extensions work with this upstream, such as "extension

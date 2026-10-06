@@ -34,6 +34,7 @@ import org.objectweb.asm.tree.InvokeDynamicInsnNode;
 import org.objectweb.asm.tree.JumpInsnNode;
 import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.LdcInsnNode;
+import org.objectweb.asm.tree.LineNumberNode;
 import org.objectweb.asm.tree.LookupSwitchInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
@@ -55,9 +56,12 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.function.Function;
 
 /**
@@ -126,6 +130,9 @@ final class CodeFingerprint {
     /** How many superclasses to look through for a member, which a class file whose superclasses loop can't exhaust */
     private static final int MAX_DEPTH = 64;
 
+    /** How far apart the lines of a constructor or static initializer may be in one run of its {@link Trace#lines} */
+    private static final int INITIALIZER_GAP = 3;
+
     /** Markers that separate the parts of the encoding */
     private static final int METHOD = -1;
     private static final int LABEL = -2;
@@ -135,14 +142,46 @@ final class CodeFingerprint {
     }
 
     /**
+     * A fingerprint, with what a reviewer of its change needs to know of it.
+     * Methods are written as {@code owner#name(descriptor)}, with internal names.
+     *
+     * @param covers the methods whose code it covers, in the order it covers
+     *               them, starting with the method itself
+     * @param calls  the methods of the JAR that their code calls or refers to
+     *               without the fingerprint covering them, such as methods of
+     *               other classes or methods that subclasses may override, in
+     *               the order they are first referred to, each named by the
+     *               class that declares it
+     * @param lines  the lines of the source that the code of each of those
+     *               methods was compiled from, as its class's line numbers
+     *               say, as runs of {@code [first, last]}: one from its first
+     *               line to its last, except for a constructor or static
+     *               initializer, whose field initializers may be anywhere in
+     *               the class, as a run per group of lines close together; and
+     *               nothing for a method without code or line numbers
+     */
+    record Trace(String fingerprint, List<String> covers, List<String> calls, Map<String, List<List<Integer>>> lines) {
+    }
+
+    /**
      * @param member a method as {@code owner#name(descriptor)}, with internal names
      * @return the fingerprint of the method that the JAR's class declares, or
      *         {@value #ABSENT} if the JAR has no such class or the class no such method
      */
     static String of(JarContents jar, String member) {
+        return trace(jar, member).fingerprint();
+    }
+
+    /**
+     * @param member a method as {@code owner#name(descriptor)}, with internal names
+     * @return the fingerprint of the method that the JAR's class declares, with
+     *         what it covers and calls; or {@value #ABSENT}, covering nothing, if
+     *         the JAR has no such class or the class no such method
+     */
+    static Trace trace(JarContents jar, String member) {
         int hash = member.indexOf('#');
         int parenthesis = member.indexOf('(', hash);
-        return of(jar.get(member.substring(0, hash) + ".class"), member.substring(hash + 1, parenthesis),
+        return trace(jar.get(member.substring(0, hash) + ".class"), member.substring(hash + 1, parenthesis),
             member.substring(parenthesis), className -> jar.get(className + ".class"));
     }
 
@@ -161,12 +200,23 @@ final class CodeFingerprint {
      * @return the fingerprint of the method that the class declares, or {@value #ABSENT}
      */
     static String of(byte[] classBytes, String name, String descriptor, Function<String, byte[]> classes) {
+        return trace(classBytes, name, descriptor, classes).fingerprint();
+    }
+
+    /**
+     * @param classBytes the class, or {@code null} if there is none
+     * @param classes    the other classes of the JAR, by internal name, or {@code null} for one it hasn't
+     * @return the fingerprint of the method that the class declares, with what
+     *         it covers and calls; or {@value #ABSENT}, covering nothing
+     */
+    static Trace trace(byte[] classBytes, String name, String descriptor, Function<String, byte[]> classes) {
         if (classBytes == null) {
-            return ABSENT;
+            return new Trace(ABSENT, List.of(), List.of(), Map.of());
         }
         ClassNode node = read(classBytes);
         MethodNode method = declared(node, name, descriptor);
-        return method == null ? ABSENT : of(node, method, classes);
+        return method == null ? new Trace(ABSENT, List.of(), List.of(), Map.of())
+            : trace(node, method, className -> className.equals(node.name) ? classBytes : classes.apply(className));
     }
 
     private static ClassNode read(byte[] classBytes) {
@@ -175,7 +225,7 @@ final class CodeFingerprint {
         return node;
     }
 
-    private static String of(ClassNode owner, MethodNode method, Function<String, byte[]> classes) {
+    private static Trace trace(ClassNode owner, MethodNode method, Function<String, byte[]> classes) {
         MessageDigest digest;
         try {
             digest = MessageDigest.getInstance("SHA-256");
@@ -190,7 +240,73 @@ final class CodeFingerprint {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
-        return HexFormat.of().formatHex(digest.digest()).substring(0, LENGTH) + (encoder.truncated ? TRUNCATED : "");
+        String fingerprint = HexFormat.of().formatHex(digest.digest()).substring(0, LENGTH)
+            + (encoder.truncated ? TRUNCATED : "");
+        List<String> covers = new ArrayList<>();
+        for (Encoder.Followed followed : encoder.methods) {
+            covers.add(followed.owner().name + "#" + followed.method().name + followed.method().desc);
+        }
+        // A method called with dispatch before a call without it covered it
+        Set<String> calls = new LinkedHashSet<>(encoder.calls);
+        calls.removeAll(covers);
+        Set<String> traced = new LinkedHashSet<>(covers);
+        traced.addAll(calls);
+        return new Trace(fingerprint, List.copyOf(covers), List.copyOf(calls), lines(traced, classes));
+    }
+
+    /**
+     * @param methods methods as {@code owner#name(descriptor)}
+     * @param classes the classes of the JAR, by internal name, or {@code null} for one it hasn't
+     * @return the runs of lines of each method that has code with line numbers, as {@link Trace#lines} says
+     */
+    private static Map<String, List<List<Integer>>> lines(Set<String> methods, Function<String, byte[]> classes) {
+        Map<String, ClassNode> read = new HashMap<>();
+        Map<String, List<List<Integer>>> lines = new LinkedHashMap<>();
+        for (String member : methods) {
+            int hash = member.indexOf('#');
+            int parenthesis = member.indexOf('(', hash);
+            String owner = member.substring(0, hash);
+            String name = member.substring(hash + 1, parenthesis);
+            ClassNode node = read.computeIfAbsent(owner, className -> {
+                byte[] bytes = classes.apply(className);
+                if (bytes == null) {
+                    return null;
+                }
+                ClassNode withLines = new ClassNode();
+                new ClassReader(bytes).accept(withLines, ClassReader.SKIP_FRAMES);
+                return withLines;
+            });
+            MethodNode method = node == null ? null : declared(node, name, member.substring(parenthesis));
+            if (method == null) {
+                continue;
+            }
+            TreeSet<Integer> numbers = new TreeSet<>();
+            for (AbstractInsnNode instruction : method.instructions) {
+                if (instruction instanceof LineNumberNode line) {
+                    numbers.add(line.line);
+                }
+            }
+            if (numbers.isEmpty()) {
+                continue;
+            }
+            List<List<Integer>> runs = new ArrayList<>();
+            if (name.equals("<init>") || name.equals("<clinit>")) {
+                int first = numbers.first();
+                int last = first;
+                for (int number : numbers) {
+                    if (number - last > INITIALIZER_GAP) {
+                        runs.add(List.of(first, last));
+                        first = number;
+                    }
+                    last = number;
+                }
+                runs.add(List.of(first, last));
+            } else {
+                runs.add(List.of(numbers.first(), numbers.last()));
+            }
+            lines.put(member, List.copyOf(runs));
+        }
+        return lines;
     }
 
     /**
@@ -245,6 +361,8 @@ final class CodeFingerprint {
         private final Map<LabelNode, Integer> ordinals = new HashMap<>();
         /** Whether the method runs more methods of its nest without dispatch than the fingerprint covers */
         boolean truncated;
+        /** The methods of the JAR referred to but not covered, as {@code owner#name(descriptor)}, in order */
+        final Set<String> calls = new LinkedHashSet<>();
 
         Encoder(DataOutputStream out, ClassNode owner, MethodNode method, Function<String, byte[]> classes) {
             this.out = out;
@@ -316,7 +434,8 @@ final class CodeFingerprint {
          *         without dispatch, such as a static helper, a lambda of the
          *         class or an accessor of its outer class, added to the
          *         methods to write if it is new; or -1 if it is another
-         *         method, or there are too many
+         *         method, or there are too many, which it adds to the calls
+         *         if the JAR declares it
          */
         private int local(String methodOwner, String name, String descriptor, boolean special) {
             // Resolved as the JVM resolves it: in the class named, or the nearest superclass that declares it
@@ -327,12 +446,26 @@ final class CodeFingerprint {
                 declaring = superclass(declaring);
                 target = declaring == null ? null : declared(declaring, name, descriptor);
             }
-            if (target == null || !nest(declaring).equals(nest)) {
+            if (target == null) {
+                // A method that only an interface declares, such as one called on an interface or an abstract
+                // class: one that the code calls, with dispatch
+                ClassNode declaringInterface = interfaceDeclaring(named, name, descriptor);
+                if (declaringInterface != null) {
+                    calls.add(declaringInterface.name + "#" + name + descriptor);
+                }
                 return -1;
             }
-            // Of a final class named, a call runs what the class resolves, which no subclass overrides
-            boolean fixed = special || withoutDispatch(declaring, target) || (named.access & Opcodes.ACC_FINAL) != 0;
-            return fixed ? follow(declaring, target) : numbers.getOrDefault(target, -1);
+            int number = -1;
+            if (nest(declaring).equals(nest)) {
+                // Of a final class named, a call runs what the class resolves, which no subclass overrides
+                boolean fixed = special || withoutDispatch(declaring, target)
+                    || (named.access & Opcodes.ACC_FINAL) != 0;
+                number = fixed ? follow(declaring, target) : numbers.getOrDefault(target, -1);
+            }
+            if (number < 0) {
+                calls.add(declaring.name + "#" + name + descriptor);
+            }
+            return number;
         }
 
         /**
@@ -386,6 +519,33 @@ final class CodeFingerprint {
         private static boolean withoutDispatch(ClassNode owner, MethodNode method) {
             return (method.access & (Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL)) != 0
                 || method.name.equals("<init>") || (owner.access & Opcodes.ACC_FINAL) != 0;
+        }
+
+        /**
+         * @return the nearest interface of the JAR that the class, its
+         *         superclasses or their interfaces extend that declares the
+         *         method, or {@code null} if there is none
+         */
+        private ClassNode interfaceDeclaring(ClassNode node, String name, String descriptor) {
+            List<ClassNode> pending = new ArrayList<>();
+            Set<String> seen = new HashSet<>();
+            for (int depth = 0; node != null && depth < MAX_DEPTH; depth++) {
+                pending.add(node);
+                node = superclass(node);
+            }
+            for (int i = 0; i < pending.size(); i++) {
+                for (String interfaceName : pending.get(i).interfaces) {
+                    ClassNode extended = seen.add(interfaceName) ? jarClass(interfaceName) : null;
+                    if (extended == null) {
+                        continue;
+                    }
+                    if (declared(extended, name, descriptor) != null) {
+                        return extended;
+                    }
+                    pending.add(extended);
+                }
+            }
+            return null;
         }
 
         /**

@@ -37,9 +37,10 @@
 #   scripts/lp review [--since REF] [--full]
 #                                   Show what the last build's audit found that needs review,
 #                                   with the upstream commits and diffs of the files that the
-#                                   findings name, since the build of the nearest upstream
-#                                   line in audit/baseline.json, or since REF. --full shows
-#                                   diffs of any length. Needs jq.
+#                                   findings name, and of the methods of other files that the
+#                                   findings' methods call, since the build of the nearest
+#                                   upstream line in audit/baseline.json, or since REF.
+#                                   --full shows diffs of any length. Needs jq.
 #   scripts/lp accept [--line NAME] [--licenses]
 #                                   Once its audit findings are reviewed, accept the last
 #                                   build into audit/baseline.json as the reviewed state of
@@ -491,6 +492,7 @@ cmd_build() {
         --fork-commit "$(fork_commit)" \
         --timestamp "$epoch" \
         --report "$DIST_DIR/transform-report.json" \
+        --fingerprints "$DIST_DIR/fingerprints.json" \
         --differences "$DIST_DIR/DIFFERENCES.md" \
         --audit-report "$DIST_DIR/audit-report.json" \
         --observed "$DIST_DIR/audit-observed.json"
@@ -982,25 +984,85 @@ markdown_escape() {
     sed 's/[\\<>&`[]/\\&/g; s/]/\\]/g' | tr -d '\000-\010\013-\037'
 }
 
-# Keep the hunks of a diff on stdin that fit in $1 lines, after its header: first those that name one of the
-# methods in $2, one per line, as a hunk's header names the method that it's in, then the others. Prints how many
-# lines it left out last, on a line of its own.
-select_hunks() {
-    NAMES="$2" awk -v max="$1" '
-        BEGIN { count = split(ENVIRON["NAMES"], names, "\n") }
-        /^@@/ { hunk++ }
-        { if (hunk == 0) { header = header $0 "\n"; used++ } else { text[hunk] = text[hunk] $0 "\n"; size[hunk]++ } }
-        END {
-            for (pass = 1; pass <= 2; pass++) {
-                for (i = 1; i <= hunk; i++) {
-                    named = 0
-                    for (j = 1; j <= count; j++) if (names[j] != "" && index(text[i], names[j] "(")) named = 1
-                    if ((pass == 1) != named || chosen[i]) continue
-                    if (used + size[i] <= max) { chosen[i] = 1; used += size[i] } else left += size[i]
+# Keep the hunks of a diff on stdin that fit in $1 lines, after its header, in the order of the targets that they
+# change, then, unless $3 is "matched", the others. A target is a line of $2: its tier, the method's name, its
+# runs of lines in the new file ("first last,first last"), and "loose" or "strict". A hunk changes one whose
+# lines it adds or removes code in, or without runs of lines, that it names: as name( that isn't the end of a
+# longer name, in its header, which names the method that it starts in, or in what it adds or removes, or
+# anywhere in it if loose. With $4 "partial", if no hunk fits, it keeps as much of the first one that it would
+# as fits. Prints how many lines of the hunks that it would keep it left out last, on a line of its own.
+pick_hunks() {
+    TARGETS="$2" awk -v max="$1" -v mode="${3:-}" -v partial="${4:-}" '
+        BEGIN {
+            rows = split(ENVIRON["TARGETS"], row, "\n")
+            for (r = 1; r <= rows; r++) {
+                if (split(row[r], field, "\t") < 4) continue
+                targets++
+                tier[targets] = field[1] + 0
+                name[targets] = field[2]
+                loose[targets] = field[4] == "loose"
+                runs[targets] = field[3] == "" ? 0 : split(field[3], run, ",")
+                for (k = 1; k <= runs[targets]; k++) {
+                    split(run[k], ends, " ")
+                    # And the line before, such as the declaration, and the one after, such as the closing brace
+                    from[targets, k] = ends[1] - 1
+                    to[targets, k] = ends[2] + 1
                 }
             }
+        }
+        function names(text, t,   rest, at) {
+            rest = text
+            while (name[t] != "" && (at = index(rest, name[t] "(")) > 0) {
+                if (at == 1 || substr(rest, at - 1, 1) !~ /[A-Za-z0-9_$]/) return 1
+                rest = substr(rest, at + 1)
+            }
+            return 0
+        }
+        function change(h, t) { if (!best[h] || tier[t] < best[h]) best[h] = tier[t] }
+        function changed(text, line,   t, k) {
+            for (t = 1; t <= targets; t++) {
+                if (runs[t]) {
+                    for (k = 1; k <= runs[t]; k++) if (line >= from[t, k] && line <= to[t, k]) change(hunk, t)
+                } else if (!loose[t] && names(text, t)) change(hunk, t)
+            }
+        }
+        /^@@ / {
+            hunk++
+            split($0, field, " ")
+            split(substr(field[3], 2), start, ",")
+            line = start[1] + 0
+            for (t = 1; t <= targets; t++) if (!runs[t] && names($0, t)) change(hunk, t)
+        }
+        hunk == 0 { header = header $0 "\n"; used++; next }
+        {
+            text[hunk] = text[hunk] $0 "\n"
+            size[hunk]++
+            kind = substr($0, 1, 1)
+            if (kind == "+") changed(substr($0, 2), line++)
+            else if (kind == "-") changed(substr($0, 2), line)
+            else if (kind == " ") line++
+        }
+        END {
+            for (h = 1; h <= hunk; h++) for (t = 1; t <= targets; t++) if (loose[t] && !runs[t] && names(text[h], t)) change(h, t)
+            for (h = 1; h <= hunk; h++) if (best[h] || mode != "matched") wanted[h] = best[h] ? best[h] : 1000000
+            for (pass = 1; pass <= 3 || (mode != "matched" && pass <= 4); pass++) {
+                for (h = 1; h <= hunk; h++) {
+                    if (!(h in wanted) || chosen[h] || (pass < 4 ? wanted[h] != pass : wanted[h] < 4)) continue
+                    if (used + size[h] <= max) { chosen[h] = 1; used += size[h]; any = 1 }
+                }
+            }
+            for (h = 1; h <= hunk; h++) if ((h in wanted) && !chosen[h]) {
+                if (!any && partial == "partial" && (first == "" || wanted[h] < wanted[first])) first = h
+                left += size[h]
+            }
             printf "%s", header
-            for (i = 1; i <= hunk; i++) if (chosen[i]) printf "%s", text[i]
+            if (first != "") {
+                shown = max - used > 0 ? max - used : 0
+                count = split(text[first], part, "\n")
+                for (i = 1; i <= shown && i < count; i++) print part[i]
+                left -= i - 1
+            }
+            for (h = 1; h <= hunk; h++) if (chosen[h]) printf "%s", text[h]
             print left + 0
         }'
 }
@@ -1010,7 +1072,10 @@ select_hunks() {
 # upstream files that they name, since the build that the nearest line of the
 # audit baseline was accepted from, or since --since. A diff shows whole
 # methods where it's short enough, and otherwise, first the parts that name
-# the findings' methods. Markdown, for a terminal or a CI summary.
+# the findings' methods, or the methods that their fingerprints cover or call,
+# as the build's fingerprints.json traces them. Then the parts of other files
+# that change methods that the findings' methods call, which the fingerprints
+# don't cover. Markdown, for a terminal or a CI summary.
 # shellcheck disable=SC2016 # Backquotes in single quotes are Markdown's
 cmd_review() {
     local since="" full=false
@@ -1034,7 +1099,7 @@ cmd_review() {
     fetch_upstream || log "Couldn't fetch upstream; reviewing with what $UPSTREAM_DIR has"
     [[ -d "$UPSTREAM_DIR/.git" ]] || die "No upstream repository at $UPSTREAM_DIR"
     # Upstream's repository, and never the one that build/ is in; paths from findings are paths, not patterns
-    local git=(git --literal-pathspecs --git-dir="$UPSTREAM_DIR/.git") built
+    local git=(git --literal-pathspecs -c core.quotePath=false --git-dir="$UPSTREAM_DIR/.git") built
     built="$(jq -r .upstreamCommit "$transform")"
     "${git[@]}" cat-file -e "$built^{commit}" 2>/dev/null || die "Upstream has no commit $built, which was built"
 
@@ -1094,15 +1159,22 @@ cmd_review() {
     printf '\n'
     [[ -n "$base" ]] || return 0
 
+    # An upstream method as its source file, and as the name that code declaring or calling it has: a constructor
+    # by its class's name, a lambda by the method that it's in, and nothing for what has no name in the code, such
+    # as a static initializer, an accessor or an anonymous class's constructor
+    local methods='
+        def source: "src/main/java/" + (split("#")[0] | split("$")[0]) + ".java";
+        def method: capture("(?<owner>[^ ]*)#(?<name>[^(]+)\\(") // null
+            | if . == null then "" else .owner as $owner | .name
+                | if test("^lambda\\$") then (capture("^lambda\\$(?<in>.+)\\$[0-9]+$").in // "") else . end
+                | if . == "<init>" or . == "new" then $owner | split("/")[-1] | split("$")[-1] | sub("^[0-9]+"; "")
+                  elif . == "<clinit>" or . == "static" or startswith("access$") then "" else . end
+              end;'
     # Where upstream changed what each finding names: a file to diff, or a string to find; and the finding's site
     # as a code span, and the name of the method that it names, if any
     local subjects
-    subjects="$(jq -r "$markdown $findings"'
-        | def source: "src/main/java/" + (split("#")[0] | split("$")[0]) + ".java";
-          def method: capture("(?<owner>[^ ]*)#(?<name>[^(]+)\\(") // null
-              | if . == null or .name == "<clinit>" then "" elif .name == "<init>"
-                then .owner | split("/")[-1] | split("$")[-1] else .name end;
-        .site as $site
+    subjects="$(jq -r "$markdown $methods $findings"'
+        | .site as $site
         | if .rule == "capability-change" then
               ($site | capture("^(?<kind>[a-z]+) (?:(?<way>\\S+) )?(?<subject>.+)$")) as $key
               | if $key.kind == "doc" then ["file", $key.subject]
@@ -1121,16 +1193,45 @@ cmd_review() {
         | . + [($site | code), ($site | method | printable)] | join("\t")' "$report")"
     [[ -n "$subjects" ]] || return 0
 
+    # The methods that the fingerprints of the code findings cover, and those that their code calls without
+    # covering them, from the build's trace of each: their file; their tier, 1 for a finding's own method, 2 for
+    # another that its fingerprint covers and 3 for one that it calls; their name; their runs of lines in the built
+    # file, as pick_hunks takes them; and the finding's site as a code span
+    local traces="$DIST_DIR/fingerprints.json" traced=""
+    if [[ -f "$traces" ]]; then
+        traced="$(jq -r --slurpfile traces "$traces" "$markdown $methods $findings"'
+            | select(.rule == "capability-change") | .site as $site
+            | ($site | capture("^code \\S+ (?<member>\\S+)$").member) as $member
+            | ($traces[0][$member] // {}) as $trace
+            | ($trace.lines // {} | if type == "object" then . else {} end) as $lines
+            | ([($trace.covers // []) | to_entries[] | {method: .value, tier: (if .key == 0 then 1 else 2 end)}]
+                + [($trace.calls // [])[] | {method: ., tier: 3}])[]
+            | select(.method | type == "string")
+            | [(.method | source), (.tier | tostring), (.method | method | printable),
+                (($lines[.method] // []) | map(select(type == "array" and length == 2 and all(type == "number")))
+                    | map("\(.[0]) \(.[1])") | join(",")), ($site | code)]
+            | select((.[2] != "" or .[3] != "") and (.[0] | test("[[:cntrl:]]") | not)) | join("\t")' "$report")" \
+            || { traced=""; log "Couldn't read $traces; reviewing without what the fingerprints cover and call"; }
+    fi
+
     printf '## What Changed Upstream\n'
-    local attributes errors kind subject sites names commits diff at_base at_built left
+    local attributes errors kind subject sites targets commits diff at_base at_built left budget=2147483647
+    $full || budget="$REVIEW_DIFF_LINES"
     attributes="$(mktemp)"
     errors="$(mktemp)"
     printf '*.java diff=java\n' > "$attributes"
     while IFS=$'\t' read -r kind subject; do
         sites="$(awk -F '\t' -v kind="$kind" -v subject="$subject" '$1 == kind && $2 == subject { print $3 }' \
             <<<"$subjects" | awk '!seen[$0]++' | paste -sd ',' - | sed 's/,/, /g')"
-        names="$(awk -F '\t' -v kind="$kind" -v subject="$subject" '$1 == kind && $2 == subject && $4 != "" { print $4 }' \
-            <<<"$subjects" | awk '!seen[$0]++')"
+        # What to show first, as pick_hunks takes it: the parts that change the findings' methods, then other methods
+        # that their fingerprints cover, then methods that they call; without a trace, the parts that name them
+        targets=""
+        [[ "$kind" != file ]] || targets="$(awk -F '\t' -v file="$subject" 'BEGIN { OFS = "\t" }
+            $1 == file { print $2, $3, $4, "strict" }' <<<"$traced" | awk '!seen[$0]++')"
+        if ! grep -q $'^1\t' <<<"$targets"; then
+            targets+=$'\n'"$(awk -F '\t' -v kind="$kind" -v subject="$subject" 'BEGIN { OFS = "\t" }
+                $1 == kind && $2 == subject && $4 != "" { print 1, $4, "", "loose" }' <<<"$subjects" | awk '!seen[$0]++')"
+        fi
         printf '\n### %s\n\nFor %s\n\n' "$(jq -rn --arg subject "$subject" "$markdown"' $subject | code')" "$sites"
 
         if [[ "$kind" == string ]]; then
@@ -1164,7 +1265,7 @@ cmd_review() {
         then
             [[ -z "$commits" ]] || printf '%s\n\n' "$commits"
         fi
-        # Whole methods if that isn't too long, else first the parts that name the findings' methods
+        # Whole methods if that isn't too long, else first the parts that change the findings' methods
         if ! diff="$("${git[@]}" -c core.attributesFile="$attributes" diff --function-context "$base" "$built" \
             -- "$subject" 2>"$errors")"; then
             printf "Couldn't compare it: %s\n" "$(head -n 1 "$errors")"
@@ -1178,13 +1279,65 @@ cmd_review() {
         left=0
         if ! $full && (( $(wc -l <<<"$diff") > REVIEW_DIFF_LINES )); then
             diff="$("${git[@]}" -c core.attributesFile="$attributes" diff -U10 "$base" "$built" -- "$subject" \
-                | select_hunks "$REVIEW_DIFF_LINES" "$names")"
+                | pick_hunks "$REVIEW_DIFF_LINES" "$targets" all partial)"
             left="$(tail -n 1 <<<"$diff")"
             diff="$(sed '$d' <<<"$diff")"
         fi
         markdown_block diff <<<"$diff"
         (( left == 0 )) || printf '\n%s more lines not shown; scripts/lp review --full shows them.\n' "$left"
     done < <(cut -f 1,2 <<<"$subjects" | awk '!seen[$0]++')
+
+    # The methods of other files that the findings' methods call, where upstream changed them: what the
+    # fingerprints don't cover, but which may explain a change, or change what it means. Only the parts of each
+    # file that change them, first the files of the methods called first.
+    local called file callers names heading=false
+    called="$( { "${git[@]}" diff --name-only "$base" "$built" -- src/main 2>/dev/null | sed 's/^/changed\t/'
+        cut -f 2 <<<"$subjects" | sed 's/^/shown\t/'
+        printf '%s\n' "$traced" | sed 's/^/traced\t/'; } \
+        | awk -F '\t' '$1 == "changed" { changed[$2] = 1 } $1 == "shown" { shown[$2] = 1 }
+            $1 == "traced" && ($2 in changed) && !($2 in shown) { print substr($0, 8) }' 2>/dev/null)" || called=""
+    while IFS= read -r file; do
+        [[ -n "$file" ]] || continue
+        targets="$(awk -F '\t' -v file="$file" 'BEGIN { OFS = "\t" } $1 == file { print $2, $3, $4, "strict" }' \
+            <<<"$called" | awk '!seen[$0]++')"
+        names="$(awk -F '\t' -v file="$file" '$1 == file && $3 != "" { print $3 }' <<<"$called" | awk '!seen[$0]++')"
+        callers="$(awk -F '\t' -v file="$file" '$1 == file { print $5 }' <<<"$called" | awk '!seen[$0]++' \
+            | paste -sd ',' - | sed 's/,/, /g')"
+        diff="$("${git[@]}" -c core.attributesFile="$attributes" diff --function-context "$base" "$built" \
+            -- "$file" 2>"$errors" | pick_hunks "$budget" "$targets" matched)" || continue
+        left="$(tail -n 1 <<<"$diff")"
+        diff="$(sed '$d' <<<"$diff")"
+        if ! grep -q '^@@' <<<"$diff" && (( left > 0 )); then
+            # Whole methods too long to show: the changes in them, with some of their context
+            diff="$("${git[@]}" -c core.attributesFile="$attributes" diff -U10 "$base" "$built" -- "$file" \
+                2>"$errors" | pick_hunks "$budget" "$targets" matched partial)" || continue
+            left="$(tail -n 1 <<<"$diff")"
+            diff="$(sed '$d' <<<"$diff")"
+        fi
+        if ! grep -q '^@@' <<<"$diff" && (( left == 0 )); then
+            continue
+        fi
+        if ! $heading; then
+            printf '\n## What Changed in Code They Call\n\nUpstream changed these methods of other files, which the findings'\'' methods call, but their fingerprints don'\''t cover. They may explain a change, or change what it means.\n'
+            heading=true
+        fi
+        printf '\n### %s\n\n' "$(jq -rn --arg subject "$file" "$markdown"' $subject | code')"
+        if [[ -n "$names" ]]; then
+            printf 'Called as %s by %s\n\n' "$(jq -rn --arg names "$names" "$markdown"' $names | split("\n")
+                | map(select(. != "") | code) | join(", ")')" "$callers"
+        else
+            printf 'Called by %s\n\n' "$callers"
+        fi
+        if commits="$("${git[@]}" log --format='- %h %s' "$base..$built" -- "$file" 2>"$errors" | markdown_escape)"
+        then
+            [[ -z "$commits" ]] || printf '%s\n\n' "$commits"
+        fi
+        if grep -q '^@@' <<<"$diff"; then
+            markdown_block diff <<<"$diff"
+            (( left == 0 )) || printf '\n'
+        fi
+        (( left == 0 )) || printf '%s more lines not shown; scripts/lp review --full shows them.\n' "$left"
+    done < <(cut -f 1 <<<"$called" | awk '!seen[$0]++')
     rm -f "$attributes" "$errors"
 }
 

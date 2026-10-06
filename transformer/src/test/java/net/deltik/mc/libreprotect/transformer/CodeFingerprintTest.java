@@ -37,6 +37,7 @@ import org.objectweb.asm.tree.MethodNode;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -552,5 +553,158 @@ class CodeFingerprintTest {
         assertEquals(CodeFingerprint.ABSENT, CodeFingerprint.of(jar, "net/coreprotect/Other#count(I)I"));
         assertEquals(CodeFingerprint.ABSENT, CodeFingerprint.of(jar, OWNER + "#hashCode()I"),
             "a method that the class inherits but doesn't declare");
+    }
+
+    @Test
+    @DisplayName("traces the methods it covers, and the methods of the JAR that their code calls without covering them")
+    void trace() {
+        byte[] chain = chainClass(Opcodes.ACC_PRIVATE, 2, -1, 0);
+        CodeFingerprint.Trace chained = CodeFingerprint.trace(chain, "run", "()V", className -> null);
+        assertEquals(run(chain), chained.fingerprint());
+        // In the order they are first referred to; the last step calls run() again
+        assertEquals(List.of(OWNER + "#run()V", OWNER + "#step0()V", OWNER + "#step1()V"), chained.covers());
+        assertEquals(List.of(), chained.calls());
+
+        CodeFingerprint.Trace created = CodeFingerprint.trace(constructorClass(1), "run", "()V", className -> null);
+        assertEquals(List.of(OWNER + "#run()V", OWNER + "#<init>()V"), created.covers());
+        assertEquals(List.of(), created.calls(), "not Object's constructor, which the JAR hasn't");
+
+        assertEquals(List.of(OWNER + "#helper()V"), CodeFingerprint.trace(virtualClass(Opcodes.ACC_PUBLIC,
+            Opcodes.ACC_PUBLIC, 1), "run", "()V", className -> null).calls(), "a method that subclasses may override");
+        String other = "net/coreprotect/Other";
+        CodeFingerprint.Trace nested = CodeFingerprint.trace(nestedCall(Opcodes.V11, other, Opcodes.ACC_PUBLIC,
+            "helper", 1), NESTED + "#run()V");
+        assertEquals(List.of(NESTED + "#run()V"), nested.covers());
+        assertEquals(List.of(other + "#helper()V"), nested.calls(), "a method of another nest");
+        assertEquals(List.of(BASE + "#helper()V"), CodeFingerprint.trace(inherited(Opcodes.ACC_PUBLIC,
+            Opcodes.INVOKEVIRTUAL, 1), SUB + "#run()V").calls(), "named by the class that declares it");
+
+        assertEquals(new CodeFingerprint.Trace(CodeFingerprint.ABSENT, List.of(), List.of(), Map.of()),
+            CodeFingerprint.trace(new JarContents(), OWNER + "#run()V"));
+    }
+
+    @Test
+    @DisplayName("traces the lines of each method's code, from its first line to its last")
+    void traceLines() {
+        assertEquals(Map.of(OWNER + "#count(I)I", List.of(List.of(10, 11))),
+            CodeFingerprint.trace(Counter.plain().bytes(), "count", "(I)I", className -> null).lines());
+        assertEquals(Map.of(), CodeFingerprint.trace(Counter.plain().withDebug(0, null).bytes(), "count", "(I)I",
+            className -> null).lines(), "without line numbers");
+
+        // A constructor, with field initializers far from its body
+        ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, OWNER, null, "java/lang/Object", null);
+        MethodVisitor run = writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "run", "()V", null, null);
+        run.visitCode();
+        line(run, 50);
+        run.visitTypeInsn(Opcodes.NEW, OWNER);
+        run.visitInsn(Opcodes.DUP);
+        run.visitMethodInsn(Opcodes.INVOKESPECIAL, OWNER, "<init>", "()V", false);
+        run.visitInsn(Opcodes.POP);
+        run.visitInsn(Opcodes.RETURN);
+        run.visitMaxs(0, 0);
+        run.visitEnd();
+        MethodVisitor constructor = writer.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
+        constructor.visitCode();
+        line(constructor, 40);
+        constructor.visitVarInsn(Opcodes.ALOAD, 0);
+        constructor.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false);
+        for (int number : new int[] {5, 6, 9, 41}) {
+            line(constructor, number);
+            constructor.visitInsn(Opcodes.NOP);
+        }
+        constructor.visitInsn(Opcodes.RETURN);
+        constructor.visitMaxs(0, 0);
+        constructor.visitEnd();
+        writer.visitEnd();
+        Map<String, List<List<Integer>>> lines = CodeFingerprint.trace(writer.toByteArray(), "run", "()V",
+            className -> null).lines();
+        assertEquals(List.of(List.of(50, 50)), lines.get(OWNER + "#run()V"));
+        assertEquals(List.of(List.of(5, 9), List.of(40, 41)), lines.get(OWNER + "#<init>()V"));
+    }
+
+    private static void line(MethodVisitor method, int number) {
+        Label label = new Label();
+        method.visitLabel(label);
+        method.visitLineNumber(number, label);
+    }
+
+    @Test
+    @DisplayName("traces calls of methods that only an interface declares, which the code calls with dispatch")
+    void traceInterfaceCalls() {
+        String superInterface = "net/coreprotect/Super";
+        String subInterface = "net/coreprotect/Sub";
+        String implementation = "net/coreprotect/Impl";
+        JarContents jar = new JarContents();
+        ClassWriter declaring = new ClassWriter(0);
+        declaring.visit(Opcodes.V17, Opcodes.ACC_PUBLIC | Opcodes.ACC_INTERFACE | Opcodes.ACC_ABSTRACT, superInterface,
+            null, "java/lang/Object", null);
+        declaring.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT, "foo", "()V", null, null).visitEnd();
+        declaring.visitEnd();
+        jar.put(superInterface + ".class", declaring.toByteArray());
+        ClassWriter extending = new ClassWriter(0);
+        extending.visit(Opcodes.V17, Opcodes.ACC_PUBLIC | Opcodes.ACC_INTERFACE | Opcodes.ACC_ABSTRACT, subInterface,
+            null, "java/lang/Object", new String[] {superInterface});
+        extending.visitEnd();
+        jar.put(subInterface + ".class", extending.toByteArray());
+        ClassWriter implementing = new ClassWriter(0);
+        implementing.visit(Opcodes.V17, Opcodes.ACC_PUBLIC | Opcodes.ACC_ABSTRACT, implementation, null,
+            "java/lang/Object", new String[] {superInterface});
+        implementing.visitEnd();
+        jar.put(implementation + ".class", implementing.toByteArray());
+
+        ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, OWNER, null, "java/lang/Object", null);
+        MethodVisitor run = writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "run",
+            "(L" + subInterface + ";L" + implementation + ";)V", null, null);
+        run.visitCode();
+        run.visitVarInsn(Opcodes.ALOAD, 0);
+        run.visitMethodInsn(Opcodes.INVOKEINTERFACE, subInterface, "foo", "()V", true);
+        run.visitVarInsn(Opcodes.ALOAD, 1);
+        run.visitMethodInsn(Opcodes.INVOKEVIRTUAL, implementation, "foo", "()V", false);
+        run.visitInsn(Opcodes.RETURN);
+        run.visitMaxs(0, 0);
+        run.visitEnd();
+        writer.visitEnd();
+        jar.put(OWNER + ".class", writer.toByteArray());
+
+        String member = OWNER + "#run(L" + subInterface + ";L" + implementation + ";)V";
+        assertEquals(List.of(superInterface + "#foo()V"), CodeFingerprint.trace(jar, member).calls());
+    }
+
+    @Test
+    @DisplayName("doesn't trace a method as called that it covers, though it calls it with dispatch first")
+    void traceCoveredLater() {
+        ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, OWNER, null, "java/lang/Object", null);
+        MethodVisitor run = writer.visitMethod(Opcodes.ACC_PUBLIC, "run", "()V", null, null);
+        run.visitCode();
+        run.visitVarInsn(Opcodes.ALOAD, 0);
+        run.visitMethodInsn(Opcodes.INVOKEVIRTUAL, OWNER, "helper", "()V", false);
+        run.visitVarInsn(Opcodes.ALOAD, 0);
+        run.visitMethodInsn(Opcodes.INVOKESPECIAL, OWNER, "helper", "()V", false);
+        run.visitInsn(Opcodes.RETURN);
+        run.visitMaxs(0, 0);
+        run.visitEnd();
+        storing(writer, Opcodes.ACC_PUBLIC, "helper", 1, null);
+        writer.visitEnd();
+
+        CodeFingerprint.Trace trace = CodeFingerprint.trace(writer.toByteArray(), "run", "()V", className -> null);
+        assertEquals(List.of(OWNER + "#run()V", OWNER + "#helper()V"), trace.covers());
+        assertEquals(List.of(), trace.calls());
+    }
+
+    @Test
+    @DisplayName("traces each method that capabilities rely on, once, by method")
+    void traces() {
+        JarContents jar = nestedCall(Opcodes.V11, "net/coreprotect/Other", Opcodes.ACC_PUBLIC, "helper", 1);
+        String member = NESTED + "#run()V";
+        TransformReport report = new TransformReport();
+        for (String id : List.of("a", "b")) {
+            report.capabilities.add(new TransformReport.Capability(id, "way", "Does it", null, List.of(), List.of(),
+                List.of(new TransformReport.Reliance(member, "Runs", CodeFingerprint.of(jar, member))), List.of(),
+                List.of(), List.of()));
+        }
+        assertEquals(Map.of(member, CodeFingerprint.trace(jar, member)), Main.traces(jar, report));
     }
 }

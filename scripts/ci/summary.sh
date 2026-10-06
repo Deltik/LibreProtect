@@ -55,11 +55,11 @@ if jq -e '[.findings[] | select(.severity != "INFO")] | length > 0' "$AUDIT" >/d
     if [[ -n "$review" ]]; then
         echo "<details><summary>What changed upstream that the findings name</summary>"
         echo
-        # Whole sections, one per file, so that a code block is never cut off
+        # Whole sections, one per heading, so that a code block is never cut off
         LC_ALL=C awk -v max="$REVIEW_BYTES" '
             function flush() { if (used + length(section) <= max) { printf "%s", section; used += length(section) }
-                else if (section != "") left++; section = "" }
-            /^### / { flush() }
+                else if (section ~ /^##### /) left++; section = "" }
+            /^##+ / { flush() }
             { sub(/^## /, "#### "); sub(/^### /, "##### "); section = section $0 "\n" }
             END { flush(); if (left) print "\n" left " more " (left == 1 ? "file isn'\''t" : "files aren'\''t") \
                 " shown here: run scripts/lp review." }' <<<"$review"
