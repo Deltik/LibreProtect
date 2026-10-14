@@ -268,9 +268,10 @@ class AutoPurgeDuringMigrationTest {
             }
         });
         chunk.start();
-        assertTrue(holding.await(5, TimeUnit.SECONDS));
-        MigrationSession session = migrationBridge().claim(Engine.MYSQL);
+        // Whatever fails, the chunk ends: its lock is the JVM's, which every later test of auto-purge would wait for
         try {
+            assertTrue(holding.await(5, TimeUnit.SECONDS));
+            MigrationSession session = migrationBridge().claim(Engine.MYSQL);
             Thread stopper = new Thread(() -> {
                 try {
                     Thread.sleep(300);
@@ -279,16 +280,21 @@ class AutoPurgeDuringMigrationTest {
                 }
                 coreProtect.set("ConfigHandler.serverRunning", false);
             });
-            stopper.start();
-            long started = System.nanoTime();
+            try {
+                stopper.start();
+                long started = System.nanoTime();
 
-            MigrationException thrown = assertThrows(MigrationException.class, session::pause);
+                MigrationException thrown = assertThrows(MigrationException.class, session::pause);
 
-            assertTrue(thrown.getMessage().contains("the server is stopping"), thrown.getMessage());
-            assertTrue(System.nanoTime() - started < TimeUnit.SECONDS.toNanos(3));
-            stopper.join(5000);
+                assertTrue(thrown.getMessage().contains("the server is stopping"), thrown.getMessage());
+                assertTrue(System.nanoTime() - started < TimeUnit.SECONDS.toNanos(3));
+            } finally {
+                // Nor may the stopper outlive the test, and stop the server of a later one
+                stopper.interrupt();
+                stopper.join(5000);
+                session.close();
+            }
         } finally {
-            session.close();
             finish.countDown();
             chunk.join(5000);
         }
