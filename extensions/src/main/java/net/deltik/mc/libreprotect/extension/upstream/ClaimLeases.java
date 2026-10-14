@@ -26,7 +26,6 @@ import net.deltik.mc.libreprotect.extension.purge.Lease;
 import net.deltik.mc.libreprotect.extension.purge.PurgeContext;
 import net.deltik.mc.libreprotect.extension.purge.StopReason;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Missing;
-import net.deltik.mc.libreprotect.extension.upstream.reflect.StaticField;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.StaticMethod;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Upstream;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.UpstreamClass;
@@ -68,14 +67,11 @@ final class ClaimLeases extends Leases {
         claim = consumer.staticMethod("claimBackgroundPurge", Object.class, boolean.class);
         upstream.type(claim.returnType()).asEnum().require(StartResult.Kind.STARTED.name());
         release = consumer.staticMethod("releaseBackgroundPurge", void.class);
-        StaticField isPaused = consumer.writableStaticField("isPaused", boolean.class);
-        StaticMethod<Boolean, RuntimeException> halted = consumer.staticMethod("isPersistenceHalted", boolean.class);
         UpstreamClass database = upstream.type(Names.DATABASE);
         awaitDrain = database.staticMethod("awaitConnectionDrain", boolean.class, long.class)
             .throwing(InterruptedException.class);
         connection = database.staticMethod("getConnection", Connection.class, boolean.class, int.class);
-        // As CoreProtect's lookups do: a halt keeps the consumer paused
-        gate = gate(isPaused, halted::call);
+        gate = gate(upstream);
 
         upstream.relyOn("refuses while a manual purge, a rollback, a database reload or a persistence halt is on,"
             + " and otherwise marks a background purge running, which those refuse to start alongside; with true, it"
@@ -100,7 +96,8 @@ final class ClaimLeases extends Leases {
         upstream.relyOn("takes the database read lock, which an exclusive claim's write lock holds off",
             Names.CONSUMER, "lockDatabaseAccess()V");
         upstream.relyOn("gives the database read lock back", Names.CONSUMER, "unlockDatabaseAccess()V");
-        upstream.relyOn("waits between batches while isPaused is set", Names.CONSUMER, "pauseConsumer(I)V");
+        upstream.relyOn("waits between batches while isPaused is set", Names.CONSUMER,
+            ConsumerGate.pauseLoop(upstream));
         upstream.relyOn("writes each batch under the database read lock, which an exclusive claim's write lock"
             + " holds off, and none while isPaused is set", Names.CONSUMER, "processConsumerBatch(IZ)V");
         upstream.relyOn("claims its purge through Consumer.claimPurge, which refuses while a background purge claim"

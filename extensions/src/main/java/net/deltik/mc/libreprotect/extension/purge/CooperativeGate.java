@@ -25,29 +25,29 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
 /**
- * CoreProtect's cooperative {@code Consumer.isPaused} flag, used the way its
+ * CoreProtect's cooperative {@code Consumer.isPaused} gate, used the way its
  * lookups use it: wait until nobody holds it, hold it for one short piece of
- * work, then clear it. On SQLite this keeps a purge chunk from writing at the
- * same time as the consumer, which would otherwise wait on SQLite's lock.
+ * work, then give it back. On SQLite this keeps a purge chunk from writing at
+ * the same time as the consumer, which would otherwise wait on SQLite's lock.
  */
 public final class CooperativeGate {
 
     private static final long POLL_MILLIS = 5;
 
     private final BooleanSupplier held;
-    private final Runnable hold;
-    private final Runnable clear;
+    private final BooleanSupplier take;
+    private final Runnable giveBack;
     private final AtomicBoolean ours = new AtomicBoolean();
 
     /**
      * @param held whether anyone holds the gate ({@code Consumer.isPaused})
-     * @param hold sets the flag
-     * @param clear clears the flag
+     * @param take takes the gate if nobody holds it, and says whether it did
+     * @param giveBack gives back the gate that {@code take} took
      */
-    public CooperativeGate(BooleanSupplier held, Runnable hold, Runnable clear) {
+    public CooperativeGate(BooleanSupplier held, BooleanSupplier take, Runnable giveBack) {
         this.held = Objects.requireNonNull(held, "held");
-        this.hold = Objects.requireNonNull(hold, "hold");
-        this.clear = Objects.requireNonNull(clear, "clear");
+        this.take = Objects.requireNonNull(take, "take");
+        this.giveBack = Objects.requireNonNull(giveBack, "giveBack");
     }
 
     /**
@@ -56,7 +56,32 @@ public final class CooperativeGate {
      * @return whether it became free before the timeout and before a stop was requested
      */
     public boolean awaitFree(PurgeContext context, long timeoutMillis) throws InterruptedException {
-        long deadline = System.nanoTime() + timeoutMillis * 1_000_000L;
+        return awaitFreeUntil(context, deadline(timeoutMillis));
+    }
+
+    /**
+     * Wait until nobody holds the gate, then take it, waiting on if someone
+     * else took it first.
+     *
+     * @return whether the gate is now held; {@code false} after the timeout or a stop request
+     */
+    public boolean acquire(PurgeContext context, long timeoutMillis) throws InterruptedException {
+        long deadline = deadline(timeoutMillis);
+        while (awaitFreeUntil(context, deadline)) {
+            if (take.getAsBoolean()) {
+                ours.set(true);
+                return true;
+            }
+            // Taken first, or refused, as CoreProtect refuses it while it saves no events
+            if (System.nanoTime() - deadline >= 0) {
+                return false;
+            }
+            context.pause(POLL_MILLIS);
+        }
+        return false;
+    }
+
+    private boolean awaitFreeUntil(PurgeContext context, long deadline) throws InterruptedException {
         while (held.getAsBoolean()) {
             if (context.stopRequested() || System.nanoTime() - deadline >= 0) {
                 return false;
@@ -66,27 +91,17 @@ public final class CooperativeGate {
         return !context.stopRequested();
     }
 
-    /**
-     * Wait until nobody holds the gate, then hold it.
-     *
-     * @return whether the gate is now held; {@code false} after the timeout or a stop request
-     */
-    public boolean acquire(PurgeContext context, long timeoutMillis) throws InterruptedException {
-        if (!awaitFree(context, timeoutMillis)) {
-            return false;
-        }
-        hold.run();
-        ours.set(true);
-        return true;
+    private static long deadline(long timeoutMillis) {
+        return System.nanoTime() + timeoutMillis * 1_000_000L;
     }
 
     /**
-     * Clear the gate if this holds it. Safe to call more than once, and from
-     * another thread when the holder is stuck.
+     * Give back the gate if this holds it. Safe to call more than once, and
+     * from another thread when the holder is stuck.
      */
     public void release() {
         if (ours.compareAndSet(true, false)) {
-            clear.run();
+            giveBack.run();
         }
     }
 

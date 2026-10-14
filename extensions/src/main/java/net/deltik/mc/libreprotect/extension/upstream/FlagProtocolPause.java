@@ -171,12 +171,11 @@ final class FlagProtocolPause implements Pause {
                 Thread.sleep(POLL_MILLIS);
             }
             // Take the gate once a lookup or reload that holds it lets go, the way they take it
-            while (gate.isPaused()) {
+            while (!gate.tryHold()) {
                 checkRunning();
                 waitUntil(deadline, "A lookup or reload didn't finish");
                 Thread.sleep(GATE_POLL_MILLIS);
             }
-            gate.setPaused(true);
             heldGate = true;
         }
 
@@ -226,7 +225,7 @@ final class FlagProtocolPause implements Pause {
         void doRelease(boolean resume) {
             if (heldGate) {
                 heldGate = false;
-                gate.setPaused(false);
+                gate.release();
             }
             if (heldConsumer) {
                 heldConsumer = false;

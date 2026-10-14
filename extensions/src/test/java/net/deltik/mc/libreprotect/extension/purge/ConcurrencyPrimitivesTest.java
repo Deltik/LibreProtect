@@ -167,7 +167,8 @@ class ConcurrencyPrimitivesTest {
     class Gate {
 
         private final AtomicBoolean flag = new AtomicBoolean();
-        private final CooperativeGate gate = new CooperativeGate(flag::get, () -> flag.set(true), () -> flag.set(false));
+        private final CooperativeGate gate = new CooperativeGate(flag::get, () -> flag.compareAndSet(false, true),
+            () -> flag.set(false));
 
         @Test
         @DisplayName("should hold the flag and clear it once on release")
@@ -220,6 +221,56 @@ class ConcurrencyPrimitivesTest {
             flag.set(false);
             assertFalse(gate.acquire(context, 5_000));
             assertFalse(flag.get());
+        }
+
+        @Test
+        @DisplayName("should wait on when someone else takes the flag first")
+        void takenFirst() throws Exception {
+            AtomicInteger attempts = new AtomicInteger();
+            // As if a lookup claimed the gate between the wait for it and the attempt to take it
+            CooperativeGate raced = new CooperativeGate(flag::get, () -> {
+                if (attempts.incrementAndGet() == 1) {
+                    flag.set(true);
+                    new Thread(() -> {
+                        try {
+                            Thread.sleep(100);
+                        } catch (InterruptedException ignored) {
+                        }
+                        flag.set(false);
+                    }).start();
+                    return false;
+                }
+                return flag.compareAndSet(false, true);
+            }, () -> flag.set(false));
+            long started = System.nanoTime();
+
+            assertTrue(raced.acquire(new PurgeContext(), 5_000));
+
+            assertTrue(System.nanoTime() - started >= TimeUnit.MILLISECONDS.toNanos(90));
+            assertEquals(2, attempts.get());
+            raced.release();
+            assertFalse(flag.get());
+        }
+
+        @Test
+        @DisplayName("should give up after the timeout when the flag is free but refused")
+        void refused() throws Exception {
+            AtomicInteger attempts = new AtomicInteger();
+            // As CoreProtect refuses a claim while it saves no events
+            CooperativeGate refusing = new CooperativeGate(flag::get, () -> {
+                attempts.incrementAndGet();
+                return false;
+            }, () -> flag.set(true));
+            long started = System.nanoTime();
+
+            assertFalse(refusing.acquire(new PurgeContext(), 100));
+
+            assertTrue(System.nanoTime() - started >= TimeUnit.MILLISECONDS.toNanos(90));
+            // Not in a tight loop
+            assertTrue(attempts.get() < 100, attempts::toString);
+            assertFalse(refusing.isHeld());
+            refusing.release();
+            assertFalse(flag.get(), "nothing taken is given back");
         }
     }
 

@@ -76,6 +76,20 @@ public final class Designs {
         Names.CLICKHOUSE_SCHEMA + "#validateLegacyPhysicalSchema",
         Names.CLICKHOUSE_WRITER_REGISTRATION + "#schemaOwner");
 
+    /**
+     * CoreProtect's claims of its consumer's pause gate: lookups and the
+     * consumer's batches claim {@code Consumer.isPaused} under one monitor,
+     * and give it back so that it stays set only while maintenance, such as
+     * a manual purge, pauses the consumer. Before them, each set and cleared
+     * the flag itself, and one that cleared it ended a pause that someone
+     * else held. Its traces come from the claims and the maintenance pause.
+     */
+    public static final Design PAUSE_CLAIMS = Design.of("consumer pause claims",
+        Names.CONSUMER + "#claimLookupPause",
+        Names.CONSUMER + "#tryClaimConsumerPause",
+        Names.CONSUMER + "#releaseOperationPause",
+        Names.CONSUMER + "#setMaintenancePaused");
+
     private Designs() {
     }
 }

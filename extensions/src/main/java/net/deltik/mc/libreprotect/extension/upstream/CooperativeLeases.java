@@ -28,7 +28,6 @@ import net.deltik.mc.libreprotect.extension.upstream.reflect.Missing;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.StaticField;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.StaticMethod;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Upstream;
-import net.deltik.mc.libreprotect.extension.upstream.reflect.UpstreamClass;
 
 import java.sql.Connection;
 import java.util.Map;
@@ -67,8 +66,7 @@ final class CooperativeLeases extends Leases {
         // The flags it takes turns by, which the purge's stops read
         Flags.CAPABILITY.probe(upstream).require();
         activeRollbacks = upstream.type(Names.CONFIG_HANDLER).staticField("activeRollbacks", Map.class);
-        UpstreamClass consumer = upstream.type(Names.CONSUMER);
-        gate = gate(consumer.writableStaticField("isPaused", boolean.class), null);
+        gate = gate(upstream);
         connection = upstream.type(Names.DATABASE).staticMethod("getConnection", Connection.class, boolean.class,
             int.class);
 

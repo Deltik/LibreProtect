@@ -25,11 +25,11 @@ import net.deltik.mc.libreprotect.extension.purge.Lease;
 import net.deltik.mc.libreprotect.extension.purge.PurgeContext;
 import net.deltik.mc.libreprotect.extension.purge.StopReason;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Choice;
-import net.deltik.mc.libreprotect.extension.upstream.reflect.StaticField;
+import net.deltik.mc.libreprotect.extension.upstream.reflect.Missing;
+import net.deltik.mc.libreprotect.extension.upstream.reflect.Upstream;
 
 import java.sql.Connection;
 import java.sql.SQLException;
-import java.util.function.BooleanSupplier;
 
 /**
  * How automatic purging takes turns with CoreProtect's own database work:
@@ -103,17 +103,11 @@ public abstract class Leases {
     public abstract void abandon();
 
     /**
-     * @param halted whether the consumer must stay paused when the gate is
-     *               given back, as CoreProtect's lookups leave it after a
-     *               persistence halt; or {@code null} if it never must
-     * @return the consumer's pause gate
+     * @return the consumer's pause gate, held as CoreProtect's lookups hold it
      */
-    static CooperativeGate gate(StaticField isPaused, BooleanSupplier halted) {
-        return new CooperativeGate(isPaused::getBoolean, () -> isPaused.setBoolean(true), () -> {
-            if (halted == null || !halted.getAsBoolean()) {
-                isPaused.setBoolean(false);
-            }
-        });
+    static CooperativeGate gate(Upstream upstream) throws Missing {
+        ConsumerGate consumer = ConsumerGate.CAPABILITY.probe(upstream).require();
+        return new CooperativeGate(consumer::isPaused, consumer::tryHold, consumer::release);
     }
 
     static void close(Connection connection) {

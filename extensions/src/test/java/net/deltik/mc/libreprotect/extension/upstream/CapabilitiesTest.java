@@ -105,7 +105,8 @@ class CapabilitiesTest {
         Map<String, String> expected = new LinkedHashMap<>();
         expected.put("database.selector", ENGINE_TYPES ? "database-type" : "use-mysql");
         expected.put("lifecycle.flags", "static-flags");
-        expected.put("consumer.gate", "pause-flags");
+        // The reviewed CoreProtect 25 has pause claims
+        expected.put("consumer.gate", ENGINE_TYPES ? "pause-claims" : "pause-flags");
         expected.put("config.lock", ENGINE_TYPES ? "class-monitor" : "absent");
         expected.put("server.thread", "scheduler");
         expected.put("consumer.start-result", ENGINE_TYPES ? "named-results" : "absent");
@@ -339,14 +340,50 @@ class CapabilitiesTest {
             ConsumerGate gate = capabilities.require(ConsumerGate.CAPABILITY);
             coreProtect.set("Consumer.isPaused", false).set("Consumer.pausedSuccess", false);
 
-            gate.setPaused(true);
+            assertTrue(gate.tryHold());
             assertTrue(gate.isPaused());
             assertEquals(true, coreProtect.get("Consumer.isPaused"));
+            assertFalse(gate.tryHold(), "the gate is held already");
+            gate.release();
+            assertFalse(gate.isPaused());
             assertFalse(gate.parked());
             coreProtect.set("Consumer.pausedSuccess", true);
             assertTrue(gate.parked());
             assertFalse(gate.running());
             assertFalse(gate.persistenceHalted());
+        }
+
+        @Test
+        @DisplayName("should take turns with CoreProtect's own claims, and keep its hold and a maintenance pause apart")
+        void claims() throws Missing {
+            AssumeCapability.strategy("consumer.gate", "pause-claims");
+            ConsumerGate gate = capabilities.require(ConsumerGate.CAPABILITY);
+            try {
+                // As the consumer claims it for a batch
+                assertEquals(true, coreProtect.call("Consumer.tryClaimConsumerPause"));
+                assertFalse(gate.tryHold());
+                coreProtect.call("Consumer.releaseOperationPause");
+
+                assertTrue(gate.tryHold());
+                assertEquals(false, coreProtect.call("Consumer.tryClaimConsumerPause"), "the consumer waits");
+                // As a database reload's end resumes the consumer, which once cleared the flag whoever held it
+                coreProtect.call("Consumer.setMaintenancePaused", true);
+                coreProtect.call("Consumer.setMaintenancePaused", false);
+                assertTrue(gate.isPaused(), "the hold ended with the maintenance pause");
+                assertEquals(false, coreProtect.call("Consumer.tryClaimConsumerPause"), "the consumer waits");
+                // As a manual purge pauses the consumer, which it could only start without this hold
+                coreProtect.call("Consumer.setMaintenancePaused", true);
+                gate.release();
+                assertTrue(gate.isPaused(), "the manual purge's pause ended");
+                coreProtect.call("Consumer.setMaintenancePaused", false);
+                assertFalse(gate.isPaused());
+
+                coreProtect.set("Consumer.persistenceHalted", true);
+                assertFalse(gate.tryHold(), "CoreProtect refuses it while it saves no events");
+                assertFalse(gate.isPaused());
+            } finally {
+                coreProtect.call("Consumer.initialize");
+            }
         }
     }
 

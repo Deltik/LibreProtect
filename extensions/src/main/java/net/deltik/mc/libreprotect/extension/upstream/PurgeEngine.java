@@ -277,7 +277,7 @@ public abstract class PurgeEngine {
                 + " otherwise sets purgeRunning, which those then refuse to start alongside", claim);
             upstream.relyOn("clears purgeRunning", release);
             upstream.relyOn("waits between batches while purgeRunning is set, with pausedSuccess set, checking every"
-                + " 100 ms", Names.CONSUMER, "pauseConsumer(I)V");
+                + " 100 ms", Names.CONSUMER, ConsumerGate.pauseLoop(upstream));
             upstream.relyOn("gives no connection without force while purgeRunning is set", Names.DATABASE,
                 "getConnection(ZZZI)Ljava/sql/Connection;");
             upstream.relyOn("refuses without database-lock, and otherwise has the active ClickHouse database purge",

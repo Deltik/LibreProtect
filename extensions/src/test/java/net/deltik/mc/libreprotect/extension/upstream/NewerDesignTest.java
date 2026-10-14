@@ -98,6 +98,36 @@ class NewerDesignTest {
     }
 
     @Test
+    @DisplayName("should know pause claims by every one of their traces, and CoreProtect 24 by none")
+    void pauseClaimsTraces() {
+        // The reviewed CoreProtect 25 has them
+        AssumeCapability.reviewedUpstream();
+        Upstream upstream = Upstream.coreProtect();
+        for (String trace : Designs.PAUSE_CLAIMS.traces()) {
+            assertEquals(MULTI_ENGINE, upstream.has(trace), trace);
+        }
+    }
+
+    @Test
+    @DisplayName("should not set the consumer's gate itself while any one trace of pause claims is left")
+    void pauseClaimsAnyTrace() {
+        AssumeCapability.strategy("consumer.gate", "pause-claims");
+        List<String> traces = Designs.PAUSE_CLAIMS.traces();
+        for (String kept : traces) {
+            List<String> hidden = new ArrayList<>(traces);
+            hidden.remove(kept);
+            Choice<?> gate = Capabilities.probe(Upstream.coreProtect().hiding(hidden.toArray(new String[0])))
+                .get(ConsumerGate.CAPABILITY);
+            assertFalse(gate.isAvailable(), () -> "took " + gate.strategy() + " with only " + kept + " left");
+        }
+
+        // Without any, the older way is tried, and here fails only on the newer shape of the consumer's pause loop
+        Choice<?> before = Capabilities.probe(Upstream.coreProtect().hiding(traces.toArray(new String[0])))
+            .get(ConsumerGate.CAPABILITY);
+        assertEquals("pause-flags: CoreProtect has no Consumer.pauseConsumer(int)", before.rejected().get(1));
+    }
+
+    @Test
     @DisplayName("should not take CoreProtect 24's ways when CoreProtect 25 renames its engine types")
     void renamedEngineTypes() throws Exception {
         AssumeCapability.strategy("database.selector", "database-type");
