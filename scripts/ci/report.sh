@@ -73,20 +73,35 @@ errors() {
         | awk '!seen[$0]++' | head -n "$ERROR_LINES" | LC_ALL=C.UTF-8 sed -E 's/^(.{300}).+$/\1.../' || true
 }
 
-# What failed, by job: its name, a link to it, the steps that failed, and their errors
+# Why GitHub stopped a job that it cancelled, if it ran out of time: its log says only that it was canceled
+timeout_reason() {
+    gh api --paginate "repos/$GITHUB_REPOSITORY/check-runs/$1/annotations" --jq '.[]
+        | select(.annotation_level == "failure") | .message | select(test("exceeded the maximum execution time"))' \
+        2>/dev/null | head -n 1 || true
+}
+
+# What failed, by job: its name, a link to it, the steps that failed, and their errors. A job that ran out of time
+# ends cancelled, and so does its step that was running.
 failed=""
-while IFS=$'\t' read -r id name url steps; do
+while IFS=$'\t' read -r id conclusion name url steps; do
     [[ -n "$id" ]] || continue
-    failed+="Failed: [$name]($url)${steps:+ at $steps}"$'\n'
-    lines="$(errors "$id")"
+    outcome="Failed"
+    reason=""
+    if [[ "$conclusion" != "failure" ]]; then
+        reason="$(timeout_reason "$id")"
+        outcome="$([[ -n "$reason" || "$conclusion" == "timed_out" ]] && echo "Timed out" || echo "Cancelled")"
+    fi
+    failed+="$outcome: [$name]($url)${steps:+ at $steps}"$'\n'
+    lines="$(printf '%s\n' "$reason" "$(errors "$id")" | sed '/^$/d')"
     if [[ -n "$lines" ]]; then
         failed+=$'\n'"$(code_block text <<<"$lines")"$'\n'
     fi
     failed+=$'\n'
 done < <(gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs --jq '.jobs[]
-    | select(.conclusion == "failure")
-    | [.databaseId, (.name | gsub("[\t\n\\[\\]]"; " ")), .url,
-        ([.steps[] | select(.conclusion == "failure") | "**\(.name | gsub("[\t\n*]"; " "))**"] | join(", "))]
+    | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out")
+    | [.databaseId, .conclusion, (.name | gsub("[\t\n\\[\\]]"; " ")), .url,
+        ([.steps[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out")
+            | "**\(.name | gsub("[\t\n*]"; " "))**"] | join(", "))]
     | join("\t")' 2>/dev/null || true)
 
 if [[ "$pipeline" == "Distribution" ]]; then
@@ -96,6 +111,7 @@ else
     hints="- **CONTRACT VIOLATION** in the build step: upstream changed something that LibreProtect depends on. The message says what and where.
 - **AUDIT FAILED** or **Require a reviewed audit baseline**: upstream added code that needs review, or changed its license; see the job summary.
 - **Failed unit tests** in the build step: the job summary lists them, with their messages.
+- **Timed out** in the build step: something hung. A unit test that hangs fails after two minutes, with every thread's stack in the job log first: look there for \`timed out\`.
 - **Integration test**: see the \`integration-logs\` artifact.
 - **Source archive**: the build was made from a checkout with changes, so its source couldn't be archived. CI's License notices job names the files that a checkout changes."
 fi

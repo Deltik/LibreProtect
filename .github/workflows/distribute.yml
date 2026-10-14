@@ -79,8 +79,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      # To name the jobs and steps that failed, with their errors
+      # To name the jobs and steps that failed, with their errors, and the jobs that ran out of time
       actions: read
+      checks: read
       issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
