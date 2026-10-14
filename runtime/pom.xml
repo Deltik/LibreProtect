@@ -54,6 +54,7 @@
                on its pool's threads. -->
           <properties>
             <configurationParameters>
+              ${lp.test.junit}
               junit.jupiter.execution.parallel.enabled = true
               junit.jupiter.execution.parallel.mode.default = same_thread
               junit.jupiter.execution.parallel.mode.classes.default = same_thread

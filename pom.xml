@@ -93,6 +93,17 @@
          threads for garbage collection and compiling, few. -->
     <lp.test.forks>2</lp.test.forks>
     <lp.test.jvm>-Xmx512m -XX:+UseSerialGC -XX:TieredStopAtLevel=1</lp.test.jvm>
+    <!-- JUnit's settings for every module's tests, which a module that has
+         settings of its own adds them to. A test that hangs fails after two
+         minutes, with every thread's stack printed first, rather than
+         holding up the build until CI cancels it. The slowest test takes
+         half a minute. Its thread is interrupted, so a hang that ignores
+         interrupts still holds the build up, after the dump. -->
+    <lp.test.junit>
+      junit.jupiter.execution.timeout.default = 2 m
+      junit.jupiter.execution.timeout.mode = disabled_on_debug
+      junit.jupiter.execution.timeout.threaddump.enabled = true
+    </lp.test.junit>
   </properties>
 
   <repositories>
@@ -187,6 +198,9 @@
                  none starts late and ends alone. Surefire keeps their times
                  in .surefire-* beside each module's pom.xml. -->
             <runOrder>balanced</runOrder>
+            <properties>
+              <configurationParameters>${lp.test.junit}</configurationParameters>
+            </properties>
           </configuration>
         </plugin>
         <plugin>
