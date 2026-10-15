@@ -76,9 +76,11 @@ public final class AssumeCapability {
      * from, unless the CoreProtect being built is one of them. On one of
      * them, such a test fails whenever LibreProtect takes another way, as
      * when a change to the extensions breaks one. On another upstream, such
-     * as a development build of a changed one, the features whose needs
-     * changed turn off and its audit reports the change, and its unit tests
-     * don't fail it for that.
+     * as a development build of a changed one, LibreProtect may take another
+     * way that still works, which its audit reports, and such a test doesn't
+     * fail the build for that. A feature that turns off is another matter:
+     * the tests that need it still fail, so that no development build drops
+     * a feature unless a maintainer decides to.
      */
     public static void reviewedUpstream() {
         String sha256 = upstreamSha256();
