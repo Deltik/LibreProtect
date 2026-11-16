@@ -37,7 +37,7 @@
              the server API and the drivers; it runs with skipped tests too. -->
         <groupId>org.codehaus.mojo</groupId>
         <artifactId>exec-maven-plugin</artifactId>
-        <version>3.6.4</version>
+        <version>3.7.0</version>
         <executions>
           <execution>
             <id>capability-report</id>
