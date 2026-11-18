@@ -40,6 +40,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 
 /**
  * The selection of CoreProtect with engine types, such as CoreProtect 25:
@@ -67,6 +68,8 @@ final class DatabaseTypeSelection implements Selection {
     private final StaticField path;
     private final StaticField prefix;
     private final StaticField prefixConfig;
+    /** The pattern that an external engine's table-prefix must match, or an absent field if there's none */
+    private final StaticField tablePrefixPattern;
     private final StaticField configFile;
     private final StaticMethod<Void, RuntimeException> loadDatabase;
     private final StaticMethod<Void, IOException> persistDatabaseType;
@@ -100,8 +103,12 @@ final class DatabaseTypeSelection implements Selection {
             + " unless a migration activates it", checkedLoad(handler));
         upstream.relyOn("closes the connections of every engine, so that the next database can be loaded",
             Names.DATABASE, "closeConnection()V");
+        // Later CoreProtects refuse to load an external engine with a table-prefix that this doesn't match
+        tablePrefixPattern = handler.staticFieldIfPresent("TABLE_PREFIX_PATTERN", Pattern.class);
         upstream.relyOn("loads every engine's settings whichever database-type selects, keeps the configured"
-            + " table-prefix in prefixConfig, and co_ for embedded engines", Names.CONFIG_HANDLER, "loadConfig()V");
+            + " table-prefix in prefixConfig, and co_ for embedded engines"
+            + (tablePrefixPattern.exists() ? ", and throws for an external engine whose table-prefix"
+                + " TABLE_PREFIX_PATTERN doesn't match" : ""), Names.CONFIG_HANDLER, "loadConfig()V");
         upstream.relyOn("atomically sets database-type in config.yml, and use-mysql where it's set",
             persistDatabaseType);
     }
@@ -128,18 +135,34 @@ final class DatabaseTypeSelection implements Selection {
     @Override
     public DatabaseSettings loadedTargetSettings(Engine source, Engine target,
                                                  Function<String, DatabaseSettings> loaded) {
-        return targetSettings(source, target, loaded);
+        return loaded.apply(targetPrefix(source, target));
     }
 
     /**
      * Embedded targets use {@code co_}. An external target uses the
      * configured table-prefix when the source is embedded, and otherwise the
      * source's prefix, which is the same one.
+     *
+     * @throws MigrationException if CoreProtect won't load the external
+     *         target with that prefix, so that it wouldn't start once the
+     *         migration selected the target
      */
     @Override
-    public DatabaseSettings targetSettings(Engine source, Engine target, Function<String, DatabaseSettings> loaded) {
-        return loaded.apply(target.isEmbedded() ? EMBEDDED_PREFIX
-            : (String) (source.isEmbedded() ? prefixConfig.get() : prefix.get()));
+    public DatabaseSettings targetSettings(Engine source, Engine target, Function<String, DatabaseSettings> loaded)
+        throws MigrationException {
+        String targetPrefix = targetPrefix(source, target);
+        if (!target.isEmbedded() && tablePrefixPattern.exists()
+            && !((Pattern) tablePrefixPattern.get()).matcher(targetPrefix).matches()) {
+            throw new MigrationException("CoreProtect only uses " + target.displayName() + " with a table-prefix"
+                + " that matches " + ((Pattern) tablePrefixPattern.get()).pattern() + ", and config.yml's is \""
+                + targetPrefix + "\". Set another, such as co_, run /co reload, and try again.");
+        }
+        return loaded.apply(targetPrefix);
+    }
+
+    private String targetPrefix(Engine source, Engine target) {
+        return target.isEmbedded() ? EMBEDDED_PREFIX
+            : (String) (source.isEmbedded() ? prefixConfig.get() : prefix.get());
     }
 
     @Override
@@ -160,8 +183,10 @@ final class DatabaseTypeSelection implements Selection {
 
     /**
      * config.yml's {@code database-type} changes at the switch, through
-     * CoreProtect's writer, which needs a regular file it can replace
-     * atomically with a copy that has the same owner.
+     * CoreProtect's writer, which needs a regular file. Some CoreProtects
+     * also need to replace it atomically with a copy that has the same
+     * owner, and later ones settle for less; this asks for all of it, so
+     * that a stop in the middle of the write can't leave config.yml torn.
      */
     @Override
     public void preflight() throws MigrationException {

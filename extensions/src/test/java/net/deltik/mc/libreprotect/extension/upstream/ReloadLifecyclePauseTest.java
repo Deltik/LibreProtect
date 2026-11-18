@@ -48,6 +48,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * The claim, pause and release of a migration on a CoreProtect with a
@@ -286,6 +287,45 @@ class ReloadLifecyclePauseTest extends MigrationSessionContract {
         assertTrue(failure.getMessage().contains("they now point to the MySQL database 'coreprotect' on"
             + " new-mysql.example:3306"), failure.getMessage());
         assertReloadPossible();
+    }
+
+    @Test
+    @DisplayName("should refuse a MySQL target with a table-prefix that CoreProtect wouldn't load it with")
+    void unloadablePrefix() throws Exception {
+        assumeTrue(declares(ConfigHandler.class, "TABLE_PREFIX_PATTERN"), "This CoreProtect takes any table-prefix");
+        coreProtect.set("ConfigHandler.prefixConfig", "1co-").set("ConfigHandler.host", "mysql.example")
+            .set("ConfigHandler.port", 3306).set("ConfigHandler.database", "coreprotect");
+        MigrationSession session = bridge().claim(Engine.MYSQL);
+        try {
+            MigrationException failure = assertThrows(MigrationException.class, session::targetSettings);
+            assertTrue(failure.getMessage().startsWith("CoreProtect only uses MySQL with a table-prefix that"
+                + " matches ") && failure.getMessage().contains("config.yml's is \"1co-\""), failure.getMessage());
+        } finally {
+            session.close();
+        }
+        assertReloadPossible();
+    }
+
+    @Test
+    @DisplayName("should take a MySQL target with a table-prefix that CoreProtect loads it with")
+    void loadablePrefix() throws Exception {
+        coreProtect.set("ConfigHandler.prefixConfig", "_Co_1").set("ConfigHandler.host", "mysql.example")
+            .set("ConfigHandler.port", 3306).set("ConfigHandler.database", "coreprotect");
+        MigrationSession session = bridge().claim(Engine.MYSQL);
+        try {
+            assertEquals("_Co_1", session.targetSettings().prefix());
+        } finally {
+            session.close();
+        }
+    }
+
+    private static boolean declares(Class<?> type, String field) {
+        try {
+            type.getDeclaredField(field);
+            return true;
+        } catch (NoSuchFieldException e) {
+            return false;
+        }
     }
 
     @Test

@@ -51,7 +51,10 @@ class FallbackTest {
     private static final Set<String> HARMLESS_OPTIONAL = Set.of(
         "net/coreprotect/database/DatabaseType#getDisplayName()Ljava/lang/String;",
         // What the constant was is the fallback
-        "net/coreprotect/database/clickhouse/ClickHouseSchema#BATCH_RECEIPT_FAMILY:Ljava/lang/String;");
+        "net/coreprotect/database/clickhouse/ClickHouseSchema#BATCH_RECEIPT_FAMILY:Ljava/lang/String;",
+        // Without it, CoreProtect takes any table-prefix, as it did before it had it; the audit sees any change
+        // to loadConfig, which checks prefixes with it
+        "net/coreprotect/config/ConfigHandler#TABLE_PREFIX_PATTERN:Ljava/util/regex/Pattern;");
 
     /**
      * @return the capability report's lines, each split into its fields
