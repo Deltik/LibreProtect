@@ -52,7 +52,7 @@ Each release on GitHub also has a `.sha256` checksum file and the complete sourc
 
 ### Development Builds
 
-Development builds of CoreProtect's unreleased code are published as [prereleases on GitHub](https://github.com/Deltik/LibreProtect/releases). Each is named after the latest CoreProtect release tag that its commit builds on, and the commit itself, such as `24.0-121-gd5cad31-libre-dev` for commit `d5cad31`, 121 commits after `v24.0`. Development builds can include database changes that released versions of CoreProtect can't read yet, so don't use them on a server whose data you care about.
+Development builds of CoreProtect's unreleased code share one [prerelease on GitHub](https://github.com/Deltik/LibreProtect/releases/tag/dev), which keeps the newest 10 and lists them with the commits they were built from. Each is named after the latest CoreProtect release tag that its commit builds on, and the commit itself, such as `24.0-121-gd5cad31-libre-dev` for commit `d5cad31`, 121 commits after `v24.0`. Builds are reproducible, so an older one can be built again from its commits. Development builds can include database changes that released versions of CoreProtect can't read yet, so don't use them on a server whose data you care about.
 
 ## Usage
 
@@ -341,7 +341,7 @@ Builds are reproducible: the same inputs produce a byte-identical JAR.
 | Upstream publishes a new release                    | Opens a pull request that updates [`upstream.lock`](upstream.lock), runs CI on it, and enables auto-merge                                          |
 | `upstream.lock` on `main` has no GitHub release yet | Runs [`release`](.github/workflows/release.yml), which publishes to GitHub with provenance, an SBOM, `DIFFERENCES.md` and the complete source code |
 | The newest release isn't on Modrinth                | Runs [`distribute`](.github/workflows/distribute.yml), which publishes it to Modrinth and syncs the Modrinth project's details                     |
-| Upstream's default branch has a new commit          | Runs [`dev`](.github/workflows/dev.yml), which publishes a GitHub prerelease and deletes old ones                                                  |
+| Upstream's default branch has a new commit          | Runs [`dev`](.github/workflows/dev.yml), which adds a build to the `dev` prerelease and removes the oldest past 10                                 |
 | A pinned upstream release tag moved                 | Opens an issue                                                                                                                                     |
 
 A bump pull request merges by itself only when CI passes: the build, the contract checks, the license notice check and the integration test must pass, and the audit must find nothing unreviewed. [CI](.github/workflows/ci.yml) also builds and tests upstream's default branch in a separate job, which shows early what CoreProtect's next release breaks, and which may fail without failing the workflow. When a release, development build or distribution fails, it opens an issue labeled `pipeline-failure`, and closes it once that pipeline passes again. A failing bump pull request shows its failure on the pull request.

@@ -174,10 +174,10 @@ else
     head_sha="$(ref_sha "refs/heads/$default_branch")"
     dev_runs="$(gh run list --workflow dev.yml --limit 50 --json displayTitle \
         --jq "[.[] | select(.displayTitle | endswith(\"$head_sha\"))] | length" 2>/dev/null || echo 0)"
-    # Development builds are named after git describe, such as v24.0-121-gd5cad31-libre-dev,
-    # whose commit has at least 7 characters
-    if gh release list --limit 100 --json tagName --jq '.[].tagName' 2>/dev/null \
-        | grep -qE -- "-g${head_sha:0:7}[0-9a-f]*-libre-dev\$"; then
+    # Development builds share the dev prerelease. They're named after git describe, such as
+    # 24.0-121-gd5cad31-libre-dev, whose commit has at least 7 characters.
+    dev_assets="$(gh release view dev --json assets --jq '.assets[] | select(.state == "uploaded") | .name' 2>/dev/null || true)"
+    if grep -qE -- "^LibreProtect-.+-g${head_sha:0:7}[0-9a-f]*-libre-dev\.jar\$" <<<"$dev_assets"; then
         echo "Development build of $default_branch ($head_sha) is published"
     elif [[ "$dev_runs" != "0" ]]; then
         echo "Development build of $head_sha already ran or is running"

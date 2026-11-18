@@ -1,11 +1,13 @@
 name: Development build
 
 # Builds LibreProtect from an upstream commit that isn't a release, normally
-# the tip of upstream's default branch, and publishes it as a prerelease.
+# the tip of upstream's default branch, and adds it to the one prerelease
+# that development builds share, tagged dev, which keeps the newest 10.
 # upstream-watch dispatches this whenever upstream's default branch moves.
 #
-# Review findings don't block development builds; they are listed in the
-# release notes. Audit failures do, and open an issue.
+# Review findings don't block development builds; the release notes count
+# them, and each build's audit report lists them. Audit failures do, and
+# open an issue.
 
 run-name: Development build of upstream ${{ inputs.ref }}
 
@@ -93,6 +95,12 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Builds of different upstream commits share the prerelease; one changes it at a time, in turn. The
+    # group's name can't be that of a build's group above, which begins with dev-.
+    concurrency:
+      group: publish-dev-prerelease
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: write
       id-token: write
@@ -112,10 +120,9 @@ jobs:
           subject-path: dist/LibreProtect-*.jar
 
       - name: Publish
-        run: scripts/ci/publish.sh --prerelease --upstream-ref "$REF"
+        run: scripts/ci/publish.sh --prerelease
         env:
           GH_TOKEN: ${{ github.token }}
-          REF: ${{ inputs.ref }}
 
   report:
     name: Report outcome
