@@ -74,9 +74,13 @@ if [[ -n "${SPIGOTMC_RESOURCE_ID:-}" ]]; then
 fi
 
 echo "==> Branch protection for main"
+# Not strict: a pull request with auto-merge that had to be up to date with
+# main would wait for a rebase whenever main moved, and Dependabot rebases
+# only on a conflict or its next scheduled run. upstream-watch runs CI on
+# main after a merge that started none.
 gh api -X PUT "repos/$repo/branches/main/protection" --input - >/dev/null <<'JSON'
 {
-  "required_status_checks": {"strict": true, "checks": [{"context": "Build, test and audit"}, {"context": "License notices"}]},
+  "required_status_checks": {"strict": false, "checks": [{"context": "Build, test and audit"}, {"context": "License notices"}]},
   "enforce_admins": false,
   "required_pull_request_reviews": {"required_approving_review_count": 0, "require_code_owner_reviews": true},
   "restrictions": null,

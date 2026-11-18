@@ -1,9 +1,19 @@
 version: 2
+
+# Updates of Maven dependencies that only change versions merge by
+# themselves once CI passes (see .github/workflows/dependabot.yml), so each
+# update waits a week after its version is published, the time a
+# compromised release usually takes to be found and pulled. Updates of
+# actions, which the maintainer merges, wait as long. Security updates,
+# where they're turned on, don't wait.
+
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ["*"]
@@ -12,6 +22,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       maven:
         patterns: ["*"]

@@ -188,6 +188,30 @@ else
 fi
 echo "::endgroup::"
 
+echo "::group::CI on main"
+# Auto-merge merges bump and Dependabot pull requests with GITHUB_TOKEN, whose
+# pushes start no workflows, so CI doesn't run on main after them by itself
+main_head="$(gh api 'repos/{owner}/{repo}/commits/main' --jq '[.sha, .commit.committer.date] | @tsv' 2>/dev/null || true)"
+if [[ -z "$main_head" ]]; then
+    echo "::warning::Could not find main's head commit"
+else
+    IFS=$'\t' read -r main_sha main_date <<<"$main_head"
+    main_runs="$(gh run list --workflow ci.yml --commit "$main_sha" --limit 20 --json headBranch \
+        --jq '[.[] | select(.headBranch == "main")] | length' 2>/dev/null || echo unknown)"
+    if [[ "$main_runs" == "unknown" ]]; then
+        echo "::warning::Could not list CI's runs on main's $main_sha"
+    elif [[ "$main_runs" != "0" ]]; then
+        echo "CI ran on main's $main_sha"
+    elif (( $(date -u +%s) - $(date -u -d "$main_date" +%s) < 600 )); then
+        # A push's own run may not be listed yet
+        echo "main's $main_sha is new; CI may start on it by itself"
+    else
+        echo "Running CI on main's $main_sha, on which nothing ran it"
+        act gh workflow run ci.yml --ref main
+    fi
+fi
+echo "::endgroup::"
+
 echo "::group::Distribution"
 newest_release="$(gh release list --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // empty' 2>/dev/null || true)"
 if [[ -z "$newest_release" ]]; then

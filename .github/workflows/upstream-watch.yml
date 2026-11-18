@@ -6,6 +6,7 @@ name: Upstream watch
 #     or, if LibreProtect can't build its kind of tag, an issue and a failed run
 #   - upstream.lock on main without a matching GitHub release gets a release
 #   - a new commit on upstream's default branch gets a development build
+#   - a commit on main that CI didn't run on, such as auto-merge's, gets CI
 #   - a moved upstream release tag gets an issue
 #   - the newest release gets published to Modrinth, and an issue with
 #     its SpigotMC update's details until SpigotMC shows it

@@ -1,0 +1,47 @@
+name: Dependabot
+
+# Lets Dependabot's updates of Maven dependencies merge by themselves once
+# CI passes, as upstream-watch's bump pull requests do, if all they change
+# is versions: in pom.xml files, and the Maven wrapper's version and
+# checksum. scripts/ci/dependabot-merge.sh checks that. Updates of the
+# actions that workflows pin wait for the maintainer, since GitHub lets no
+# workflow's own token merge changes to workflows; so does any other pull
+# request of Dependabot's.
+#
+# pull_request_target runs this workflow and that check as main has them,
+# not as the pull request has them. Nothing from the pull request is
+# checked out or run.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependabot-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  auto-merge:
+    name: Auto-merge
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # To enable auto-merge, which merges with this token's rights
+      contents: write
+      pull-requests: write
+    steps:
+      # main, not the pull request
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Enable auto-merge if only versions change
+        run: scripts/ci/dependabot-merge.sh "$NUMBER"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
