@@ -28,10 +28,13 @@ import net.deltik.mc.libreprotect.extension.upstream.reflect.UpstreamClass;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * The lock that CoreProtect 25 holds on {@code ConfigHandler} itself, in its
- * {@code static synchronized} methods, while it resolves an identifier that
+ * {@code static synchronized} methods and in blocks synchronized on the
+ * class, while it resolves an identifier that
  * its cache lacks, such as a material's ID, by allocating a new one, reading
  * it from ClickHouse or reloading that kind's whole cache; while it reloads
  * a kind's cache to look one up, when {@code database-lock} is off; and
@@ -77,7 +80,10 @@ public final class ConfigLock {
             Designs.MULTI_ENGINE.requireIn(upstream);
             throw new Missing(upstream.name() + "'s ConfigHandler has no static synchronized method any more");
         }
-        for (String method : methods) {
+        // A holder that took the lock in a synchronized block instead, as resolveMissingIdentifierId came to
+        Set<String> holders = new TreeSet<>(methods);
+        holders.addAll(handler.staticMethodsNamed(HOLDERS.keySet()));
+        for (String method : holders) {
             String name = method.substring(0, method.indexOf('('));
             upstream.relyOn(HOLDERS.getOrDefault(name, "changes identifiers or their caches while holding the lock"
                 + " on ConfigHandler"), Names.CONFIG_HANDLER, method);

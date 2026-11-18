@@ -23,6 +23,7 @@ package net.deltik.mc.libreprotect.extension.upstream.reflect;
 import java.lang.invoke.MethodType;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
@@ -322,6 +323,26 @@ public final class UpstreamClass {
         if (type != null) {
             for (ClassFile.Member method : read(type).methods) {
                 if (method.is(ClassFile.STATIC) && method.is(ClassFile.SYNCHRONIZED)
+                    && !upstream.isHidden(name, method.name, method.descriptor, false)) {
+                    methods.add(method.name + method.descriptor);
+                }
+            }
+        }
+        methods.sort(null);
+        return methods;
+    }
+
+    /**
+     * @param names the names to look for
+     * @return the {@code static} methods by those names that the class
+     *         declares, by name and descriptor, such as
+     *         {@code reloadAndGetId(Ljava/lang/String;)I}
+     */
+    public List<String> staticMethodsNamed(Collection<String> names) throws Missing {
+        List<String> methods = new ArrayList<>();
+        if (type != null) {
+            for (ClassFile.Member method : read(type).methods) {
+                if (method.is(ClassFile.STATIC) && names.contains(method.name)
                     && !upstream.isHidden(name, method.name, method.descriptor, false)) {
                     methods.add(method.name + method.descriptor);
                 }
