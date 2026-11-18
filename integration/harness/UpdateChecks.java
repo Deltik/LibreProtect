@@ -105,8 +105,9 @@ final class UpdateChecks {
             suite.check(blocked.console().contains("[LibreProtect] Network policy: preset privacy-first, 0 custom routes,"
                     + " default action BLOCK, verbose logging\n"),
                 "privacy-first: the startup log names the policy, which answers no update checks");
+            // Over HTTP in older CoreProtects, and HTTPS in newer ones
             suite.check(blocked.console().lines().anyMatch(line -> line.contains("Blocked by LibreProtect")
-                    && line.contains("http://update.coreprotect.net/version/")),
+                    && line.contains("://update.coreprotect.net/version/")),
                 "privacy-first: CoreProtect's update check was made and blocked");
 
             int before = stub.requests().size();
