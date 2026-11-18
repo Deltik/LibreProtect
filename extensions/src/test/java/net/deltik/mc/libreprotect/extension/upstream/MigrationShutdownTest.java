@@ -41,11 +41,13 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -101,12 +103,41 @@ class MigrationShutdownTest {
         LibreProtectLogger.reset();
     }
 
-    /** ShutdownService's wait for maintenance, as if {@code remaining} milliseconds were left of its 15 minutes */
-    private static void waitForMaintenance(long remaining) throws Exception {
+    /**
+     * ShutdownService's wait for maintenance, which some CoreProtects make
+     * wait for migrationRunning too, given {@code seconds} to end. Its first
+     * report of the queue on the console, which needs a server, is due 30
+     * seconds into the shutdown.
+     */
+    private static void waitForMaintenance(long seconds) throws Exception {
         Class<?> shutdownService = Class.forName(Names.SHUTDOWN_SERVICE);
         Method wait = shutdownService.getDeclaredMethod("waitForMaintenanceCompletion", long.class);
         wait.setAccessible(true);
-        wait.invoke(null, System.currentTimeMillis() - 15 * 60_000L + remaining);
+        long shutdownTime = System.currentTimeMillis();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread waiting = new Thread(() -> {
+            try {
+                wait.invoke(null, shutdownTime);
+            } catch (InvocationTargetException e) {
+                failure.set(e.getCause());
+            } catch (ReflectiveOperationException e) {
+                failure.set(e);
+            }
+        }, "shutdown-wait");
+        waiting.start();
+        waiting.join(seconds * 1000);
+        if (waiting.isAlive()) {
+            // Its sleeps end on an interrupt
+            waiting.interrupt();
+            waiting.join();
+            fail("CoreProtect's shutdown still waited for maintenance after " + seconds + " seconds");
+        }
+        if (failure.get() instanceof Exception e) {
+            throw e;
+        }
+        if (failure.get() instanceof Error e) {
+            throw e;
+        }
     }
 
     @Test
@@ -126,7 +157,7 @@ class MigrationShutdownTest {
             // ShutdownService.safeShutdown: block reloads, wait for maintenance, then for migrationRunning
             Lifecycle.blockDatabaseReloadForShutdown();
             long started = System.nanoTime();
-            waitForMaintenance(20_000);
+            waitForMaintenance(20);
             long deadline = System.nanoTime() + 5_000_000_000L;
             while (ConfigHandler.migrationRunning && System.nanoTime() < deadline) {
                 Thread.sleep(50);
