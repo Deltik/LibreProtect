@@ -54,6 +54,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.UncheckedIOException;
 import java.net.HttpURLConnection;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -151,11 +152,21 @@ class TranslationAnswerTest {
     }
 
     /**
-     * @return the body that CoreProtect's NetworkHandler posts for these phrases
+     * @return the body that older CoreProtects' NetworkHandler posts for these phrases
      */
     static byte[] body(Map<String, ?> phrases) {
         String mapString = "data=" + JSONObject.toJSONString(new HashMap<>(phrases));
         mapString = mapString.replaceAll("\\+", "{PLUS_SIGN}");
+        return mapString.getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * @return the body that newer CoreProtects' NetworkHandler posts for these
+     *         phrases, with the JSON form-encoded
+     */
+    static byte[] formBody(Map<String, ?> phrases) {
+        String mapString = "data=" + URLEncoder.encode(JSONObject.toJSONString(new HashMap<>(phrases)),
+            StandardCharsets.UTF_8);
         return mapString.getBytes(StandardCharsets.UTF_8);
     }
 
@@ -221,6 +232,16 @@ class TranslationAnswerTest {
             assertTrue(text.contains("[a:{PLUS_SIGN}block]") && !text.contains("+"), text);
 
             assertEquals("Beispiele: [a:+block], [a:-block]", answer(answer.answer(request(body))).get("HELP_ACTION_2"));
+        }
+
+        @Test
+        @DisplayName("should be answered alike when CoreProtect form-encodes it")
+        void formEncoded() throws IOException {
+            byte[] body = formBody(builtInPhrases("de"));
+            String text = new String(body, StandardCharsets.UTF_8);
+            assertTrue(text.startsWith("data=%7B") && text.contains("%5Ba%3A%2Bblock%5D"), text);
+
+            assertEquals(new TreeMap<>(GERMAN_ANSWER), answer(answer.answer(request(body))));
         }
 
         @Test
@@ -407,7 +428,13 @@ class TranslationAnswerTest {
             "data={DATA_LANGUAGE:de}",
             "data={}",
             "data={\"DATA_LANGUAGE\":7}",
-            "data=%7B%22DATA_LANGUAGE%22%3A%22de%22%7D",
+            "data=%7B%22DATA_LANGUAGE%22%3A%22de%22",
+            "data=%7B%22DATA_LANGUAGE%22%3A%22de%22%7D%7B%7D",
+            "data=%7B%22DATA_LANGUAGE%22%3A%22de%22%7D&more=1",
+            "data=%7B%22DATA_LANGUAGE%22%3A7%7D",
+            "data=%5B%22DATA_LANGUAGE%22%2C%22de%22%5D",
+            "data=%7B%22DATA_LANGUAGE%22%3A%22de%22%7",
+            "data=%ZZ",
         })
         @DisplayName("should fail without a warning")
         void fails(String body) {
@@ -420,9 +447,10 @@ class TranslationAnswerTest {
     @DisplayName("phrases()")
     class Phrases {
 
-        @Test
-        @DisplayName("should read every escape that json-simple writes")
-        void jsonSimpleEscapes() throws IOException {
+        @ParameterizedTest(name = "{0}")
+        @ValueSource(booleans = {false, true})
+        @DisplayName("should read every escape that json-simple writes, form-encoded or not")
+        void jsonSimpleEscapes(boolean formEncoded) throws IOException {
             Map<String, String> phrases = new LinkedHashMap<>();
             phrases.put("QUOTES", "say \"hi\" and 'bye'");
             phrases.put("BACKSLASH", "C:\\path\\to\\ \\\" \\\\");
@@ -434,16 +462,25 @@ class TranslationAnswerTest {
             phrases.put("COLOR", "§a&bgreen");
             phrases.put("BRACES", "{PLUS} {PLUS_SIGN_} {0} {1}");
             phrases.put("EMPTY", "");
+            phrases.put("PERCENT", "50% %7B %ZZ %");
+            phrases.put("FORM", "a=b&c=d; e+f");
             phrases.put("DATA_LANGUAGE", "de");
-            assertEquals(phrases, TranslationAnswer.phrases(body(phrases)));
+            assertEquals(phrases, TranslationAnswer.phrases(formEncoded ? formBody(phrases) : body(phrases)));
         }
 
         @Test
-        @DisplayName("should read a literal {PLUS_SIGN} as +, which CoreProtect sends it as")
+        @DisplayName("should read a literal {PLUS_SIGN} as +, which older CoreProtects send it as")
         void literalPlusSign() throws IOException {
             // Only a customized phrase can have it, and those are never translated
             Map<String, String> phrases = Map.of("HELP_HEADER", "literal {PLUS_SIGN}", "DATA_LANGUAGE", "de");
             assertEquals("literal +", TranslationAnswer.phrases(body(phrases)).get("HELP_HEADER"));
+        }
+
+        @Test
+        @DisplayName("should keep a literal {PLUS_SIGN} when form-encoded, since that encodes + itself")
+        void literalPlusSignFormEncoded() throws IOException {
+            Map<String, String> phrases = Map.of("HELP_HEADER", "literal {PLUS_SIGN} +", "DATA_LANGUAGE", "de");
+            assertEquals("literal {PLUS_SIGN} +", TranslationAnswer.phrases(formBody(phrases)).get("HELP_HEADER"));
         }
     }
 

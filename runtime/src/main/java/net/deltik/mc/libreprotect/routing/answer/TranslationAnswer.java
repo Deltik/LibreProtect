@@ -32,6 +32,7 @@ import java.io.IOException;
 import java.io.StringReader;
 import java.io.StringWriter;
 import java.io.UncheckedIOException;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -49,10 +50,11 @@ import java.util.function.Consumer;
  * <p>CoreProtect posts {@code data=} and a JSON object of every phrase, by
  * phrase name, as the server shows it: CoreProtect's English, or the text
  * from {@code language.yml} where the server customized it. Two more keys
- * name the language and CoreProtect's version. CoreProtect writes each
- * {@code +} as {@code {PLUS_SIGN}} and encodes nothing else. The answer is a
- * JSON object of translated phrases, which CoreProtect shows right away and
- * saves to {@code plugins/CoreProtect/.language}.
+ * name the language and CoreProtect's version. Older CoreProtects write each
+ * {@code +} as {@code {PLUS_SIGN}} and encode nothing else; newer ones
+ * form-encode the JSON instead, as the request's content type says. The
+ * answer is a JSON object of translated phrases, which CoreProtect shows
+ * right away and saves to {@code plugins/CoreProtect/.language}.
  *
  * <p>The answer leaves out phrases that the server customized: those whose
  * text isn't CoreProtect's built-in English. CoreProtect has already applied
@@ -168,17 +170,29 @@ public final class TranslationAnswer implements Answer {
     }
 
     /**
-     * Read the body of CoreProtect's translation request.
+     * Read the body of CoreProtect's translation request, in either of the
+     * ways that CoreProtect writes it. A form-encoded JSON object never
+     * starts with an unencoded opening brace, and older CoreProtects' always
+     * does.
      *
      * @return every string in the request's JSON object, by key
-     * @throws IOException if the body isn't {@code data=} and a JSON object
+     * @throws IOException if the body isn't {@code data=} and a JSON object,
+     *         as is or form-encoded
      */
     static Map<String, String> phrases(byte[] body) throws IOException {
         String text = new String(body, StandardCharsets.UTF_8);
         if (!text.startsWith(BODY_PREFIX)) {
             throw new IOException("Not a translation request: the body doesn't start with " + BODY_PREFIX);
         }
-        return strings(text.substring(BODY_PREFIX.length()).replace(PLUS_SIGN, "+"));
+        String data = text.substring(BODY_PREFIX.length());
+        if (data.startsWith("{")) {
+            return strings(data.replace(PLUS_SIGN, "+"));
+        }
+        try {
+            return strings(URLDecoder.decode(data, StandardCharsets.UTF_8));
+        } catch (IllegalArgumentException e) {
+            throw new IOException("Not a translation request: the body isn't form-encoded: " + e.getMessage(), e);
+        }
     }
 
     /**
