@@ -64,6 +64,11 @@
     },
     {
       "rule": "dynamic-class-loading",
+      "site": "net/coreprotect/utility/AdapterMethods#findType(Ljava/lang/String;)Ljava/lang/Class;",
+      "reason": "Public, but its only callers, static fields of BukkitAdapter and SpigotHandler, pass the constant names of the server API's org.bukkit.util.Consumer and Villager$ReputationType to see whether the server has them."
+    },
+    {
+      "rule": "dynamic-class-loading",
       "site": "net/coreprotect/utility/Extensions#runDatabaseMigration(Ljava/lang/String;Ljava/lang/String;Lorg/bukkit/command/CommandSender;[Ljava/lang/String;)V",
       "reason": "Package-private; its only caller, the public runDatabaseMigration() that /co migrate-db reaches, passes the constant net.coreprotect.utility.extensions.DatabaseMigration, the optional migration extension."
     },
@@ -84,9 +89,9 @@
   "lines": {
     "development": {
       "upstream": {
-        "ref": "0cd18dc86b1d249355db80487fc7af9b3819f7ac",
-        "commit": "0cd18dc86b1d249355db80487fc7af9b3819f7ac",
-        "jarSha256": "d52a4e7c646aa725c31fdfdb3434145c873c553e70675272ee2d560d420b1482"
+        "ref": "a908ae9",
+        "commit": "a908ae9e76fd54e0332ea64e37349f1d7622867a",
+        "jarSha256": "6b2cab0372dec2a33ee1bb93a54ffdba0a177bd00c32c66ca6bf8b63e79a88ea"
       },
       "hosts": [
         "coreprotect.net",
@@ -205,7 +210,7 @@
         "capability migrate-db.target.sqlite=jdbc",
         "capability migrate-db.transcoding=statement-codecs",
         "capability server.thread=scheduler",
-        "code auto-purge.coordination/background-claims net/coreprotect/command/PurgeCommand#runCommand(Lorg/bukkit/command/CommandSender;Z[Ljava/lang/String;)V=9ac1e604985a",
+        "code auto-purge.coordination/background-claims net/coreprotect/command/PurgeCommand#runCommand(Lorg/bukkit/command/CommandSender;Z[Ljava/lang/String;)V=a84a6d8bc811",
         "code auto-purge.coordination/background-claims net/coreprotect/consumer/Consumer#beginDatabaseRecovery()Lnet/coreprotect/consumer/Consumer$OperationStartResult;=76f8b93e13c3",
         "code auto-purge.coordination/background-claims net/coreprotect/consumer/Consumer#beginDatabaseReload()Lnet/coreprotect/consumer/Consumer$OperationStartResult;=12d6cc181eec",
         "code auto-purge.coordination/background-claims net/coreprotect/consumer/Consumer#claimBackgroundPurge(Z)Lnet/coreprotect/consumer/Consumer$OperationStartResult;=2b69dcbaca8b",
@@ -219,7 +224,7 @@
         "code auto-purge.coordination/background-claims net/coreprotect/database/Database#awaitConnectionDrain(J)Z=99f8e7050d08",
         "code auto-purge.coordination/background-claims net/coreprotect/database/Database#getConnection(ZI)Ljava/sql/Connection;=6f142d4becb2",
         "code auto-purge.coordination/background-claims net/coreprotect/database/Database#getConnection(ZZZI)Ljava/sql/Connection;=734c35ee605f",
-        "code auto-purge.coordination/background-claims net/coreprotect/services/ShutdownService#safeShutdown(Lorg/bukkit/plugin/Plugin;)V=98a9ea7fde40",
+        "code auto-purge.coordination/background-claims net/coreprotect/services/ShutdownService#safeShutdown(Lorg/bukkit/plugin/Plugin;)V=3a1187ec96af",
         "code auto-purge.coordination/background-claims net/coreprotect/services/ShutdownService#waitForMaintenanceCompletion(J)V=fe6fd7ed4727",
         "code auto-purge.engine.clickhouse/retention net/coreprotect/command/PurgeCommand#cancelForShutdown()V=5624e158f630",
         "code auto-purge.engine.clickhouse/retention net/coreprotect/consumer/Consumer#claimPurge()Lnet/coreprotect/consumer/Consumer$OperationStartResult;=2cf8c996b9c0",
@@ -234,7 +239,7 @@
         "code auto-purge.engine.clickhouse/retention net/coreprotect/database/clickhouse/ClickHouseLookupIndex#setReady(Ljava/sql/Connection;Ljava/lang/String;Ljava/util/UUID;Z)V=4ab2cf42eb35",
         "code auto-purge.engine.clickhouse/retention net/coreprotect/database/clickhouse/ClickHouseRetention#cancelPurge()V=c68ac557b134",
         "code auto-purge.engine.clickhouse/retention net/coreprotect/database/clickhouse/ClickHouseRetention#purge(JJILjava/util/List;Z)J=36f6adca5d72",
-        "code auto-purge.engine.clickhouse/retention net/coreprotect/services/ShutdownService#safeShutdown(Lorg/bukkit/plugin/Plugin;)V=98a9ea7fde40",
+        "code auto-purge.engine.clickhouse/retention net/coreprotect/services/ShutdownService#safeShutdown(Lorg/bukkit/plugin/Plugin;)V=3a1187ec96af",
         "code auto-purge.engine.clickhouse/retention net/coreprotect/services/ShutdownService#waitForMaintenanceCompletion(J)V=fe6fd7ed4727",
         "code auto-purge.engine.duckdb/chunked-deletes net/coreprotect/database/DuckDBRecovery#request(Ljava/lang/Throwable;)Z=80405d66714d",
         "code auto-purge.tables/purge-policy net/coreprotect/database/Database#createDatabaseTables(Ljava/lang/String;ZLjava/sql/Connection;Lnet/coreprotect/database/DatabaseType;Z)V=bc2d2c7cf5f5",
@@ -298,13 +303,13 @@
         "code migrate-db.incomplete-mark/dedicated-status net/coreprotect/config/ConfigHandler#checkDatabaseLock(Ljava/sql/Statement;)Z=a881114645f4",
         "code migrate-db.incomplete-mark/dedicated-status net/coreprotect/config/ConfigHandler#loadDatabase()V=b9ceadc65bfe",
         "code migrate-db.incomplete-mark/dedicated-status net/coreprotect/config/ConfigHandler#loadDatabase(Lnet/coreprotect/database/clickhouse/ClickHouseDatabase;Z)V=576cef855e1f",
-        "code migrate-db.incomplete-mark/dedicated-status net/coreprotect/config/ConfigHandler#performInitialization(Z)Z=f82fd8208eee",
+        "code migrate-db.incomplete-mark/dedicated-status net/coreprotect/config/ConfigHandler#performInitialization(Z)Z=60b4950966c1",
         "code migrate-db.incomplete-mark/dedicated-status net/coreprotect/database/Database#hasIncompleteMigrationMarker()Z=19af869ecfe8",
         "code migrate-db.incomplete-mark/dedicated-status net/coreprotect/services/PluginInitializationService#initializePlugin(Lnet/coreprotect/CoreProtect;)Z=0abd3ab2e52c",
-        "code migrate-db.protocol/reload-lifecycle net/coreprotect/config/ConfigHandler#loadConfig()V=2f8ca092bcd7",
+        "code migrate-db.protocol/reload-lifecycle net/coreprotect/config/ConfigHandler#loadConfig()V=1422ee474ef6",
         "code migrate-db.protocol/reload-lifecycle net/coreprotect/config/ConfigHandler#loadDatabase()V=b9ceadc65bfe",
         "code migrate-db.protocol/reload-lifecycle net/coreprotect/config/ConfigHandler#loadDatabase(Lnet/coreprotect/database/clickhouse/ClickHouseDatabase;Z)V=576cef855e1f",
-        "code migrate-db.protocol/reload-lifecycle net/coreprotect/config/DatabaseConfigWriter#persistDatabaseType(Lnet/coreprotect/database/DatabaseType;)V=1d52a34b4135",
+        "code migrate-db.protocol/reload-lifecycle net/coreprotect/config/DatabaseConfigWriter#persistDatabaseType(Lnet/coreprotect/database/DatabaseType;)V=0c5c1199c666",
         "code migrate-db.protocol/reload-lifecycle net/coreprotect/consumer/Consumer#beginDatabaseReload()Lnet/coreprotect/consumer/Consumer$OperationStartResult;=12d6cc181eec",
         "code migrate-db.protocol/reload-lifecycle net/coreprotect/consumer/Consumer#databaseReloadShutdownSignal()Ljava/util/concurrent/CompletableFuture;=bc9a5be43c14",
         "code migrate-db.protocol/reload-lifecycle net/coreprotect/consumer/Consumer#endDatabaseReload(Z)V=3d72f6b090c0",
@@ -314,7 +319,7 @@
         "code migrate-db.protocol/reload-lifecycle net/coreprotect/database/Database#awaitConnectionDrain(J)Z=99f8e7050d08",
         "code migrate-db.protocol/reload-lifecycle net/coreprotect/database/Database#closeConnection()V=4cfadd76cdb5",
         "code migrate-db.protocol/reload-lifecycle net/coreprotect/database/Database#getConnection(ZZZI)Ljava/sql/Connection;=734c35ee605f",
-        "code migrate-db.protocol/reload-lifecycle net/coreprotect/services/ShutdownService#safeShutdown(Lorg/bukkit/plugin/Plugin;)V=98a9ea7fde40",
+        "code migrate-db.protocol/reload-lifecycle net/coreprotect/services/ShutdownService#safeShutdown(Lorg/bukkit/plugin/Plugin;)V=3a1187ec96af",
         "code migrate-db.protocol/reload-lifecycle net/coreprotect/services/ShutdownService#waitForMaintenanceCompletion(J)V=fe6fd7ed4727",
         "code migrate-db.schema/by-engine-type net/coreprotect/database/Database#createDatabaseTables(Ljava/lang/String;ZLjava/sql/Connection;Lnet/coreprotect/database/DatabaseType;Z)V=bc2d2c7cf5f5",
         "code migrate-db.schema/by-engine-type net/coreprotect/database/DatabaseType#isClickHouse()Z=6a8280226d13",
