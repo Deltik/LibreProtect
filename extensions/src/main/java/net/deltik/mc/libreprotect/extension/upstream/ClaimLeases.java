@@ -100,9 +100,13 @@ final class ClaimLeases extends Leases {
             ConsumerGate.pauseLoop(upstream));
         upstream.relyOn("writes each batch under the database read lock, which an exclusive claim's write lock"
             + " holds off, and none while isPaused is set", Names.CONSUMER, "processConsumerBatch(IZ)V");
-        upstream.relyOn("claims its purge through Consumer.claimPurge, which refuses while a background purge claim"
-            + " is held, before it changes the database, and keeps its worker running until it's done",
-            Names.PURGE_COMMAND + "$1BasicThread", "run()V");
+        // Wherever the command puts its worker, as long as the command's fingerprint covers the claim and the
+        // worker, which pauses the consumer for its work and waits for connections to close before it hands over
+        upstream.relyOnReaching("starts a purge that claims it through Consumer.claimPurge, which refuses while a"
+            + " background purge claim is held, before it changes the database, and keeps its worker running until"
+            + " it's done", Names.PURGE_COMMAND, "runCommand(Lorg/bukkit/command/CommandSender;Z[Ljava/lang/String;)V",
+            Names.CONSUMER + "#claimPurge()" + Names.descriptor(Names.OPERATION_START_RESULT),
+            Names.CONSUMER + "#setMaintenancePaused(Z)V", Names.DATABASE + "#awaitConnectionDrain(J)Z");
         upstream.relyOn("stops background services, then waits for maintenance to complete before it closes the"
             + " database", Names.SHUTDOWN_SERVICE, "safeShutdown(Lorg/bukkit/plugin/Plugin;)V");
         upstream.relyOn("waits, for up to 15 minutes, while a background purge claim or purgeRunning is held",

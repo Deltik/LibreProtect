@@ -162,6 +162,8 @@ public final class Hooks {
         private PurgeWorker(Upstream upstream) throws Missing {
             Designs.MULTI_ENGINE.requireIn(upstream);
             running = upstream.type(Names.PURGE_COMMAND).staticMethod("isPurgeWorkerRunning", boolean.class);
+            upstream.relyOn("says whether a manual purge's worker is still running, from when it claims its purge"
+                + " until it's done", running);
         }
 
         public boolean running() {
