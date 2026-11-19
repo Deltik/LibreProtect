@@ -42,11 +42,12 @@ import java.util.TreeSet;
  * so changing it under this lock keeps a resolution from seeing half of the
  * change. CoreProtect 24 has no such lock.
  *
- * <p>The lock doesn't cover the bulk cache loaders, such as
- * {@code loadWorlds} and {@code loadTypes}, which allocate and replace
- * identifiers and their counters without it: at startup, on
- * {@code /co reload}, and on the consumer thread as it inserts new
- * identifiers. So hold it only while CoreProtect's consumer is paused and
+ * <p>The bulk cache loaders, such as {@code loadWorlds} and
+ * {@code loadTypes}, allocate and replace identifiers and their counters:
+ * at startup, on {@code /co reload}, and on some CoreProtect 25 builds, on
+ * the consumer thread as it inserts new identifiers. Some builds run them
+ * without the lock, and later ones take it for each kind they load, but not
+ * across kinds. So hold it only while CoreProtect's consumer is paused and
  * its reloads are locked out, as while a migration holds CoreProtect's
  * database reload; then only the locked resolutions, from event listeners,
  * can change identifiers.

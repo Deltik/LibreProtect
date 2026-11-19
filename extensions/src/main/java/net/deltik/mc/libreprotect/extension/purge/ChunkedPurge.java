@@ -76,9 +76,9 @@ import java.util.function.Supplier;
  *
  * <p>With CoreProtect 25's entity tracking, links to removed rows are cleared
  * afterward, and orphaned {@code entity_spawn}, {@code entity_interaction}
- * and {@code entity_container} rows older than the cutoff are removed, as a
- * manual purge does. Then DuckDB is checkpointed. ClickHouse has CoreProtect's
- * own retention, which runs as one exclusive step.
+ * and {@code entity_container} rows older than the cutoff are removed, much
+ * as a manual purge does. Then DuckDB is checkpointed. ClickHouse has
+ * CoreProtect's own retention, which runs as one exclusive step.
  *
  * <p>A run checks every reason to stop before anything that depends on the
  * engine, so that a database that can't be purged, such as one of an engine
@@ -262,14 +262,17 @@ final class ChunkedPurge {
     }
 
     /**
-     * CoreProtect's five orphan cleanup statements from {@code /co purge}, in
-     * its order: forget links to removed kills and blocks, remove
-     * interactions and container changes of entities that are gone, then
-     * remove despawned entities that nothing refers to.
+     * The orphan cleanup of {@code /co purge}, in its order: forget links to
+     * removed kills and blocks, remove interactions and container changes of
+     * entities that are gone, then remove despawned entities that nothing
+     * refers to. Later CoreProtect 25 builds no longer remove the
+     * interactions and container changes, since they removed rows outside
+     * the purge's time range and world; here, where they're never younger
+     * than the cutoff, they only catch what the walk of those tables missed.
      *
-     * <p>Unlike a manual purge, the three deletes only remove rows older
-     * than the cutoff, like everything else here. A younger orphan stays
-     * until a later run finds it old enough.
+     * <p>The three deletes only remove rows older than the cutoff, like
+     * everything else here. A younger orphan stays until a later run finds it
+     * old enough.
      */
     private void cleanOrphans() throws Stopped, InterruptedException {
         String spawn = prefix + "entity_spawn";

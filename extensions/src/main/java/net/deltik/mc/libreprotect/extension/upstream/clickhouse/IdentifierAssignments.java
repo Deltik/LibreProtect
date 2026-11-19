@@ -52,10 +52,13 @@ interface IdentifierAssignments {
 
     /**
      * Make CoreProtect assign the map's future identifiers above {@code floor},
-     * until it next loads its identifier caches, which resets each counter
-     * to the largest identifier stored. It loads them when it starts and
-     * reloads, not while a migration runs, and its own assignments only raise
-     * the counters. Skipping identifiers leaves gaps it doesn't mind.
+     * until it next loads its identifier caches anew, which resets each
+     * counter to the largest identifier stored. It does when it starts and
+     * reloads, not while a migration runs. When it reloads a single kind's
+     * cache meanwhile, as to look one up with {@code database-lock} off,
+     * later CoreProtect 25 builds keep the counter if it's higher, and its
+     * own assignments only raise the counters. Skipping identifiers leaves
+     * gaps it doesn't mind.
      */
     default void raise(Family map, long floor) {
         raiseAndFindAssigned(map, floor, Collections.emptyList());
