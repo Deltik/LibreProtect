@@ -37,27 +37,30 @@ import java.util.function.BooleanSupplier;
  * publication, and stops it when the server shuts down or the migration is
  * aborted ({@link #abort()}).
  *
- * <p>While the server runs, CoreProtect retries a publication that
- * ClickHouse refuses until it succeeds, with back-off up to 30 seconds. That
- * suits its consumer, but a migration holds persistence paused meanwhile, so
- * a refusal that never clears (a missing grant, a memory limit, a setting the
- * server doesn't know) would stall the server's logging for good, and hold
- * up its shutdown.
+ * <p>How long CoreProtect retries a publication that ClickHouse refuses is
+ * its own choice: some of its development builds retried until it succeeded,
+ * for as long as the server ran, and later ones give up after a few
+ * attempts. Retrying for long suits its consumer, but a migration holds
+ * persistence paused meanwhile, so a refusal that never clears (a missing
+ * grant, a memory limit, a setting the server doesn't know) would stall the
+ * server's logging for good, and hold up its shutdown. This bounds it either
+ * way.
  *
  * <p>When the limit passes, or once the server starts shutting down, this
  * interrupts the publishing thread and reports the failure. CoreProtect's
  * writer honors the interrupt while it waits between attempts and while it
- * reconciles, but not during an insert already in flight, which ends by
- * itself within CoreProtect's 5-minute socket timeout. So the limit caps
- * retrying, not progress: a publication that keeps succeeding can run past
- * it, at worst by the insert in flight plus one insert for each partition
- * still to publish, each within that socket timeout. The interrupt never
- * outlives the publication.
+ * reconciles, and later builds also before each attempt, but none during an
+ * insert already in flight, which ends by itself within CoreProtect's
+ * 5-minute socket timeout. So a publication can run past the limit by that
+ * insert, and on builds that check before each attempt, the limit also
+ * stops a publication that keeps succeeding but is slow, before its next
+ * partition. The interrupt never outlives the publication.
  *
  * <p>The capability report's {@code relies} lines on
- * {@code ClickHouseBatchPublisher}'s {@code publish},
- * {@code shouldContinueRecovery} and {@code pauseBeforeRetry}, and on
- * {@code ClickHouseNativeClient}'s constructor, watch that behavior.
+ * {@code ClickHouseBatchPublisher}'s {@code publish} and
+ * {@code pauseBeforeRetry}, on {@code ClickHouseHighWaterPublisher}'s
+ * {@code publish}, and on {@code ClickHouseNativeClient}'s constructor, watch
+ * that behavior.
  */
 final class PublishDeadline implements AutoCloseable {
 
@@ -210,8 +213,9 @@ final class PublishDeadline implements AutoCloseable {
     }
 
     /**
-     * A publication that was stopped. Not worth retrying: CoreProtect already
-     * retried it all that time, or the server or the migration is stopping.
+     * A publication that was stopped. Not worth retrying: it kept going, or
+     * CoreProtect kept retrying it, for the whole limit, or the server or the
+     * migration is stopping.
      */
     static final class ExpiredException extends SQLNonTransientException {
         private static final long serialVersionUID = 1L;

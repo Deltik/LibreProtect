@@ -573,15 +573,14 @@ public final class ClickHouseApi {
                 Names.CLICKHOUSE_WRITER_REGISTRATION, "close()V");
             upstream.relyOn("releases the writer registration and closes the database's connections",
                 Names.CLICKHOUSE_DATABASE, "close()V");
+            // However long these retry, PublishDeadline bounds it, by interrupting them
             upstream.relyOn("publishes each partition of a batch once, so a batch published again after a failure"
-                + " isn't stored twice; retries a refused partition for as long as shouldContinueRecovery holds",
+                + " isn't stored twice; stops retrying a refused partition when the thread is interrupted",
                 Names.CLICKHOUSE_BATCH_PUBLISHER,
                 "publish(" + batch + ")" + Names.descriptor(Names.CLICKHOUSE_BATCH_RECEIPT));
             upstream.relyOn("records row ID high-water marks in retention_high_water, where readRemote finds them"
-                + " after a restart; retries a refused insert for as long as shouldContinueRecovery holds",
+                + " after a restart; stops retrying a refused insert when the thread is interrupted",
                 Names.CLICKHOUSE_HIGH_WATER_PUBLISHER, "publish(" + identity + "Ljava/util/Map;)V");
-            upstream.relyOn("keeps retrying for as long as the server runs, which PublishDeadline bounds",
-                Names.CLICKHOUSE_BATCH_PUBLISHER, "shouldContinueRecovery()Z");
             upstream.relyOn("stops waiting between attempts when the thread is interrupted, which is how"
                 + " PublishDeadline stops a publication", Names.CLICKHOUSE_BATCH_PUBLISHER,
                 "pauseBeforeRetry(ILjava/lang/String;)V");

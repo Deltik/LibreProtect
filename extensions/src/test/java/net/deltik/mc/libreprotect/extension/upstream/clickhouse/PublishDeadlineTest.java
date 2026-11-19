@@ -34,12 +34,14 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -283,20 +285,48 @@ class PublishDeadlineTest {
         }
 
         @Test
-        @DisplayName("CoreProtect's writer retries a refused publication for as long as the server runs")
-        void retriesWhileRunning() throws Exception {
+        @DisplayName("CoreProtect's writer gives up on a refused publication by itself")
+        void givesUp() throws Exception {
             coreProtect.set("ConfigHandler.serverRunning", true);
             try (UnreachablePublication publication = new UnreachablePublication(api, controlDirectory)) {
-                Future<?> publishing = executor.submit(() -> {
-                    publication.publish();
-                    return null;
-                });
+                Future<SQLException> publishing = executor.submit(
+                    () -> assertThrows(SQLException.class, publication::publish));
 
-                assertThrows(TimeoutException.class, () -> publishing.get(5, TimeUnit.SECONDS),
-                    "CoreProtect gave up on its own; the deadline may be unnecessary");
-                publishing.cancel(true);
-                executor.shutdown();
-                assertTrue(executor.awaitTermination(30, TimeUnit.SECONDS), "an interrupt stops it");
+                // If it retries for as long as the server runs again, only the deadline's limit ends a publication
+                // that ClickHouse keeps refusing, and PublishDeadline's Javadoc should say so
+                SQLException e = assertDoesNotThrow(() -> publishing.get(30, TimeUnit.SECONDS),
+                    "CoreProtect's writer no longer gives up by itself");
+                assertFalse(interrupted(e), e::toString);
+            }
+        }
+
+        @Test
+        @DisplayName("CoreProtect's writer stops as soon as it's interrupted while it waits, which is how the"
+            + " deadline stops it")
+        void stopsWhenInterrupted() throws Exception {
+            coreProtect.set("ConfigHandler.serverRunning", true);
+            try (UnreachablePublication publication = new UnreachablePublication(api, controlDirectory)) {
+                AtomicReference<Thread> worker = new AtomicReference<>();
+                CountDownLatch started = new CountDownLatch(1);
+                Future<SQLException> publishing = executor.submit(() -> {
+                    worker.set(Thread.currentThread());
+                    started.countDown();
+                    try {
+                        return assertThrows(SQLException.class, () -> publishUntilInterrupted(publication));
+                    } finally {
+                        Thread.interrupted();
+                    }
+                });
+                assertTrue(started.await(5, TimeUnit.SECONDS));
+                awaitWaiting(worker.get(), publishing);
+
+                long interrupted = System.nanoTime();
+                worker.get().interrupt();
+
+                SQLException e = publishing.get(5, TimeUnit.SECONDS);
+                long stoppedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - interrupted);
+                assertTrue(interrupted(e), () -> "not stopped by the interrupt: " + e);
+                assertTrue(stoppedMillis < 1_000, "stopped " + stoppedMillis + " ms after the interrupt");
             }
         }
 
@@ -304,17 +334,24 @@ class PublishDeadlineTest {
         @DisplayName("should stop CoreProtect's writer as soon as CoreProtect starts shutting down")
         void stopsOnShutdown() throws Exception {
             coreProtect.set("ConfigHandler.serverRunning", true);
-            PublishDeadline fiveMinutes = new PublishDeadline(Duration.ofMinutes(5),
-                PublishDeadline.serverShuttingDown(api.flags()));
+            BooleanSupplier signal = PublishDeadline.serverShuttingDown(api.flags());
+            PublishDeadline fiveMinutes = new PublishDeadline(Duration.ofMinutes(5), signal);
             try (UnreachablePublication publication = new UnreachablePublication(api, controlDirectory)) {
+                assertFalse(signal.getAsBoolean());
+                AtomicReference<Thread> worker = new AtomicReference<>();
+                CountDownLatch started = new CountDownLatch(1);
                 Future<Boolean> publishing = executor.submit(() -> {
+                    worker.set(Thread.currentThread());
+                    started.countDown();
                     PublishDeadline.ExpiredException e = assertThrows(PublishDeadline.ExpiredException.class,
-                        () -> fiveMinutes.run("the incomplete-migration mark", publication::publish));
+                        () -> fiveMinutes.run("the incomplete-migration mark",
+                            () -> publishUntilInterrupted(publication)));
                     assertTrue(e.getMessage().startsWith("Writing the incomplete-migration mark to ClickHouse stopped"
                         + " because the server is shutting down: "), e.getMessage());
                     return Thread.currentThread().isInterrupted();
                 });
-                assertThrows(TimeoutException.class, () -> publishing.get(1, TimeUnit.SECONDS), "still retrying");
+                assertTrue(started.await(5, TimeUnit.SECONDS));
+                awaitWaiting(worker.get(), publishing);
 
                 // What CoreProtect's shutdown does first
                 long raised = System.nanoTime();
@@ -323,32 +360,65 @@ class PublishDeadlineTest {
                 assertFalse(publishing.get(5, TimeUnit.SECONDS), "the interrupt outlived the publication");
                 long stoppedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - raised);
                 assertTrue(stoppedMillis < 1_500, "stopped " + stoppedMillis + " ms after the shutdown signal");
+                assertTrue(signal.getAsBoolean());
+                int[] runs = {0};
+                assertEquals("Writing the rows to ClickHouse didn't start because the server is shutting down",
+                    assertThrows(PublishDeadline.ExpiredException.class,
+                        () -> fiveMinutes.run("the rows", () -> runs[0]++)).getMessage());
+                assertEquals(0, runs[0]);
             } finally {
                 fiveMinutes.close();
                 // What CoreProtect does when it starts again, resetting the signal
                 consumer("initialize");
             }
         }
+    }
 
-        @Test
-        @DisplayName("should stop CoreProtect's writer retrying while the server runs")
-        void stopsWhileRunning() throws Exception {
-            coreProtect.set("ConfigHandler.serverRunning", true);
-            PublishDeadline twoSeconds = new PublishDeadline(Duration.ofSeconds(2), () -> false);
-            try (UnreachablePublication publication = new UnreachablePublication(api, controlDirectory)) {
-                Future<Boolean> publishing = executor.submit(() -> {
-                    PublishDeadline.ExpiredException e = assertThrows(PublishDeadline.ExpiredException.class,
-                        () -> twoSeconds.run("the incomplete-migration mark", publication::publish));
-                    assertTrue(e.getMessage().startsWith("Writing the incomplete-migration mark to ClickHouse didn't"
-                        + " succeed within 2 seconds of retrying: "), e.getMessage());
-                    return Thread.currentThread().isInterrupted();
-                });
-
-                assertFalse(publishing.get(60, TimeUnit.SECONDS), "the interrupt outlived the publication");
-            } finally {
-                twoSeconds.close();
+    /**
+     * Publish through CoreProtect's writer again each time it gives up by
+     * itself, until an interrupt stops it, so that a stop never comes too late
+     * to find it retrying, however slow the machine.
+     */
+    private static void publishUntilInterrupted(UnreachablePublication publication) throws SQLException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        while (true) {
+            try {
+                publication.publish();
+                return;
+            } catch (SQLException e) {
+                // Also an interrupt that CoreProtect reported otherwise, for the caller to find; never forever
+                if (interrupted(e) || Thread.currentThread().isInterrupted() || System.nanoTime() - deadline > 0) {
+                    throw e;
+                }
             }
         }
+    }
+
+    /**
+     * Wait until a thread publishing through CoreProtect's writer waits, as
+     * it does for an insert's answer, for a connection, and between attempts.
+     */
+    private static void awaitWaiting(Thread thread, Future<?> publishing) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (thread.getState() != Thread.State.WAITING && thread.getState() != Thread.State.TIMED_WAITING) {
+            assertFalse(publishing.isDone(), "CoreProtect's writer ended without waiting");
+            assertTrue(System.nanoTime() < deadline, "CoreProtect's writer never waited");
+            Thread.sleep(1);
+        }
+    }
+
+    /**
+     * @return whether an interrupt ended the failed publication, by
+     *         CoreProtect's way of reporting one: an
+     *         {@link InterruptedException} among its causes
+     */
+    private static boolean interrupted(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof InterruptedException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -359,8 +429,9 @@ class PublishDeadlineTest {
     }
 
     /**
-     * Retry the way CoreProtect's publisher does while the server runs:
-     * forever, sleeping between attempts, until interrupted.
+     * Retry the way some of CoreProtect's development builds' publisher did
+     * while the server ran: forever, sleeping between attempts, until
+     * interrupted.
      */
     private static void retryLikeCoreProtect() throws SQLException {
         while (true) {

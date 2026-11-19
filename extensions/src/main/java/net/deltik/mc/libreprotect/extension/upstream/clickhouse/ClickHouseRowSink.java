@@ -88,10 +88,10 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * deduplicates, so a retry can't store rows twice. A retry must pass the
  * same rows: the sink republishes the batch it encoded the first time.
  *
- * <p>CoreProtect's writer retries a refused publication for as long as the
- * server runs. The sink lets each publication retry for {@link #PUBLISH_LIMIT},
- * and stops it at once when the server starts shutting down (see
- * {@link PublishDeadline}). Either fails it with an
+ * <p>CoreProtect's writer retries a refused publication itself, for as long
+ * as it chooses. The sink lets each publication retry for at most
+ * {@link #PUBLISH_LIMIT}, and stops it at once when the server starts
+ * shutting down (see {@link PublishDeadline}). Either fails it with an
  * {@link java.sql.SQLNonTransientException}, which isn't worth retrying.
  * {@link #abort()} stops it, and the rest of the sink's work, from any thread.
  */
@@ -101,14 +101,13 @@ final class ClickHouseRowSink implements RowSink {
     static final int MAX_BATCH_ROWS = 100_000;
 
     /**
-     * How long one publication may keep retrying: as long as CoreProtect lets
-     * a single ClickHouse request take (its socket timeout), and about 80
-     * times what a batch of {@value #MAX_BATCH_ROWS} block rows over 23
-     * monthly partitions took to publish on a local server (3 to 4 seconds),
-     * so a slow but healthy server isn't cut off. It caps retrying, not
-     * progress: a publication that keeps succeeding can run past it, at worst
-     * by the insert in flight plus one insert for each partition still to
-     * publish, each within that 5-minute socket timeout.
+     * How long one publication may take, retries included: as long as
+     * CoreProtect lets a single ClickHouse request take (its socket timeout),
+     * and about 80 times what a batch of {@value #MAX_BATCH_ROWS} block rows
+     * over 23 monthly partitions took to publish on a local server (3 to 4
+     * seconds), so a slow but healthy server isn't cut off. A publication can
+     * run past it by the insert in flight, and more on CoreProtect builds that
+     * only honor the stop between attempts (see {@link PublishDeadline}).
      */
     static final Duration PUBLISH_LIMIT = Duration.ofMinutes(5);
 
@@ -380,12 +379,12 @@ final class ClickHouseRowSink implements RowSink {
             }
         }
         try {
-            deadline.run("the row ID high-water marks", () -> prepared.preserveCompatibilityHighWaterMarks(marks));
+            publish("the row ID high-water marks", () -> prepared.preserveCompatibilityHighWaterMarks(marks));
         } catch (IllegalArgumentException | IllegalStateException e) {
             throw new SQLDataException("Can't record the row ID high-water marks in ClickHouse: " + e.getMessage(), e);
         }
         guardIdentifierMaps();
-        deadline.run("CoreProtect's version row", () -> prepared.ensureCoreData(coreVersion));
+        publish("CoreProtect's version row", () -> prepared.ensureCoreData(coreVersion));
     }
 
     /**
@@ -594,15 +593,23 @@ final class ClickHouseRowSink implements RowSink {
 
     private void publishPending(Target prepared) throws SQLException {
         WriteBatch batch = pending.batch;
+        publish("the " + pending.fingerprint, () -> prepared.publish(batch));
+        batch.close();
+    }
+
+    /**
+     * Publish through CoreProtect's writer, within the deadline, and say what
+     * failed to be written if it fails
+     */
+    private void publish(String what, PublishDeadline.Publication publication) throws SQLException {
         try {
-            deadline.run("the " + pending.fingerprint, () -> prepared.publish(batch));
+            deadline.run(what, publication);
         } catch (PublishDeadline.ExpiredException e) {
             throw e;
         } catch (SQLException e) {
-            throw new SQLException("Failed to write the " + pending.fingerprint + " to ClickHouse: " + describe(e),
-                e.getSQLState(), e.getErrorCode(), e);
+            throw new SQLException("Failed to write " + what + " to ClickHouse: " + describe(e), e.getSQLState(),
+                e.getErrorCode(), e);
         }
-        batch.close();
     }
 
     private void writeDatabaseLock(int status) throws SQLException {
@@ -613,7 +620,7 @@ final class ClickHouseRowSink implements RowSink {
         Target prepared = requirePrepared();
         String what = status == api.incompleteStatus()
             ? "the incomplete-migration mark" : "the cleared incomplete-migration mark";
-        deadline.run(what, () -> {
+        publish(what, () -> {
             try (WriteBatch batch = prepared.newWriteBatch()) {
                 batch.events().addDatabaseLockVersion(1L, (int) (System.currentTimeMillis() / 1000L), status);
                 prepared.publish(batch);

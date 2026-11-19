@@ -21,6 +21,7 @@
 package net.deltik.mc.libreprotect.extension.upstream.clickhouse;
 
 import net.deltik.mc.libreprotect.extension.migration.Row;
+import net.deltik.mc.libreprotect.extension.migration.TransientErrors;
 import net.deltik.mc.libreprotect.extension.upstream.Designs;
 import net.deltik.mc.libreprotect.extension.upstream.Names;
 import net.deltik.mc.libreprotect.extension.upstream.clickhouse.ClickHouseApi.Config;
@@ -383,7 +384,8 @@ class ClickHouseRowSinkTest {
 
         /**
          * Run a sink call as a migration would while the server runs, where
-         * CoreProtect's writer retries refused publications until they succeed
+         * CoreProtect's writer retries refused publications, for as long as
+         * it chooses
          */
         private Outcome whileServerRuns(SinkCall call) {
             coreProtect.set("ConfigHandler.serverRunning", true);
@@ -413,10 +415,7 @@ class ClickHouseRowSinkTest {
 
             Outcome outcome = whileServerRuns(() -> sink.write("chat", columns, rows));
 
-            assertInstanceOf(PublishDeadline.ExpiredException.class, outcome.failure());
-            assertTrue(outcome.failure().getMessage().startsWith("Writing the 1 chat rows with row IDs 1 to 1 to"
-                + " ClickHouse didn't succeed within 3 seconds of retrying: "), outcome.failure().getMessage());
-            assertFalse(outcome.interrupted(), "the interrupt outlived the publication");
+            assertRefused("the 1 chat rows with row IDs 1 to 1", outcome);
 
             server.execute("ALTER TABLE " + server.table(prefix, "event_data") + " DROP CONSTRAINT lpt_no_chat");
             assertNull(whileServerRuns(() -> sink.write("chat", columns, rows)).failure());
@@ -437,13 +436,27 @@ class ClickHouseRowSinkTest {
             Outcome mark = whileServerRuns(sink::markIncomplete);
             Outcome marks = whileServerRuns(() -> sink.finish(Map.of("chat", 900L)));
 
-            assertInstanceOf(PublishDeadline.ExpiredException.class, mark.failure());
-            assertTrue(mark.failure().getMessage().startsWith("Writing the incomplete-migration mark to ClickHouse"),
-                mark.failure().getMessage());
-            assertInstanceOf(PublishDeadline.ExpiredException.class, marks.failure());
-            assertTrue(marks.failure().getMessage().startsWith("Writing the row ID high-water marks to ClickHouse"),
-                marks.failure().getMessage());
-            assertFalse(mark.interrupted() || marks.interrupted(), "the interrupt outlived the publication");
+            assertRefused("the incomplete-migration mark", mark);
+            assertRefused("the row ID high-water marks", marks);
+        }
+
+        /**
+         * Whether CoreProtect gave up by itself or retried until the limit
+         * (see PublishDeadlineTest's givesUp), the failure says what wasn't
+         * written, isn't worth retrying, and leaves no interrupt behind.
+         */
+        private void assertRefused(String what, Outcome outcome) {
+            Exception failure = outcome.failure();
+            assertInstanceOf(SQLException.class, failure);
+            assertFalse(TransientErrors.isTransient(failure), failure::toString);
+            if (failure instanceof PublishDeadline.ExpiredException) {
+                assertTrue(failure.getMessage().startsWith("Writing " + what + " to ClickHouse didn't succeed within"
+                    + " 3 seconds of retrying: "), failure.getMessage());
+            } else {
+                assertTrue(failure.getMessage().startsWith("Failed to write " + what + " to ClickHouse: "),
+                    failure.getMessage());
+            }
+            assertFalse(outcome.interrupted(), "the interrupt outlived the publication");
         }
     }
 
