@@ -525,7 +525,7 @@
         "doc migrate-db.protocol/flag-protocol docs/database-migration.md=8615fffa681a",
         "optional consumer.gate/pause-flags net/coreprotect/consumer/Consumer#isPersistenceHalted()Z=absent",
         "optional lifecycle.flags/static-flags net/coreprotect/config/ConfigHandler#shutdownDrainRunning:Z=absent",
-        "optional lifecycle.flags/static-flags net/coreprotect/consumer/Consumer#databaseReloadShutdownSignal()Ljava/util/concurrent/CompletableFuture;=absent"
+        "optional lifecycle.flags/static-flags net/coreprotect/consumer/Consumer#isShutdownDrainStopped()Z=absent"
       ],
       "licenses": [
         "file LICENSE=f2e0707902c4cd92155bb081a6eb0d77ebab789eafb212659fa6f44fcdca531b",

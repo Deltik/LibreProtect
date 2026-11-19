@@ -254,6 +254,8 @@ public abstract class PurgeEngine {
         private final StaticMethod<Boolean, RuntimeException> consumerRunning;
         private final StaticField parked;
         private final StaticMethod<Long, SQLException> retention;
+        private final StaticMethod<Void, RuntimeException> cancel;
+        private final Flags flags;
         private final StaticMethod<?, RuntimeException> global;
         private final InstanceField databaseLock;
 
@@ -272,6 +274,8 @@ public abstract class PurgeEngine {
             parked = consumer.staticField("pausedSuccess", boolean.class);
             retention = upstream.type(Names.DATABASE).staticMethod("purgeClickHouse", long.class, long.class,
                 long.class, int.class, List.class, boolean.class).throwing(SQLException.class);
+            cancel = upstream.type(Names.DATABASE).staticMethod("cancelClickHousePurge", void.class);
+            flags = Flags.CAPABILITY.probe(upstream).require();
 
             upstream.relyOn("refuses while a purge, a rollback, a database reload or a persistence halt is on, and"
                 + " otherwise sets purgeRunning, which those then refuse to start alongside", claim);
@@ -286,9 +290,10 @@ public abstract class PurgeEngine {
             upstream.relyOn("has its retention purge, once it's open and owns its dataset", Names.CLICKHOUSE_DATABASE,
                 "purge" + range);
             upstream.relyOn("drops the monthly partitions that the time range covers, deletes the rest of its rows,"
-                + " and cleans up what they leave of entities, one purge at a time; where CoreProtect has a lookup"
-                + " index, it refuses while mutations of the event table are unfinished, such as an earlier purge's"
-                + " deletions, and closes the index to lookups until it completes", Names.CLICKHOUSE_RETENTION,
+                + " and cleans up what they leave of entities in the time range, one purge at a time; where"
+                + " CoreProtect has a lookup index, it refuses while mutations of the event table are unfinished,"
+                + " such as an earlier purge's deletions, and closes the index to lookups until it completes, or"
+                + " fails with none unfinished", Names.CLICKHOUSE_RETENTION,
                 "purge" + range);
             upstream.relyOnSince(Designs.CLICKHOUSE_LOOKUP_INDEX, "opens the lookup index again when CoreProtect"
                 + " opens the database after a purge that didn't complete, but refuses to open the database while"
@@ -303,11 +308,12 @@ public abstract class PurgeEngine {
                 "waitForMaintenanceCompletion(J)V");
             upstream.relyOn("cancels a ClickHouse purge in progress, whoever started it", Names.PURGE_COMMAND,
                 "cancelForShutdown()V");
-            upstream.relyOn("has the active ClickHouse database cancel its purge in progress", Names.DATABASE,
-                "cancelClickHousePurge()V");
+            upstream.relyOn("has the active ClickHouse database cancel its purge in progress, if any, again each time"
+                + " it's called", cancel);
             upstream.relyOn("has its retention cancel its purge in progress", Names.CLICKHOUSE_DATABASE,
                 "cancelPurge()V");
-            upstream.relyOn("makes a purge in progress fail", Names.CLICKHOUSE_RETENTION, "cancelPurge()V");
+            upstream.relyOn("makes a purge in progress fail, once it has registered itself, a moment into the call;"
+                + " does nothing otherwise", Names.CLICKHOUSE_RETENTION, "cancelPurge()V");
             upstream.doc("docs/auto-purge.md", "ClickHouse purges with its columnar retention, dropping monthly"
                 + " partitions that the time range covers, and refuses to purge while database-lock is disabled");
         }
@@ -392,10 +398,17 @@ public abstract class PurgeEngine {
         /**
          * All worlds, no block filter, no {@code OPTIMIZE FINAL}: the path of
          * an unfiltered {@code /co purge}.
+         *
+         * <p>CoreProtect's shutdown cancels the purge once, which misses a
+         * purge that hasn't registered itself yet, so the cancel is repeated
+         * from when the shutdown begins until the purge ends.
          */
         @Override
         public long purge(long cutoff) throws SQLException {
-            return retention.call(0L, cutoff, 0, Collections.emptyList(), false);
+            try (RepeatedCancel ignored = RepeatedCancel.start("LibreProtect auto-purge shutdown cancel",
+                flags::shutdownStarted, cancel::call)) {
+                return retention.call(0L, cutoff, 0, Collections.emptyList(), false);
+            }
         }
     }
 }

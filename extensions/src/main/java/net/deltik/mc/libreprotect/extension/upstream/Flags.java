@@ -28,8 +28,6 @@ import net.deltik.mc.libreprotect.extension.upstream.reflect.Upstream;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.UpstreamClass;
 
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Future;
 
 /**
  * CoreProtect's lifecycle flags in {@code ConfigHandler}, which its own
@@ -62,7 +60,7 @@ public final class Flags {
     private final StaticField pauseConsumer;
     private final StaticField activeRollbacks;
     private final StaticField shutdownDrainRunning;
-    private final StaticMethod<?, RuntimeException> shutdownSignal;
+    private final StaticMethod<Boolean, RuntimeException> shutdownDrainStopped;
     /** How CoreProtect shows that it has its newer design, which rules out writing the flags; or {@code null} */
     private final String newerDesign;
 
@@ -78,9 +76,10 @@ public final class Flags {
         // CoreProtect 25's shutdown signals, which come before serverRunning clears
         shutdownDrainRunning = handler.staticFieldSince(Designs.MULTI_ENGINE, "shutdownDrainRunning",
             boolean.class);
-        // A copy of the signal each time, which completes with it
-        shutdownSignal = upstream.type(Names.CONSUMER).staticMethodSince(Designs.MULTI_ENGINE,
-            "databaseReloadShutdownSignal", CompletableFuture.class);
+        // Shutdown blocks database reloads as it completes their shutdown signal, and a new start undoes both. This
+        // says they're blocked once the shutdown drain ends, and unlike the signal, allocates nothing
+        shutdownDrainStopped = upstream.type(Names.CONSUMER).staticMethodSince(Designs.MULTI_ENGINE,
+            "isShutdownDrainStopped", boolean.class);
     }
 
     private Flags(Flags flags, StaticField migrationRunning, StaticField purgeRunning, StaticField pauseConsumer) {
@@ -92,7 +91,7 @@ public final class Flags {
         this.pauseConsumer = pauseConsumer;
         activeRollbacks = flags.activeRollbacks;
         shutdownDrainRunning = flags.shutdownDrainRunning;
-        shutdownSignal = flags.shutdownSignal;
+        shutdownDrainStopped = flags.shutdownDrainStopped;
     }
 
     /**
@@ -185,10 +184,17 @@ public final class Flags {
      *         database reloads, which come first
      */
     public boolean shuttingDown() {
-        if (!serverRunning() || shutdownDrainRunning.getBoolean()) {
-            return true;
-        }
-        Object signal = shutdownSignal.call();
-        return signal instanceof Future && ((Future<?>) signal).isDone();
+        return !serverRunning() || shutdownStarted();
+    }
+
+    /**
+     * @return whether CoreProtect 25's shutdown has begun: its shutdown drain
+     *         or the shutdown signal of database reloads, which it raises
+     *         first, before it cancels purges. Unlike {@link #shuttingDown},
+     *         false before CoreProtect starts running; always false on
+     *         CoreProtect 24, which has neither.
+     */
+    public boolean shutdownStarted() {
+        return shutdownDrainRunning.getBoolean() || shutdownDrainStopped.call();
     }
 }

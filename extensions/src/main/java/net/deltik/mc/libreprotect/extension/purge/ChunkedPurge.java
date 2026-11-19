@@ -590,7 +590,8 @@ final class ChunkedPurge {
                 busy++;
                 continue;
             }
-            if (context.stopRequested()) {
+            // CoreProtect's shutdown may fail the work, as by cancelling a ClickHouse purge, before it stops the purge
+            if (context.stopRequested() || bridge.stopReason() == StopReason.SHUTDOWN) {
                 throw new Stopped(StopReason.SHUTDOWN, null);
             }
             if (bridge.requestRecovery(failure)) {

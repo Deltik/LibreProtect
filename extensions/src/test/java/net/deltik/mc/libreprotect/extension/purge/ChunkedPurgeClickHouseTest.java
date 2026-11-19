@@ -76,6 +76,22 @@ class ChunkedPurgeClickHouseTest extends ChunkedPurgeFixture {
     }
 
     @Test
+    @DisplayName("should report a shutdown, not an error, when CoreProtect's shutdown fails the purge first")
+    void failedByShutdown() {
+        bridge = new FakeBridge(null);
+        // CoreProtect's shutdown begins, and cancels the purge, before it tells auto-purge to stop
+        bridge.stopReasonDuringClickHousePurge = StopReason.SHUTDOWN;
+        bridge.clickHouseFailure = new SQLException("ClickHouse purge cancelled during shutdown");
+
+        PurgeResult result = purge(CUTOFF);
+
+        assertEquals(StopReason.SHUTDOWN, result.stopReason());
+        assertNull(result.detail());
+        assertEquals(List.of(CUTOFF), bridge.clickHouseCutoffs);
+        assertEquals(0, bridge.rowsPurged.get());
+    }
+
+    @Test
     @DisplayName("should wait and try again while it can't take its claim")
     void retriesClaim() {
         bridge = new FakeBridge(null);

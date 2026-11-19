@@ -63,6 +63,8 @@ final class FakeBridge implements PurgeBridge {
     volatile long clickHouseRows;
     /** Thrown by every ClickHouse purge, if set */
     volatile SQLException clickHouseFailure;
+    /** What {@link #stopReason} becomes while the ClickHouse purge runs, if not {@code null} */
+    volatile StopReason stopReasonDuringClickHousePurge;
 
     final AtomicInteger leases = new AtomicInteger();
     final AtomicInteger exclusiveLeases = new AtomicInteger();
@@ -194,6 +196,9 @@ final class FakeBridge implements PurgeBridge {
             problems.add("ClickHouse purge without an exclusive lease");
         }
         clickHouseCutoffs.add(cutoff);
+        if (stopReasonDuringClickHousePurge != null) {
+            stopReason = stopReasonDuringClickHousePurge;
+        }
         if (clickHouseFailure != null) {
             throw clickHouseFailure;
         }

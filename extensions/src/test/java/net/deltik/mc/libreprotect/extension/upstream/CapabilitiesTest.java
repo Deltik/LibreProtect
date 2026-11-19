@@ -327,6 +327,31 @@ class CapabilitiesTest {
             coreProtect.set("ConfigHandler.serverRunning", true).set("ConfigHandler.shutdownDrainRunning", true);
 
             assertTrue(flags.shuttingDown());
+            assertTrue(flags.shutdownStarted());
+        }
+
+        @Test
+        @DisplayName("should tell CoreProtect 25's shutdown from CoreProtect not running yet")
+        void shutdownStarted() throws Exception {
+            AssumeCapability.strategy("database.selector", "database-type");
+            Flags flags = capabilities.require(Flags.CAPABILITY);
+            coreProtect.set("ConfigHandler.serverRunning", false).set("ConfigHandler.shutdownDrainRunning", false);
+            try {
+                assertTrue(flags.shuttingDown());
+                assertFalse(flags.shutdownStarted(), "before CoreProtect starts");
+
+                // What CoreProtect's shutdown does first, and then once its drain ends
+                coreProtect.set("ConfigHandler.shutdownDrainRunning", true);
+                assertTrue(flags.shutdownStarted());
+                Upstream.coreProtect().type(Names.CONSUMER).staticMethod("blockDatabaseReloadForShutdown", void.class)
+                    .call();
+                coreProtect.set("ConfigHandler.shutdownDrainRunning", false);
+                assertTrue(flags.shutdownStarted(), "after the drain");
+            } finally {
+                // What CoreProtect does when it starts again
+                Upstream.coreProtect().type(Names.CONSUMER).staticMethod("initialize", void.class).call();
+            }
+            assertFalse(flags.shutdownStarted(), "once CoreProtect starts again");
         }
     }
 
