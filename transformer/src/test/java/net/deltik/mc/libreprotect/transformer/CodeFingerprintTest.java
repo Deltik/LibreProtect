@@ -36,8 +36,10 @@ import org.objectweb.asm.tree.JumpInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -404,6 +406,411 @@ class CodeFingerprintTest {
     @DisplayName("covers the static initializer that gives the static fields it reads their values")
     void staticInitializer() {
         assertNotEquals(run(initializedClass(1)), run(initializedClass(2)));
+    }
+
+    /** A statement of a static initializer, as its instructions */
+    private interface Statement {
+        void write(MethodVisitor initializer);
+    }
+
+    /**
+     * @return a statement that stores an int into a static field of the class, from a constant, or with
+     *         {@code shared}, from a method of a class outside the JAR, whose code it can't tell
+     */
+    private static Statement store(String field, int value, boolean shared) {
+        return initializer -> {
+            initializer.visitLdcInsn(value);
+            if (shared) {
+                initializer.visitMethodInsn(Opcodes.INVOKESTATIC, "net/coreprotect/Other", "of", "(I)I", false);
+            }
+            initializer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, field, "I");
+        };
+    }
+
+    /**
+     * @param read       the int field of the class that {@code run()} reads
+     * @param statements the static initializer's statements, each on the line of its position, from line 10
+     * @param more       more members of the class
+     * @return a class with static int fields A, B and C, and static Object fields M and N
+     */
+    private static byte[] fieldsClass(String read, List<Statement> statements, boolean tryCatch,
+                                      Consumer<ClassWriter> more) {
+        ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, OWNER, null, "java/lang/Object", null);
+        for (String field : List.of("A", "B", "C")) {
+            writer.visitField(Opcodes.ACC_STATIC, field, "I", null, null).visitEnd();
+        }
+        writer.visitField(Opcodes.ACC_STATIC, "M", "Ljava/lang/Object;", null, null).visitEnd();
+        writer.visitField(Opcodes.ACC_STATIC, "N", "Ljava/lang/Object;", null, null).visitEnd();
+        MethodVisitor run = writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "run", "()V", null, null);
+        run.visitCode();
+        line(run, 1);
+        run.visitFieldInsn(Opcodes.GETSTATIC, OWNER, read, read.equals("M") ? "Ljava/lang/Object;" : "I");
+        run.visitInsn(Opcodes.POP);
+        run.visitInsn(Opcodes.RETURN);
+        run.visitMaxs(0, 0);
+        run.visitEnd();
+        MethodVisitor initializer = writer.visitMethod(Opcodes.ACC_STATIC, "<clinit>", "()V", null, null);
+        initializer.visitCode();
+        Label start = new Label();
+        Label end = new Label();
+        if (tryCatch) {
+            initializer.visitTryCatchBlock(start, end, end, "java/lang/RuntimeException");
+        }
+        initializer.visitLabel(start);
+        for (int i = 0; i < statements.size(); i++) {
+            line(initializer, 10 + i);
+            statements.get(i).write(initializer);
+        }
+        line(initializer, 10 + statements.size());
+        initializer.visitInsn(Opcodes.RETURN);
+        if (tryCatch) {
+            initializer.visitLabel(end);
+            initializer.visitInsn(Opcodes.POP);
+            initializer.visitInsn(Opcodes.RETURN);
+        }
+        initializer.visitMaxs(0, 0);
+        initializer.visitEnd();
+        more.accept(writer);
+        writer.visitEnd();
+        return writer.toByteArray();
+    }
+
+    private static byte[] fieldsClass(String read, Statement... statements) {
+        return fieldsClass(read, List.of(statements), false, writer -> { });
+    }
+
+    @Test
+    @DisplayName("covers the statements that only give other fields their values only where it uses those fields")
+    void ownInitializers() {
+        String fingerprint = run(fieldsClass("A", store("A", 1, false), store("B", 2, false)));
+        assertNotEquals(fingerprint, run(fieldsClass("A", store("A", 3, false), store("B", 2, false))));
+        assertEquals(fingerprint, run(fieldsClass("A", store("A", 1, false), store("B", 4, false))), "B changed");
+        assertEquals(fingerprint, run(fieldsClass("A", store("A", 1, false))), "B removed");
+        assertEquals(fingerprint, run(fieldsClass("A", store("C", 5, false), store("A", 1, false),
+            store("B", 2, false))), "C added before it");
+        assertNotEquals(fingerprint, run(fieldsClass("A", store("A", 1, false), store("A", 6, false))),
+            "A given another value after");
+    }
+
+    @Test
+    @DisplayName("covers every statement that may do more than give one field its value, wherever it uses any")
+    void sharedStatements() {
+        // Calls a method that the fingerprint can't see
+        String fingerprint = run(fieldsClass("A", store("A", 1, false), store("B", 2, true)));
+        assertNotEquals(fingerprint, run(fieldsClass("A", store("A", 1, false), store("B", 4, true))));
+
+        // Reads another field
+        Statement copy = initializer -> {
+            initializer.visitFieldInsn(Opcodes.GETSTATIC, OWNER, "A", "I");
+            initializer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "C", "I");
+        };
+        assertNotEquals(run(fieldsClass("B", store("A", 1, false), copy)),
+            run(fieldsClass("B", store("A", 1, false), store("C", 1, false))));
+
+        // B = C = 7, which leaves a value on the stack for the next putstatic
+        Statement chained = initializer -> {
+            initializer.visitLdcInsn(7);
+            initializer.visitInsn(Opcodes.DUP);
+            initializer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "C", "I");
+            initializer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "B", "I");
+        };
+        Statement chainedOther = initializer -> {
+            initializer.visitLdcInsn(8);
+            initializer.visitInsn(Opcodes.DUP);
+            initializer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "C", "I");
+            initializer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "B", "I");
+        };
+        assertNotEquals(run(fieldsClass("B", store("A", 1, false), chained)),
+            run(fieldsClass("B", store("A", 1, false), chainedOther)));
+
+        // A statement that stores nothing, as a static block's call
+        Statement call = initializer -> {
+            initializer.visitMethodInsn(Opcodes.INVOKESTATIC, "net/coreprotect/Other", "init", "()V", false);
+        };
+        assertNotEquals(run(fieldsClass("A", store("A", 1, false))),
+            run(fieldsClass("A", store("A", 1, false), call)));
+
+        // A jump, which may skip other statements
+        Statement jump = initializer -> {
+            Label skip = new Label();
+            initializer.visitInsn(Opcodes.ICONST_0);
+            initializer.visitJumpInsn(Opcodes.IFEQ, skip);
+            initializer.visitLabel(skip);
+            initializer.visitInsn(Opcodes.ICONST_2);
+            initializer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "B", "I");
+        };
+        assertNotEquals(run(fieldsClass("A", store("A", 1, false), store("B", 2, false))),
+            run(fieldsClass("A", store("A", 1, false), jump)));
+    }
+
+    @Test
+    @DisplayName("covers all of a static initializer with exception handlers, or the one it fingerprints")
+    void wholeInitializer() {
+        assertNotEquals(run(fieldsClass("A", List.of(store("A", 1, false), store("B", 2, false)), true, writer -> { })),
+            run(fieldsClass("A", List.of(store("A", 1, false), store("B", 4, false)), true, writer -> { })));
+        assertNotEquals(CodeFingerprint.of(fieldsClass("A", store("A", 1, false), store("B", 2, false)),
+                "<clinit>", "()V"),
+            CodeFingerprint.of(fieldsClass("A", store("A", 1, false), store("B", 4, false)), "<clinit>", "()V"));
+    }
+
+    /**
+     * @return a static method {@code make()} of the class that returns a new object of the given class, after
+     *         boxing the value, which only builds a value
+     */
+    private static Consumer<ClassWriter> maker(String type, int value) {
+        return writer -> {
+            MethodVisitor make = writer.visitMethod(Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC, "make",
+                "()Ljava/lang/Object;", null, null);
+            make.visitCode();
+            make.visitLdcInsn(value);
+            make.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;",
+                false);
+            make.visitInsn(Opcodes.POP);
+            make.visitTypeInsn(Opcodes.NEW, type);
+            make.visitInsn(Opcodes.DUP);
+            make.visitMethodInsn(Opcodes.INVOKESPECIAL, type, "<init>", "()V", false);
+            make.visitInsn(Opcodes.ARETURN);
+            make.visitMaxs(0, 0);
+            make.visitEnd();
+        };
+    }
+
+    private static final Statement MAKE_M = initializer -> {
+        initializer.visitMethodInsn(Opcodes.INVOKESTATIC, OWNER, "make", "()Ljava/lang/Object;", false);
+        initializer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "M", "Ljava/lang/Object;");
+    };
+
+    @Test
+    @DisplayName("tells which helpers of the nest only build a value, and covers them only where it uses the field")
+    void pureHelpers() {
+        List<Statement> statements = List.of(store("A", 1, false), MAKE_M);
+        String map = "java/util/HashMap";
+        assertEquals(run(fieldsClass("A", statements, false, maker(map, 1))),
+            run(fieldsClass("A", statements, false, maker(map, 2))), "a helper that only builds M");
+        assertNotEquals(run(fieldsClass("M", statements, false, maker(map, 1))),
+            run(fieldsClass("M", statements, false, maker(map, 2))), "where it uses M");
+
+        // Creating an object of a class it can't see may run any code
+        String unknown = "net/coreprotect/Unknown";
+        assertNotEquals(run(fieldsClass("A", statements, false, maker(unknown, 1))),
+            run(fieldsClass("A", statements, false, maker(unknown, 2))), "a helper that may do more");
+    }
+
+    private static final Statement COPY_A_TO_B = initializer -> {
+        initializer.visitFieldInsn(Opcodes.GETSTATIC, OWNER, "A", "I");
+        initializer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "B", "I");
+    };
+
+    /**
+     * @return {@code if (Other.flag()) { A = 1; } B = 2;}, or with {@code inside},
+     *         {@code if (Other.flag()) { A = 1; B = 2; }}
+     */
+    private static List<Statement> branch(boolean inside) {
+        Label skip = new Label();
+        Statement condition = initializer -> {
+            initializer.visitMethodInsn(Opcodes.INVOKESTATIC, "net/coreprotect/Other", "flag", "()Z", false);
+            initializer.visitJumpInsn(Opcodes.IFEQ, skip);
+            initializer.visitInsn(Opcodes.ICONST_1);
+            initializer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "A", "I");
+        };
+        Statement b = initializer -> {
+            if (!inside) {
+                initializer.visitLabel(skip);
+            }
+            initializer.visitInsn(Opcodes.ICONST_2);
+            initializer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "B", "I");
+            if (inside) {
+                initializer.visitLabel(skip);
+            }
+        };
+        return List.of(condition, b);
+    }
+
+    @Test
+    @DisplayName("covers where the statements that give a field its value are among the rest")
+    void ownPositions() {
+        // B = A after A = 1, or before it
+        assertNotEquals(run(fieldsClass("B", store("A", 1, false), COPY_A_TO_B)),
+            run(fieldsClass("B", COPY_A_TO_B, store("A", 1, false))));
+        // A = 1, then A from code it can't see, or the other way around
+        assertNotEquals(run(fieldsClass("A", store("A", 1, false), store("A", 2, true))),
+            run(fieldsClass("A", store("A", 2, true), store("A", 1, false))));
+        // B = 2 after a branch, or in it
+        assertNotEquals(run(fieldsClass("B", branch(false), false, writer -> { })),
+            run(fieldsClass("B", branch(true), false, writer -> { })));
+        // But not where another field's statements are
+        assertEquals(run(fieldsClass("B", store("C", 3, false), store("A", 1, false), COPY_A_TO_B)),
+            run(fieldsClass("B", store("A", 1, false), store("C", 3, false), COPY_A_TO_B)));
+    }
+
+    @Test
+    @DisplayName("covers a statement that code jumps into wherever it uses any field")
+    void enteredStatement() {
+        // C's fingerprint covers B's statement, since code jumps into it, so it changes with B's value
+        assertNotEquals(run(fieldsClass("C", entering(new Label(), 3), false, writer -> { })),
+            run(fieldsClass("C", entering(new Label(), 4), false, writer -> { })));
+        assertEquals(run(fieldsClass("C", store("A", 1, false), store("B", 3, false))),
+            run(fieldsClass("C", store("A", 1, false), store("B", 4, false))), "without the jump");
+    }
+
+    /**
+     * @return {@code if (Other.flag()) A = 1;} jumping past the first instruction of a statement that sets B
+     */
+    private static List<Statement> entering(Label target, int value) {
+        return List.of(initializer -> {
+            initializer.visitMethodInsn(Opcodes.INVOKESTATIC, "net/coreprotect/Other", "flag", "()Z", false);
+            initializer.visitJumpInsn(Opcodes.IFEQ, target);
+            initializer.visitInsn(Opcodes.ICONST_1);
+            initializer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "A", "I");
+        }, initializer -> {
+            initializer.visitInsn(Opcodes.ICONST_2);
+            initializer.visitInsn(Opcodes.POP);
+            initializer.visitLabel(target);
+            initializer.visitLdcInsn(value);
+            initializer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "B", "I");
+        });
+    }
+
+    /** {@code N = m2()} */
+    private static final Statement N_FROM_M2 = initializer -> {
+        initializer.visitMethodInsn(Opcodes.INVOKESTATIC, OWNER, "m2", "()Ljava/lang/Object;", false);
+        initializer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "N", "Ljava/lang/Object;");
+    };
+
+    /** {@code N = null} */
+    private static final Statement N_NULL = initializer -> {
+        initializer.visitInsn(Opcodes.ACONST_NULL);
+        initializer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "N", "Ljava/lang/Object;");
+    };
+
+    @Test
+    @DisplayName("takes a helper that calls back one being checked as one that may do more")
+    void recursiveHelpers() {
+        // m1(r) { if (r) m2(); A++; return null; } and m2() { return m1(false); }
+        Consumer<ClassWriter> helpers = writer -> {
+            MethodVisitor m1 = writer.visitMethod(Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC, "m1",
+                "(Z)Ljava/lang/Object;", null, null);
+            m1.visitCode();
+            Label skip = new Label();
+            m1.visitVarInsn(Opcodes.ILOAD, 0);
+            m1.visitJumpInsn(Opcodes.IFEQ, skip);
+            m1.visitMethodInsn(Opcodes.INVOKESTATIC, OWNER, "m2", "()Ljava/lang/Object;", false);
+            m1.visitInsn(Opcodes.POP);
+            m1.visitLabel(skip);
+            m1.visitFieldInsn(Opcodes.GETSTATIC, OWNER, "A", "I");
+            m1.visitInsn(Opcodes.ICONST_1);
+            m1.visitInsn(Opcodes.IADD);
+            m1.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "A", "I");
+            m1.visitInsn(Opcodes.ACONST_NULL);
+            m1.visitInsn(Opcodes.ARETURN);
+            m1.visitMaxs(0, 0);
+            m1.visitEnd();
+            MethodVisitor m2 = writer.visitMethod(Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC, "m2",
+                "()Ljava/lang/Object;", null, null);
+            m2.visitCode();
+            m2.visitInsn(Opcodes.ICONST_0);
+            m2.visitMethodInsn(Opcodes.INVOKESTATIC, OWNER, "m1", "(Z)Ljava/lang/Object;", false);
+            m2.visitInsn(Opcodes.ARETURN);
+            m2.visitMaxs(0, 0);
+            m2.visitEnd();
+        };
+        Statement mFromM1 = initializer -> {
+            initializer.visitInsn(Opcodes.ICONST_1);
+            initializer.visitMethodInsn(Opcodes.INVOKESTATIC, OWNER, "m1", "(Z)Ljava/lang/Object;", false);
+            initializer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "M", "Ljava/lang/Object;");
+        };
+        assertNotEquals(run(fieldsClass("A", List.of(store("A", 1, false), mFromM1, N_FROM_M2), false, helpers)),
+            run(fieldsClass("A", List.of(store("A", 1, false), mFromM1, N_NULL), false, helpers)));
+    }
+
+    @Test
+    @DisplayName("takes a native helper, whose code it can't see, as one that may do more")
+    void nativeHelper() {
+        Consumer<ClassWriter> helper = writer -> writer.visitMethod(Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC
+            | Opcodes.ACC_NATIVE, "m2", "()Ljava/lang/Object;", null, null).visitEnd();
+        assertNotEquals(run(fieldsClass("A", List.of(store("A", 1, false), N_FROM_M2), false, helper)),
+            run(fieldsClass("A", List.of(store("A", 1, false), N_NULL), false, helper)));
+    }
+
+    @Test
+    @DisplayName("takes a call that initializes a class whose superclass may do more as one that may too")
+    void initializedSuperclass() {
+        String helper = OWNER + "$Helper";
+        String base = OWNER + "$Base";
+        ClassWriter baseWriter = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        baseWriter.visit(Opcodes.V17, Opcodes.ACC_SUPER, base, null, "java/lang/Object", null);
+        baseWriter.visitNestHost(OWNER);
+        MethodVisitor initializer = baseWriter.visitMethod(Opcodes.ACC_STATIC, "<clinit>", "()V", null, null);
+        initializer.visitCode();
+        initializer.visitInsn(Opcodes.ICONST_5);
+        initializer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "A", "I");
+        initializer.visitInsn(Opcodes.RETURN);
+        initializer.visitMaxs(0, 0);
+        initializer.visitEnd();
+        baseWriter.visitEnd();
+        ClassWriter helperWriter = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        helperWriter.visit(Opcodes.V17, Opcodes.ACC_SUPER, helper, null, base, null);
+        helperWriter.visitNestHost(OWNER);
+        MethodVisitor make = helperWriter.visitMethod(Opcodes.ACC_STATIC, "make", "()Ljava/lang/Object;", null,
+            null);
+        make.visitCode();
+        make.visitInsn(Opcodes.ACONST_NULL);
+        make.visitInsn(Opcodes.ARETURN);
+        make.visitMaxs(0, 0);
+        make.visitEnd();
+        helperWriter.visitEnd();
+        Map<String, byte[]> classes = Map.of(base, baseWriter.toByteArray(), helper, helperWriter.toByteArray());
+        Statement nFromHelper = writer -> {
+            writer.visitMethodInsn(Opcodes.INVOKESTATIC, helper, "make", "()Ljava/lang/Object;", false);
+            writer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "N", "Ljava/lang/Object;");
+        };
+        assertNotEquals(CodeFingerprint.of(fieldsClass("A", store("A", 1, false), nFromHelper), "run", "()V",
+                classes::get),
+            CodeFingerprint.of(fieldsClass("A", store("A", 1, false), N_NULL), "run", "()V", classes::get));
+    }
+
+    @Test
+    @DisplayName("takes a call that initializes a class whose superclasses loop as one that may do more")
+    void loopingSuperclasses() {
+        String x = OWNER + "$X";
+        String y = OWNER + "$Y";
+        Map<String, byte[]> classes = new HashMap<>();
+        for (String[] type : new String[][] {{x, y}, {y, x}}) {
+            ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+            writer.visit(Opcodes.V17, Opcodes.ACC_SUPER, type[0], null, type[1], null);
+            writer.visitNestHost(OWNER);
+            MethodVisitor make = writer.visitMethod(Opcodes.ACC_STATIC, "make", "()Ljava/lang/Object;", null, null);
+            make.visitCode();
+            make.visitInsn(Opcodes.ACONST_NULL);
+            make.visitInsn(Opcodes.ARETURN);
+            make.visitMaxs(0, 0);
+            make.visitEnd();
+            writer.visitEnd();
+            classes.put(type[0], writer.toByteArray());
+        }
+        Statement nFromX = initializer -> {
+            initializer.visitMethodInsn(Opcodes.INVOKESTATIC, x, "make", "()Ljava/lang/Object;", false);
+            initializer.visitFieldInsn(Opcodes.PUTSTATIC, OWNER, "N", "Ljava/lang/Object;");
+        };
+        assertNotEquals(CodeFingerprint.of(fieldsClass("A", store("A", 1, false), nFromX), "run", "()V",
+                classes::get),
+            CodeFingerprint.of(fieldsClass("A", store("A", 1, false), N_NULL), "run", "()V", classes::get));
+    }
+
+    @Test
+    @DisplayName("traces the lines of the statements of a static initializer that it covers")
+    void initializerLines() {
+        byte[] type = fieldsClass("A", store("B", 2, false), store("A", 1, false), store("C", 3, true),
+            store("B", 4, false));
+        Map<String, List<List<Integer>>> lines = CodeFingerprint.trace(type, "run", "()V", className -> null)
+            .lines();
+        // A's own statement, then C's, which may do more, then the return
+        assertEquals(List.of(List.of(11, 14)), lines.get(OWNER + "#<clinit>()V"));
+        byte[] spaced = fieldsClass("A", store("A", 1, false), store("B", 2, false), store("B", 2, false),
+            store("B", 2, false), store("B", 2, false), store("C", 3, true));
+        assertEquals(List.of(List.of(10, 10), List.of(15, 16)), CodeFingerprint.trace(spaced, "run", "()V",
+            className -> null).lines().get(OWNER + "#<clinit>()V"));
     }
 
     private static final String BASE = OWNER + "$Base";

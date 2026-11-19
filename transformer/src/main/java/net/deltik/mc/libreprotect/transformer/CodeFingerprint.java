@@ -53,13 +53,16 @@ import java.security.DigestOutputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.HexFormat;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Function;
@@ -89,7 +92,9 @@ import java.util.function.Function;
  * {@code access$...} methods through which a nested class compiled for Java
  * 8 reaches its outer class's private members are static. It covers the
  * static initializer of each class of the nest whose static fields they use
- * too, which gives those fields their values. So a method that builds its
+ * too, which gives those fields their values: of it, the statements that only
+ * give one field its value only where the code uses that field, and the rest
+ * wherever it uses any (see {@link StaticInitializer}). So a method that builds its
  * result with its class's constructor or static helpers, as
  * {@code ClickHouseJdbcConfig.forMigrationReads()} does, or that returns a
  * list that its class builds when it's initialized, as
@@ -137,6 +142,10 @@ final class CodeFingerprint {
     private static final int METHOD = -1;
     private static final int LABEL = -2;
     private static final int TRY_CATCH = -3;
+    /** Starts the part of a static initializer that may matter to any of its class's static fields */
+    private static final int SHARED = -4;
+    /** Starts the statements of a static initializer that only give a static field its value */
+    private static final int INITIALIZER = -5;
 
     private CodeFingerprint() {
     }
@@ -243,23 +252,51 @@ final class CodeFingerprint {
         String fingerprint = HexFormat.of().formatHex(digest.digest()).substring(0, LENGTH)
             + (encoder.truncated ? TRUNCATED : "");
         List<String> covers = new ArrayList<>();
+        Map<String, Set<Integer>> partial = new HashMap<>();
         for (Encoder.Followed followed : encoder.methods) {
-            covers.add(followed.owner().name + "#" + followed.method().name + followed.method().desc);
+            String member = followed.owner().name + "#" + followed.method().name + followed.method().desc;
+            covers.add(member);
+            Set<AbstractInsnNode> included = encoder.included.get(followed.method());
+            if (included != null) {
+                partial.put(member, ordinals(followed.method(), included));
+            }
         }
         // A method called with dispatch before a call without it covered it
         Set<String> calls = new LinkedHashSet<>(encoder.calls);
         calls.removeAll(covers);
         Set<String> traced = new LinkedHashSet<>(covers);
         traced.addAll(calls);
-        return new Trace(fingerprint, List.copyOf(covers), List.copyOf(calls), lines(traced, classes));
+        return new Trace(fingerprint, List.copyOf(covers), List.copyOf(calls), lines(traced, classes, partial));
+    }
+
+    /**
+     * @return the positions of some of a method's instructions among the
+     *         instructions that aren't labels, line numbers or frames, which
+     *         reading the class with or without debug information keeps
+     */
+    private static Set<Integer> ordinals(MethodNode method, Set<AbstractInsnNode> instructions) {
+        Set<Integer> ordinals = new HashSet<>();
+        int ordinal = 0;
+        for (AbstractInsnNode instruction : method.instructions) {
+            if (instruction.getOpcode() >= 0) {
+                if (instructions.contains(instruction)) {
+                    ordinals.add(ordinal);
+                }
+                ordinal++;
+            }
+        }
+        return ordinals;
     }
 
     /**
      * @param methods methods as {@code owner#name(descriptor)}
      * @param classes the classes of the JAR, by internal name, or {@code null} for one it hasn't
+     * @param partial of the methods that the fingerprint covers only some of the code of, such as a static
+     *                initializer, the {@linkplain #ordinals positions} of the instructions that it covers
      * @return the runs of lines of each method that has code with line numbers, as {@link Trace#lines} says
      */
-    private static Map<String, List<List<Integer>>> lines(Set<String> methods, Function<String, byte[]> classes) {
+    private static Map<String, List<List<Integer>>> lines(Set<String> methods, Function<String, byte[]> classes,
+                                                          Map<String, Set<Integer>> partial) {
         Map<String, ClassNode> read = new HashMap<>();
         Map<String, List<List<Integer>>> lines = new LinkedHashMap<>();
         for (String member : methods) {
@@ -281,9 +318,20 @@ final class CodeFingerprint {
                 continue;
             }
             TreeSet<Integer> numbers = new TreeSet<>();
+            Set<Integer> covered = partial.get(member);
+            int line = -1;
+            int ordinal = 0;
             for (AbstractInsnNode instruction : method.instructions) {
-                if (instruction instanceof LineNumberNode line) {
-                    numbers.add(line.line);
+                if (instruction instanceof LineNumberNode number) {
+                    line = number.line;
+                    if (covered == null) {
+                        numbers.add(line);
+                    }
+                } else if (instruction.getOpcode() >= 0) {
+                    if (covered != null && covered.contains(ordinal) && line >= 0) {
+                        numbers.add(line);
+                    }
+                    ordinal++;
                 }
             }
             if (numbers.isEmpty()) {
@@ -321,7 +369,7 @@ final class CodeFingerprint {
      *         class file from before nests, the outermost class that javac
      *         named it after
      */
-    private static String nest(ClassNode node) {
+    static String nest(ClassNode node) {
         if (node.nestHostClass != null) {
             return node.nestHostClass;
         }
@@ -344,8 +392,11 @@ final class CodeFingerprint {
      * a length prefix.
      */
     private static final class Encoder {
-        /** A method to write, with the class that declares it */
-        private record Followed(ClassNode owner, MethodNode method) {
+        /**
+         * A method to write, with the class that declares it, and the
+         * instructions to write of it, or {@code null} for all of them
+         */
+        private record Followed(ClassNode owner, MethodNode method, Set<AbstractInsnNode> only) {
         }
 
         private final DataOutputStream out;
@@ -363,13 +414,19 @@ final class CodeFingerprint {
         boolean truncated;
         /** The methods of the JAR referred to but not covered, as {@code owner#name(descriptor)}, in order */
         final Set<String> calls = new LinkedHashSet<>();
+        /** Of the static initializers covered in part, the instructions covered */
+        final Map<MethodNode, Set<AbstractInsnNode>> included = new IdentityHashMap<>();
+        /** The static initializers of the nest's classes, split by what they give fields, by class; empty for one that can't be */
+        private final Map<String, Optional<StaticInitializer>> initializers = new HashMap<>();
+        /** The static fields whose initializers are being written, as {@code owner#name:descriptor} */
+        private final Set<String> inlining = new HashSet<>();
 
         Encoder(DataOutputStream out, ClassNode owner, MethodNode method, Function<String, byte[]> classes) {
             this.out = out;
             this.nest = nest(owner);
             this.classes = classes;
             jarClasses.put(owner.name, owner);
-            methods.add(new Followed(owner, method));
+            methods.add(new Followed(owner, method, null));
             numbers.put(method, 0);
         }
 
@@ -390,10 +447,19 @@ final class CodeFingerprint {
             // Ignore ASM's pseudo-flags, such as ACC_DEPRECATED, which come from attributes
             out.writeInt(method.access & 0xFFFF);
             string(method.desc);
+            Set<AbstractInsnNode> only = followed.only();
+            if (only != null) {
+                out.writeInt(SHARED);
+                included.computeIfAbsent(method, key -> Collections.newSetFromMap(new IdentityHashMap<>()))
+                    .addAll(only);
+            }
 
-            // Only labels that something refers to matter, numbered in the order they appear
+            // Only labels that something written refers to matter, numbered in the order they appear
             Set<LabelNode> targets = new HashSet<>();
             for (AbstractInsnNode instruction : method.instructions) {
+                if (only != null && !only.contains(instruction)) {
+                    continue;
+                }
                 if (instruction instanceof JumpInsnNode jump) {
                     targets.add(jump.label);
                 } else if (instruction instanceof TableSwitchInsnNode table) {
@@ -415,7 +481,9 @@ final class CodeFingerprint {
             }
 
             for (AbstractInsnNode instruction : method.instructions) {
-                instruction(instruction);
+                if (only == null || only.contains(instruction) || instruction instanceof LabelNode) {
+                    instruction(instruction);
+                }
             }
             for (TryCatchBlockNode block : method.tryCatchBlocks) {
                 out.writeInt(TRY_CATCH);
@@ -460,7 +528,7 @@ final class CodeFingerprint {
                 // Of a final class named, a call runs what the class resolves, which no subclass overrides
                 boolean fixed = special || withoutDispatch(declaring, target)
                     || (named.access & Opcodes.ACC_FINAL) != 0;
-                number = fixed ? follow(declaring, target) : numbers.getOrDefault(target, -1);
+                number = fixed ? follow(declaring, target, null) : numbers.getOrDefault(target, -1);
             }
             if (number < 0) {
                 calls.add(declaring.name + "#" + name + descriptor);
@@ -469,10 +537,11 @@ final class CodeFingerprint {
         }
 
         /**
+         * @param only the instructions of it to write, or {@code null} for all of them
          * @return the method's number, added to the methods to write if it is
          *         new; or -1 if there are too many
          */
-        private int follow(ClassNode owner, MethodNode method) {
+        private int follow(ClassNode owner, MethodNode method, Set<AbstractInsnNode> only) {
             Integer number = numbers.get(method);
             if (number == null) {
                 if (methods.size() >= MAX_METHODS) {
@@ -480,7 +549,7 @@ final class CodeFingerprint {
                     return -1;
                 }
                 number = methods.size();
-                methods.add(new Followed(owner, method));
+                methods.add(new Followed(owner, method, only));
                 numbers.put(method, number);
             }
             return number;
@@ -489,9 +558,13 @@ final class CodeFingerprint {
         /**
          * Covers the static initializer of the nest's class whose static
          * field an instruction reads or writes, which gives the field its
-         * value, as a list of tables that a method returns.
+         * value, as a list of tables that a method returns: the part of it
+         * that may matter to any field, and here, the statements that only
+         * give this field its value (see {@link StaticInitializer}). So a
+         * field that the class adds, removes or initializes otherwise changes
+         * only the fingerprints of code that uses it.
          */
-        private void initializer(FieldInsnNode field) {
+        private void initializer(FieldInsnNode field) throws IOException {
             if (field.getOpcode() != Opcodes.GETSTATIC && field.getOpcode() != Opcodes.PUTSTATIC) {
                 return;
             }
@@ -501,11 +574,43 @@ final class CodeFingerprint {
                 declared.name.equals(field.name) && declared.desc.equals(field.desc)); depth++) {
                 declaring = depth < MAX_DEPTH ? superclass(declaring) : null;
             }
-            if (declaring != null && nest(declaring).equals(nest)) {
-                MethodNode initializer = declared(declaring, "<clinit>", "()V");
-                if (initializer != null) {
-                    follow(declaring, initializer);
+            if (declaring == null || !nest(declaring).equals(nest)) {
+                return;
+            }
+            MethodNode initializer = declared(declaring, "<clinit>", "()V");
+            if (initializer == null) {
+                return;
+            }
+            ClassNode owner = declaring;
+            StaticInitializer split = initializers.computeIfAbsent(owner.name, name -> Optional.ofNullable(
+                StaticInitializer.of(owner, initializer, this::jarClass, CodeFingerprint::nest))).orElse(null);
+            int number = follow(owner, initializer, split == null ? null : split.shared);
+            // Unless the fingerprint is of the static initializer itself, and covers all of it
+            boolean partial = number >= 0 && methods.get(number).only() != null;
+            List<StaticInitializer.Statement> own = split == null ? null
+                : split.own.get(field.name + ":" + field.desc);
+            String key = owner.name + "#" + field.name + ":" + field.desc;
+            if (own == null || !inlining.add(key)) {
+                return;
+            }
+            // Written with the code that uses the field, each where it is among the rest; a statement that only
+            // builds a value has no labels
+            try {
+                out.writeInt(INITIALIZER);
+                out.writeInt(own.size());
+                for (StaticInitializer.Statement statement : own) {
+                    out.writeInt(statement.position());
+                    out.writeInt(statement.instructions().size());
+                    for (AbstractInsnNode instruction : statement.instructions()) {
+                        instruction(instruction);
+                    }
+                    if (partial) {
+                        included.computeIfAbsent(initializer, method -> Collections.newSetFromMap(
+                            new IdentityHashMap<>())).addAll(statement.instructions());
+                    }
                 }
+            } finally {
+                inlining.remove(key);
             }
         }
 
