@@ -55,16 +55,25 @@ import java.util.regex.Pattern;
  * member     &lt;id&gt; &lt;owner#name(descriptor)|owner#name:descriptor|owner&gt;
  * optional   &lt;id&gt; &lt;member&gt; &lt;present|absent&gt;
  * relies     &lt;id&gt; &lt;owner#name(descriptor)&gt; &lt;why&gt;
+ * reaches    &lt;id&gt; &lt;owner#name(descriptor) of a relies line&gt; &lt;owner#name(descriptor)&gt;
  * enum       &lt;id&gt; &lt;owner&gt; &lt;CONSTANT,CONSTANT,...&gt;
  * doc        &lt;id&gt; &lt;path in upstream's source tree&gt; &lt;what it documents&gt;
  * rejected   &lt;id&gt; &lt;strategy&gt; &lt;why&gt;
  * </pre>
  *
+ * <p>A {@code reaches} line says that the code which the fingerprint of a
+ * method relied on covers calls another method: the call that marks the
+ * behavior relied on, which the extensions find through a method that
+ * upstream keeps, wherever upstream puts the code behind it.
+ *
  * <p>Anything else breaks the contract, so that a change of format can't
  * quietly go unaudited. So does a report that disagrees with the upstream
  * JAR: a member of an available capability, or an optional member said to be
  * present, that the JAR doesn't have; an optional member said to be absent
- * that it has; or enum constants other than the JAR's.
+ * that it has; enum constants other than the JAR's; or a call that an
+ * available capability's fingerprint is said to reach but doesn't, which
+ * means that upstream moved what the capability relies on out of the
+ * fingerprint's reach.
  */
 final class CapabilityReport {
 
@@ -75,8 +84,8 @@ final class CapabilityReport {
     /** How the audit's key of a capability's way starts, followed by its ID */
     static final String CAPABILITY_KEY = "capability ";
 
-    private static final Map<String, Integer> FIELDS = Map.of(
-        "capability", 4, "member", 3, "optional", 4, "relies", 4, "enum", 4, "doc", 4, "rejected", 4);
+    private static final Map<String, Integer> FIELDS = Map.of("capability", 4, "member", 3, "optional", 4,
+        "relies", 4, "reaches", 4, "enum", 4, "doc", 4, "rejected", 4);
 
     /** Capability IDs and strategies */
     private static final Pattern NAME = Pattern.compile("[a-z0-9][a-z0-9.-]*");
@@ -156,6 +165,7 @@ final class CapabilityReport {
         }
 
         UpstreamMembers members = new UpstreamMembers(upstream);
+        List<String[]> reaches = new ArrayList<>();
         for (String[] fields : details) {
             Builder builder = builders.get(fields[1]);
             ContractViolation.require(builder != null, "The capability report has a '" + fields[0] + "' line for "
@@ -186,6 +196,14 @@ final class CapabilityReport {
                     builder.relies.add(new TransformReport.Reliance(fields[2], fields[3],
                         CodeFingerprint.of(upstream, fields[2])));
                 }
+                case "reaches" -> {
+                    for (int field = 2; field <= 3; field++) {
+                        ContractViolation.require(METHOD.matcher(fields[field]).matches(), "The capability report's "
+                            + where + " names '" + fields[field] + "', expected a method as owner#name(descriptor)");
+                    }
+                    // Checked once every line is read, since a capability's 'reaches' lines sort before its 'relies'
+                    reaches.add(fields);
+                }
                 case "enum" -> {
                     ContractViolation.require(CLASS_NAME.matcher(fields[2]).matches(), "The capability report's "
                         + where + " names '" + fields[2] + "', expected a class's internal name");
@@ -214,10 +232,44 @@ final class CapabilityReport {
                 default -> throw new IllegalStateException(fields[0]);
             }
         }
+        for (String[] fields : reaches) {
+            reached(builders.get(fields[1]), fields[2], fields[3], upstream);
+        }
 
         List<TransformReport.Capability> capabilities = builders.values().stream().map(Builder::build).toList();
         observations(capabilities); // Check that the keys the audit compares have one value each
         return new CapabilityReport(upstreamSha256, capabilities);
+    }
+
+    /**
+     * Require the code that the fingerprint of a method relied on covers to
+     * call {@code callee}, for an available capability.
+     */
+    private static void reached(Builder builder, String member, String callee, JarContents upstream) {
+        ContractViolation.require(builder.relies.stream().anyMatch(reliance -> reliance.member().equals(member)),
+            "The capability report says that " + builder.id + " relies on " + member + " reaching " + callee
+                + ", but has no 'relies' line for " + member);
+        if (!builder.available()) {
+            return;
+        }
+        CodeFingerprint.Trace trace = CodeFingerprint.trace(upstream, member);
+        agree(!trace.fingerprint().equals(CodeFingerprint.ABSENT), "says that " + builder.id + " relies on "
+            + member + " reaching " + callee + ", but the upstream JAR doesn't have " + member);
+        if (trace.covers().contains(callee) || trace.calls().contains(callee)) {
+            return;
+        }
+        if (CodeFingerprint.truncated(trace.fingerprint())) {
+            throw new ContractViolation(builder.id + " relies on what " + member + " does through its call of "
+                + callee + ", but the code that its fingerprint covers doesn't call it within the first "
+                + CodeFingerprint.MAX_METHODS + " methods it covers, after which the fingerprint stops. Upstream may "
+                + "have grown that code past them, or moved the call. Make the extensions rely on a method closer to "
+                + "the call, whose fingerprint covers it.");
+        }
+        throw new ContractViolation(builder.id + " relies on what " + member + " does through its call of " + callee
+            + ", but the code that its fingerprint covers doesn't call it. Upstream may have moved that code out of "
+            + "the fingerprint's reach, such as into a thread's run(), which only Thread.start() calls, or stopped "
+            + "calling " + callee + ". Find where upstream calls it now, and make the extensions rely on a method "
+            + "whose fingerprint covers that, or on what does the job instead.");
     }
 
     /**

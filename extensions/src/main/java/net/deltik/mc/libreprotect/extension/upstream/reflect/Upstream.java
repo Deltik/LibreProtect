@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -226,6 +227,54 @@ public final class Upstream {
      * @param methodDescriptors methods by name and descriptor, such as {@code pauseConsumer(I)V}
      */
     public void relyOn(String what, String className, String... methodDescriptors) throws Missing {
+        for (String method : methodDescriptors) {
+            String member = declared(className, method);
+            if (findings != null) {
+                findings.relies.put(member, what);
+            }
+        }
+    }
+
+    /**
+     * Like {@link #relyOn(String, String, String...)}, for behavior of code
+     * that a method runs, wherever upstream puts that code: in the method, or
+     * in code of its class's nest that it runs without dispatch, such as its
+     * lambdas and private helpers, which the method's fingerprint covers too.
+     * So a method that upstream keeps, such as a command's
+     * {@code runCommand}, can stand for code that upstream moves around
+     * behind it.
+     *
+     * <p>The build checks that the code the fingerprint covers calls, or
+     * refers to, each of {@code callees}: calls that mark the behavior. The
+     * calls that only the code relied on makes, such as a worker's, keep it
+     * in reach: code moved out of the fingerprint's reach with them, as into
+     * a {@code run()} that only {@code Thread.start()} calls, then fails the
+     * build, rather than leaving the audit blind to its changes.
+     *
+     * @param method  a method of the class by name and descriptor, such as
+     *                {@code runCommand(Lorg/bukkit/command/CommandSender;Z[Ljava/lang/String;)V}
+     * @param callees methods as {@code owner#name(descriptor)}, with binary
+     *                or internal class names, which must exist too
+     */
+    public void relyOnReaching(String what, String className, String method, String... callees) throws Missing {
+        String member = declared(className, method);
+        Set<String> reached = new TreeSet<>();
+        for (String callee : callees) {
+            int hash = callee.indexOf('#');
+            reached.add(declared(callee.substring(0, hash), callee.substring(hash + 1)));
+        }
+        if (findings != null) {
+            findings.relies.put(member, what);
+            findings.reaches.computeIfAbsent(member, key -> new TreeSet<>()).addAll(reached);
+        }
+    }
+
+    /**
+     * @param method a method by name and descriptor
+     * @return the method as the capability report writes it
+     * @throws Missing unless the class declares it
+     */
+    private String declared(String className, String method) throws Missing {
         String owner = Descriptors.binaryName(className);
         ClassFile file = isHidden(owner) ? null : classFile(loader, owner);
         if (file == null) {
@@ -234,25 +283,16 @@ public final class Upstream {
         if (!file.complete) {
             throw new Missing(name + "'s class " + Descriptors.simpleName(owner) + " can't be read");
         }
-        for (String method : methodDescriptors) {
-            int parenthesis = method.indexOf('(');
-            String methodName = method.substring(0, parenthesis);
-            String descriptor = method.substring(parenthesis);
-            boolean found = false;
-            for (ClassFile.Member candidate : file.methods) {
-                if (candidate.name.equals(methodName) && candidate.descriptor.equals(descriptor)
-                    && !isHidden(owner, methodName, descriptor, false)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                throw missing(Missing.readable(Descriptors.internalName(owner) + "#" + method));
-            }
-            if (findings != null) {
-                findings.relies.put(Descriptors.internalName(owner) + "#" + method, what);
+        int parenthesis = method.indexOf('(');
+        String methodName = method.substring(0, parenthesis);
+        String descriptor = method.substring(parenthesis);
+        for (ClassFile.Member candidate : file.methods) {
+            if (candidate.name.equals(methodName) && candidate.descriptor.equals(descriptor)
+                && !isHidden(owner, methodName, descriptor, false)) {
+                return Descriptors.internalName(owner) + "#" + method;
             }
         }
+        throw missing(Missing.readable(Descriptors.internalName(owner) + "#" + method));
     }
 
     /**

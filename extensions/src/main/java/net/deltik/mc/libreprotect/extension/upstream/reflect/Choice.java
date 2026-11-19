@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * How LibreProtect uses one capability of upstream: the first of its ways,
@@ -335,6 +336,11 @@ public final class Choice<T> {
             }
             for (Map.Entry<String, String> relies : findings.relies.entrySet()) {
                 lines.add(line("relies", id, relies.getKey(), relies.getValue()));
+            }
+            for (Map.Entry<String, Set<String>> reaches : findings.reaches.entrySet()) {
+                for (String callee : reaches.getValue()) {
+                    lines.add(line("reaches", id, reaches.getKey(), callee));
+                }
             }
             for (Map.Entry<String, List<String>> enumeration : findings.enums.entrySet()) {
                 lines.add(line("enum", id, enumeration.getKey(), String.join(",", enumeration.getValue())));

@@ -464,6 +464,21 @@ class UpstreamTest {
                 () -> upstream.hiding(HOLDER + "#<init>").relyOn("labels", HOLDER, "<init>(Ljava/lang/String;)V"))
                 .getMessage());
         }
+
+        @Test
+        @DisplayName("should require the method a way relies on reaching a call, and the method it calls")
+        void relyOnReaching() throws Exception {
+            upstream.relyOnReaching("counts", HOLDER, "count()I", HOLDER + "#locked()V",
+                HOLDER + "#<init>(Ljava/lang/String;)V");
+
+            assertEquals("Fake has no Holder.count(long)", assertThrows(Missing.class,
+                () -> upstream.relyOnReaching("counts", HOLDER, "count(J)I", HOLDER + "#locked()V")).getMessage());
+            assertEquals("Fake has no Holder.locked(int)", assertThrows(Missing.class,
+                () -> upstream.relyOnReaching("counts", HOLDER, "count()I", HOLDER + "#locked()V",
+                    HOLDER + "#locked(I)V")).getMessage());
+            assertThrows(Missing.class, () -> upstream.hiding(HOLDER + "#locked").relyOnReaching("counts", HOLDER,
+                "count()I", HOLDER + "#locked()V"));
+        }
     }
 
     @Nested

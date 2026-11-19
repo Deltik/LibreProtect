@@ -49,6 +49,8 @@ class ChoiceTest {
         holder.staticFieldIfPresent("running", boolean.class);
         upstream.type(FAKE + "Engines").asEnum();
         upstream.relyOn("counts\tup", HOLDER, "count()I");
+        upstream.relyOnReaching("greets twice", HOLDER, "greet(Ljava/lang/String;)Ljava/lang/String;",
+            HOLDER + "#twice(I)I");
         upstream.doc("docs/fake.md", "how greetings work");
         return "newer";
     }
@@ -87,6 +89,9 @@ class ChoiceTest {
             "optional\tfake.greeting\t" + HOLDER_INTERNAL + "#gone()V\tabsent",
             "optional\tfake.greeting\t" + HOLDER_INTERNAL + "#running:Z\tpresent",
             "relies\tfake.greeting\t" + HOLDER_INTERNAL + "#count()I\tcounts up",
+            "relies\tfake.greeting\t" + HOLDER_INTERNAL + "#greet(Ljava/lang/String;)Ljava/lang/String;\tgreets twice",
+            "reaches\tfake.greeting\t" + HOLDER_INTERNAL + "#greet(Ljava/lang/String;)Ljava/lang/String;\t"
+                + HOLDER_INTERNAL + "#twice(I)I",
             "enum\tfake.greeting\tnet/deltik/mc/libreprotect/extension/upstream/reflect/fake/Engines"
                 + "\tCLICKHOUSE,DUCKDB,MYSQL,POSTGRESQL,SQLITE",
             "doc\tfake.greeting\tdocs/fake.md\thow greetings work"), choice.reportLines());

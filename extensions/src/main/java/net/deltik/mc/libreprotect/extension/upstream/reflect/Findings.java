@@ -38,6 +38,8 @@ final class Findings {
     final Map<String, Boolean> optional = new TreeMap<>();
     /** Upstream methods whose behavior the way relies on, and what it relies on */
     final Map<String, String> relies = new TreeMap<>();
+    /** Of the methods relied on, those whose fingerprints must cover a call to each of some methods */
+    final Map<String, Set<String>> reaches = new TreeMap<>();
     /** Upstream enums the way depends on, with their constants in declaration order */
     final Map<String, List<String>> enums = new TreeMap<>();
     /** Upstream's documentation the way follows, by path in its source tree */

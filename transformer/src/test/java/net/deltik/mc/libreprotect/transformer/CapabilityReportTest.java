@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 
 import java.io.IOException;
@@ -267,6 +268,145 @@ class CapabilityReportTest {
         void unavailable() throws IOException {
             read(UPSTREAM, "capability\ta\tabsent\tA", "capability\tb\tunavailable\tB",
                 "member\ta\tnet/coreprotect/NoSuchClass", "member\tb\t" + CONSUMER + "#noSuchMethod()V");
+        }
+    }
+
+    @Nested
+    @DisplayName("checks that a fingerprint reaches the call it's said to")
+    class Reaches {
+
+        private static final String COMMAND = "net/coreprotect/Command";
+        private static final String WORKER = COMMAND + "$Worker";
+        private static final String RUN = COMMAND + "#run()V";
+        private static final String CALLEE = CONSUMER + "#lockDatabaseReload(J)Z";
+
+        /** How {@code Command.run()} gets to the call */
+        enum Route { DIRECT, HELPER, THREAD }
+
+        private static void call(MethodVisitor method) {
+            method.visitInsn(Opcodes.LCONST_0);
+            method.visitMethodInsn(Opcodes.INVOKESTATIC, CONSUMER, "lockDatabaseReload", "(J)Z", false);
+            method.visitInsn(Opcodes.POP);
+        }
+
+        private static MethodVisitor begin(ClassWriter writer, int access, String name) {
+            MethodVisitor method = writer.visitMethod(access, name, "()V", null, null);
+            method.visitCode();
+            return method;
+        }
+
+        private static void end(MethodVisitor method) {
+            method.visitInsn(Opcodes.RETURN);
+            method.visitMaxs(0, 0);
+            method.visitEnd();
+        }
+
+        /**
+         * @return the upstream JAR, with a command whose static {@code run()}
+         *         calls {@code Consumer.lockDatabaseReload(long)} the given way:
+         *         itself, through a private helper, or through a thread's
+         *         {@code run()}, which only {@code Thread.start()} calls
+         */
+        private static JarContents upstream(Route route) {
+            JarContents jar = CapabilityReportTest.upstream();
+            ClassWriter command = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+            command.visit(Opcodes.V17, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, COMMAND, null, "java/lang/Object", null);
+            MethodVisitor run = begin(command, Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "run");
+            switch (route) {
+                case DIRECT -> call(run);
+                case HELPER -> {
+                    run.visitMethodInsn(Opcodes.INVOKESTATIC, COMMAND, "admit", "()V", false);
+                    MethodVisitor admit = begin(command, Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC, "admit");
+                    call(admit);
+                    end(admit);
+                }
+                case THREAD -> {
+                    run.visitTypeInsn(Opcodes.NEW, WORKER);
+                    run.visitInsn(Opcodes.DUP);
+                    run.visitMethodInsn(Opcodes.INVOKESPECIAL, WORKER, "<init>", "()V", false);
+                    run.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/lang/Thread", "start", "()V", false);
+                    ClassWriter worker = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+                    worker.visit(Opcodes.V17, Opcodes.ACC_SUPER, WORKER, null, "java/lang/Thread", null);
+                    worker.visitNestHost(COMMAND);
+                    MethodVisitor constructor = begin(worker, 0, "<init>");
+                    constructor.visitVarInsn(Opcodes.ALOAD, 0);
+                    constructor.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Thread", "<init>", "()V", false);
+                    end(constructor);
+                    MethodVisitor work = begin(worker, Opcodes.ACC_PUBLIC, "run");
+                    call(work);
+                    end(work);
+                    worker.visitEnd();
+                    jar.put(WORKER + ".class", worker.toByteArray());
+                }
+                default -> throw new IllegalArgumentException(route.name());
+            }
+            end(run);
+            command.visitEnd();
+            jar.put(COMMAND + ".class", command.toByteArray());
+            return jar;
+        }
+
+        private CapabilityReport read(Route route, String... lines) throws IOException {
+            return CapabilityReport.read(String.join("\n", lines) + "\n", upstream(route), directory);
+        }
+
+        private String violation(Route route, String... lines) {
+            return assertThrows(ContractViolation.class, () -> read(route, lines)).getMessage();
+        }
+
+        private static String[] report(String capability, String member) {
+            return new String[] {UPSTREAM, capability, "reaches\ta\t" + member + "\t" + CALLEE,
+                "relies\ta\t" + member + "\tAdmits"};
+        }
+
+        @Test
+        @DisplayName("in the method, or in code of its nest that it runs without dispatch")
+        void reached() throws IOException {
+            for (Route route : List.of(Route.DIRECT, Route.HELPER)) {
+                CapabilityReport report = read(route, report("capability\ta\tone\tA", RUN));
+                assertEquals(List.of(RUN), report.capabilities.get(0).relies().stream()
+                    .map(TransformReport.Reliance::member).toList(), route.name());
+            }
+        }
+
+        @Test
+        @DisplayName("and fails the build once upstream moves the call out of the fingerprint's reach")
+        void movedAway() {
+            String message = violation(Route.THREAD, report("capability\ta\tone\tA", RUN));
+            assertTrue(message.contains("a relies on what " + RUN + " does through its call of " + CALLEE
+                + ", but the code that its fingerprint covers doesn't call it"), message);
+        }
+
+        @Test
+        @DisplayName("but not for a capability that isn't available, whose members the JAR needn't have")
+        void unavailable() throws IOException {
+            read(Route.THREAD, report("capability\ta\tunavailable\tA", COMMAND + "#gone()V"));
+        }
+
+        @Test
+        @DisplayName("rejects a method that the JAR doesn't have")
+        void absent() {
+            String message = violation(Route.DIRECT, report("capability\ta\tone\tA", COMMAND + "#gone()V"));
+            assertTrue(message.contains("but the upstream JAR doesn't have " + COMMAND + "#gone()V"), message);
+        }
+
+        @Test
+        @DisplayName("rejects a 'reaches' line without a 'relies' line for its method")
+        void withoutReliance() {
+            String message = violation(Route.DIRECT, UPSTREAM, "capability\ta\tone\tA",
+                "reaches\ta\t" + RUN + "\t" + CALLEE);
+            assertTrue(message.contains("says that a relies on " + RUN + " reaching " + CALLEE + ", but has no "
+                + "'relies' line for " + RUN), message);
+        }
+
+        @Test
+        @DisplayName("rejects a 'reaches' line naming something other than two methods")
+        void syntax() {
+            for (String line : List.of("reaches\ta\t" + RUN + "\tnet/coreprotect/A#x:I",
+                "reaches\ta\tnet/coreprotect/A\t" + CALLEE)) {
+                String message = violation(Route.DIRECT, UPSTREAM, "capability\ta\tone\tA", line);
+                assertTrue(message.contains("expected a method as owner#name(descriptor)"), message);
+            }
         }
     }
 

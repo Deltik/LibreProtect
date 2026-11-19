@@ -45,7 +45,7 @@ class CapabilityReportTest {
 
     /** How many fields each kind of record has */
     private static final Map<String, Integer> FIELDS = Map.of("upstream", 3, "capability", 4, "member", 3,
-        "optional", 4, "relies", 4, "enum", 4, "doc", 4, "rejected", 4);
+        "optional", 4, "relies", 4, "reaches", 4, "enum", 4, "doc", 4, "rejected", 4);
 
     @TempDir
     Path folder;
@@ -103,8 +103,11 @@ class CapabilityReportTest {
     void onlyUpstream() {
         for (String line : CapabilityReport.render(Capabilities.current(), null).split("\n")) {
             String[] fields = line.split("\t");
-            if (List.of("member", "optional", "relies", "enum").contains(fields[0])) {
+            if (List.of("member", "optional", "relies", "reaches", "enum").contains(fields[0])) {
                 assertTrue(fields[2].startsWith("net/coreprotect/"), line);
+            }
+            if (fields[0].equals("reaches")) {
+                assertTrue(fields[3].startsWith("net/coreprotect/"), line);
             }
         }
     }

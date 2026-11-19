@@ -54,6 +54,7 @@ import java.util.List;
  * member      &lt;id&gt;  &lt;class, owner#field:descriptor or owner#method(descriptor)&gt;
  * optional    &lt;id&gt;  &lt;member&gt;  present|absent
  * relies      &lt;id&gt;  &lt;owner#method(descriptor)&gt;  &lt;what probing can't prove&gt;
+ * reaches     &lt;id&gt;  &lt;owner#method(descriptor) it relies on&gt;  &lt;owner#method(descriptor) its code calls&gt;
  * enum        &lt;id&gt;  &lt;owner&gt;  &lt;CONSTANT,...&gt; in declaration order
  * doc         &lt;id&gt;  &lt;path in upstream's source tree&gt;  &lt;what it documents&gt;
  * rejected    &lt;id&gt;  &lt;strategy&gt;  &lt;why&gt;
