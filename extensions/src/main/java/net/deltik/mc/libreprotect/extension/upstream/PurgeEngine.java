@@ -284,21 +284,37 @@ public abstract class PurgeEngine {
                 + " 100 ms", Names.CONSUMER, ConsumerGate.pauseLoop(upstream));
             upstream.relyOn("gives no connection without force while purgeRunning is set", Names.DATABASE,
                 "getConnection(ZZZI)Ljava/sql/Connection;");
-            upstream.relyOn("refuses without database-lock, and otherwise has the active ClickHouse database purge",
-                retention);
             String range = "(JJILjava/util/List;Z)J";
-            upstream.relyOn("has its retention purge, once it's open and owns its dataset", Names.CLICKHOUSE_DATABASE,
-                "purge" + range);
-            upstream.relyOn("drops the monthly partitions that the time range covers, deletes the rest of its rows,"
-                + " and cleans up what they leave of entities in the time range, one purge at a time; where"
-                + " CoreProtect has a lookup index, it refuses while mutations of the event table are unfinished,"
-                + " such as an earlier purge's deletions, and closes the index to lookups until it completes, or"
-                + " fails with none unfinished", Names.CLICKHOUSE_RETENTION,
-                "purge" + range);
-            upstream.relyOnSince(Designs.CLICKHOUSE_LOOKUP_INDEX, "opens the lookup index again when CoreProtect"
-                + " opens the database after a purge that didn't complete, but refuses to open the database while"
-                + " mutations of the event table are unfinished", Names.CLICKHOUSE_LOOKUP_INDEX,
-                "recover(Ljava/sql/Connection;Ljava/lang/String;Ljava/lang/String;Ljava/util/UUID;)V");
+            String recover = "recover(Ljava/sql/Connection;Ljava/lang/String;Ljava/lang/String;Ljava/util/UUID;)V";
+            if (Designs.CLICKHOUSE_GATE_RECOVERY.isIn(upstream)) {
+                upstream.relyOn("refuses without database-lock, and otherwise has the active ClickHouse database purge"
+                    + " as the only installation that uses it, which database-lock vouches for", retention);
+                upstream.relyOn("has its retention purge as the only installation that uses the dataset, once it's"
+                    + " open and owns it", Names.CLICKHOUSE_DATABASE, "purgeExclusive" + range);
+                relyOnRetention(upstream, "(JJILjava/util/List;ZZ)J", "; as the only installation, it first opens"
+                    + " the index again wherever any installation, this one included, left it closed");
+                upstream.relyOnSince(Designs.CLICKHOUSE_LOOKUP_INDEX, "opens the lookup index again wherever any"
+                    + " installation left it closed, but, if it finds any closed, refuses while mutations of the event"
+                    + " table are unfinished", Names.CLICKHOUSE_LOOKUP_INDEX,
+                    "recoverStale(Ljava/sql/Connection;Ljava/lang/String;Ljava/lang/String;)V");
+                upstream.relyOnSince(Designs.CLICKHOUSE_LOOKUP_INDEX, "opens the lookup index again when CoreProtect"
+                    + " opens the database after a purge of this installation's that didn't complete, under the owner"
+                    + " of this build or of an older one, but refuses to open the database while mutations of the"
+                    + " event table are unfinished", Names.CLICKHOUSE_LOOKUP_INDEX, "recoverStartup(Ljava/sql/"
+                    + "Connection;Ljava/lang/String;Ljava/lang/String;Ljava/util/UUID;Ljava/util/UUID;)V");
+                upstream.relyOnSince(Designs.CLICKHOUSE_LOOKUP_INDEX, "opens the lookup index again after the owning"
+                    + " installation's purge fails, unless mutations of the event table are unfinished, which the"
+                    + " purge's failure then reports", Names.CLICKHOUSE_LOOKUP_INDEX, recover);
+            } else {
+                upstream.relyOn("refuses without database-lock, and otherwise has the active ClickHouse database"
+                    + " purge", retention);
+                upstream.relyOn("has its retention purge, once it's open and owns its dataset",
+                    Names.CLICKHOUSE_DATABASE, "purge" + range);
+                relyOnRetention(upstream, range, "");
+                upstream.relyOnSince(Designs.CLICKHOUSE_LOOKUP_INDEX, "opens the lookup index again when CoreProtect"
+                    + " opens the database after a purge that didn't complete, but refuses to open the database while"
+                    + " mutations of the event table are unfinished", Names.CLICKHOUSE_LOOKUP_INDEX, recover);
+            }
             upstream.relyOnSince(Designs.CLICKHOUSE_LOOKUP_INDEX, "closes or opens the lookup index to lookups for"
                 + " the installation that owns the purge, which lookups read only while no installation's is closed",
                 Names.CLICKHOUSE_LOOKUP_INDEX, "setReady(Ljava/sql/Connection;Ljava/lang/String;Ljava/util/UUID;Z)V");
@@ -316,6 +332,18 @@ public abstract class PurgeEngine {
                 + " does nothing otherwise", Names.CLICKHOUSE_RETENTION, "cancelPurge()V");
             upstream.doc("docs/auto-purge.md", "ClickHouse purges with its columnar retention, dropping monthly"
                 + " partitions that the time range covers, and refuses to purge while database-lock is disabled");
+        }
+
+        /**
+         * @param purge the retention's purge by its descriptor
+         * @param exclusive what the purge does besides as the only installation, if anything
+         */
+        private static void relyOnRetention(Upstream upstream, String purge, String exclusive) throws Missing {
+            upstream.relyOn("drops the monthly partitions that the time range covers, deletes the rest of its rows,"
+                + " and cleans up what they leave of entities in the time range, one purge at a time; where"
+                + " CoreProtect has a lookup index, it refuses while mutations of the event table are unfinished,"
+                + " such as an earlier purge's deletions, and closes the index to lookups until it completes, or"
+                + " fails with none unfinished" + exclusive, Names.CLICKHOUSE_RETENTION, "purge" + purge);
         }
 
         /**

@@ -90,6 +90,20 @@ public final class Designs {
         Names.CONSUMER + "#releaseOperationPause",
         Names.CONSUMER + "#setMaintenancePaused");
 
+    /**
+     * CoreProtect's recovery of the ClickHouse lookup index after
+     * maintenance: at startup, it opens the index again where this build or
+     * an older one left it closed, and its purge, as the only installation
+     * that uses the database, which the purge's need of
+     * {@code database-lock} vouches for, first opens it wherever any
+     * installation left it closed, such as one that stopped during a purge.
+     * Its traces come from the exclusive purge and both recoveries.
+     */
+    public static final Design CLICKHOUSE_GATE_RECOVERY = Design.of("ClickHouse lookup gate recovery",
+        Names.CLICKHOUSE_DATABASE + "#purgeExclusive",
+        Names.CLICKHOUSE_LOOKUP_INDEX + "#recoverStale",
+        Names.CLICKHOUSE_LOOKUP_INDEX + "#recoverStartup");
+
     private Designs() {
     }
 }

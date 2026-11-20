@@ -33,6 +33,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
@@ -95,6 +96,43 @@ class NewerDesignTest {
             Designs.CLICKHOUSE_LOOKUP_INDEX.traces().toArray(new String[0])));
         assertEquals("compatibility-rows", before.get(ClickHouseApi.WRITES).strategy());
         assertEquals("retention", before.get(PurgeEngine.CLICKHOUSE).strategy());
+    }
+
+    @Test
+    @DisplayName("should know ClickHouse's lookup gate recovery by every one of its traces, and CoreProtect 24 by none")
+    void gateRecoveryTraces() {
+        // The reviewed CoreProtect 25 has it
+        AssumeCapability.reviewedUpstream();
+        Upstream upstream = Upstream.coreProtect();
+        for (String trace : Designs.CLICKHOUSE_GATE_RECOVERY.traces()) {
+            assertEquals(MULTI_ENGINE, upstream.has(trace), trace);
+        }
+    }
+
+    @Test
+    @DisplayName("should purge ClickHouse as the only installation while any one trace of gate recovery is left")
+    void gateRecoveryAnyTrace() {
+        AssumeCapability.strategy("auto-purge.engine.clickhouse", "retention");
+        assumeTrue(Designs.CLICKHOUSE_GATE_RECOVERY.isIn(Upstream.coreProtect()),
+            "needs ClickHouse's lookup gate recovery");
+        Map<String, String> missing = Map.of(
+            Names.CLICKHOUSE_DATABASE + "#purgeExclusive",
+            "CoreProtect has no ClickHouseDatabase.purgeExclusive(long, long, int, List, boolean)",
+            Names.CLICKHOUSE_LOOKUP_INDEX + "#recoverStale",
+            "CoreProtect has no ClickHouseLookupIndex.recoverStale(Connection, String, String)",
+            Names.CLICKHOUSE_LOOKUP_INDEX + "#recoverStartup",
+            "CoreProtect has no ClickHouseLookupIndex.recoverStartup(Connection, String, String, UUID, UUID)");
+        assertEquals(Designs.CLICKHOUSE_GATE_RECOVERY.traces().size(), missing.size());
+        for (Map.Entry<String, String> trace : missing.entrySet()) {
+            Choice<?> without = Capabilities.probe(Upstream.coreProtect().hiding(trace.getKey()))
+                .get(PurgeEngine.CLICKHOUSE);
+            assertEquals(trace.getValue(), without.reason(), trace::getKey);
+        }
+
+        // Without any, the purge before it is tried, which here fails only on the retention's older shape
+        Choice<?> before = Capabilities.probe(Upstream.coreProtect().hiding(
+            Designs.CLICKHOUSE_GATE_RECOVERY.traces().toArray(new String[0]))).get(PurgeEngine.CLICKHOUSE);
+        assertEquals("CoreProtect has no ClickHouseRetention.purge(long, long, int, List, boolean)", before.reason());
     }
 
     @Test

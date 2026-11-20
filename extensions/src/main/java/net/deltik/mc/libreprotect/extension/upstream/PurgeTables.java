@@ -66,8 +66,8 @@ public final class PurgeTables {
     private static PurgeTables purgePolicy(Upstream upstream) throws Missing {
         StaticMethod<?, RuntimeException> tables = upstream.type(Names.PURGE_POLICY).staticMethod(
             "getPurgeableTables", List.class);
-        upstream.relyOn("lists the tables whose rows older than a purge's time it removes, by their time column",
-            tables);
+        upstream.relyOn("lists the tables whose rows older than a purge's time it removes, by their time column,"
+            + " block before entity, whose rows block's kill rows refer to", tables);
         StaticMethod<Void, RuntimeException> create = upstream.type(Names.DATABASE).staticMethodShaped(
             "createDatabaseTables", void.class, Shape.exactly(String.class), Shape.exactly(boolean.class),
             Shape.exactly(Connection.class), Shape.enumWith("SQLITE", "MYSQL"), Shape.exactly(boolean.class));
