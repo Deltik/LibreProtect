@@ -271,8 +271,9 @@ class MigrationCapabilitiesTest {
                     "net/coreprotect/consumer/Consumer#endDatabaseReload(Z)V",
                     "net/coreprotect/consumer/Consumer#haltPersistence()V",
                     "net/coreprotect/services/ShutdownService#waitForMaintenanceCompletion(J)V",
+                    // Whatever it returns
                     "net/coreprotect/config/ConfigHandler#loadDatabase(Lnet/coreprotect/database/clickhouse/"
-                        + "ClickHouseDatabase;Z)V",
+                        + "ClickHouseDatabase;Z)",
                     "net/coreprotect/config/DatabaseConfigWriter#persistDatabaseType("
                         + "Lnet/coreprotect/database/DatabaseType;)V"));
             } else {
@@ -290,8 +291,9 @@ class MigrationCapabilitiesTest {
                     "net/coreprotect/config/Config#load(Ljava/io/InputStream;)V"));
             }
 
-            assertTrue(relied.containsAll(expected), () -> "missing: " + expected.stream()
-                .filter(member -> !relied.contains(member)).toList());
+            List<String> missing = expected.stream()
+                .filter(member -> relied.stream().noneMatch(found -> found.startsWith(member))).toList();
+            assertTrue(missing.isEmpty(), () -> "missing: " + missing);
             assertTrue(protocol.reportLines().stream().anyMatch(line -> line.startsWith("doc\tmigrate-db.protocol\t"
                 + "docs/database-migration.md\t")), protocol.reportLines()::toString);
             // What only one engine needs is that engine's
@@ -508,9 +510,9 @@ class MigrationCapabilitiesTest {
                 assertTrue(target.isAvailable(), target::toString);
             }
             assertEquals(EnumSet.of(Engine.SQLITE, Engine.MYSQL, Engine.DUCKDB), migration.engines());
-            // What they rely on is the same method, under its new signature
+            // What they rely on is the same method, under its new signature, whatever it returns
             String relied = "relies\tmigrate-db.protocol\tnet/coreprotect/config/ConfigHandler#loadDatabase(L"
-                + renamedClass.replace('.', '/') + ";Z)V\t";
+                + renamedClass.replace('.', '/') + ";Z)";
             assertTrue(protocol.reportLines().stream().anyMatch(line -> line.startsWith(relied)),
                 protocol.reportLines()::toString);
             // Only ClickHouse's own migrations name the class, and turn off

@@ -195,6 +195,21 @@ public final class UpstreamClass {
         return staticMethod(methodName, returns, Arrays.asList(parameters), false);
     }
 
+    /**
+     * Like {@link #staticMethodShaped}, whatever the method returns, such as
+     * one that returned nothing and now returns whether it succeeded. Its
+     * result is dropped.
+     */
+    public StaticMethod<Void, RuntimeException> staticMethodShapedIgnoringResult(String methodName,
+                                                                                 Shape... parameters)
+        throws Missing {
+        List<Shape> shapes = Arrays.asList(parameters);
+        Found found = method(methodName, null, shapes, true, false);
+        MethodType handleType = MethodType.methodType(void.class, handleTypes(shapes));
+        return new StaticMethod<>(found.what, found.recorded, found.handle(Handle.Kind.STATIC_METHOD, handleType),
+            void.class, found.parameterTypes, found.type, RuntimeException.class);
+    }
+
     private <R> StaticMethod<R, RuntimeException> staticMethod(String methodName, Class<R> returns,
                                                                List<Shape> parameters, boolean optional)
         throws Missing {

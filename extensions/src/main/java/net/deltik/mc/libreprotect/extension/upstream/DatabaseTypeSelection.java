@@ -100,7 +100,7 @@ final class DatabaseTypeSelection implements Selection {
         upstream.relyOn("loads the database that databaseType and the loaded settings select, keeping the caches of"
             + " identifiers, and throws if it can't", loadDatabase);
         upstream.relyOn("closes the database in use first, and refuses one with the unfinished migration's status"
-            + " unless a migration activates it", checkedLoad(handler));
+            + " unless a migration activates it by handing it a prepared database", checkedLoad(handler));
         upstream.relyOn("closes the connections of every engine, so that the next database can be loaded",
             Names.DATABASE, "closeConnection()V");
         // Later CoreProtects refuse to load an external engine with a table-prefix that this doesn't match
@@ -123,13 +123,16 @@ final class DatabaseTypeSelection implements Selection {
      *         {@code loadDatabase()} and a migration's activation of
      *         ClickHouse go through, which checks the unfinished migration's
      *         status. It's known by its name and its shape: a database, then
-     *         whether a migration activates it. Its first parameter is
-     *         ClickHouse's class, which only migrations from or to
-     *         ClickHouse use, so a rename of that class doesn't turn off the
-     *         migrations between the other engines.
+     *         a flag, which some builds use for whether a migration activates
+     *         it and later ones for whether the server is starting. Later
+     *         builds also return whether it loaded, which is ignored. Its
+     *         first parameter is ClickHouse's class, which only migrations
+     *         from or to ClickHouse use, so a rename of that class doesn't
+     *         turn off the migrations between the other engines.
      */
     static StaticMethod<Void, RuntimeException> checkedLoad(UpstreamClass handler) throws Missing {
-        return handler.staticMethodShaped("loadDatabase", void.class, Shape.anyObject(), Shape.exactly(boolean.class));
+        return handler.staticMethodShapedIgnoringResult("loadDatabase", Shape.anyObject(),
+            Shape.exactly(boolean.class));
     }
 
     @Override
