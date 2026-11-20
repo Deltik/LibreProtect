@@ -26,6 +26,7 @@ import net.deltik.mc.libreprotect.extension.upstream.reflect.Missing;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.Upstream;
 import net.deltik.mc.libreprotect.extension.upstream.reflect.UpstreamClass;
 
+import java.util.Collections;
 import java.util.function.IntSupplier;
 
 /**
@@ -63,10 +64,13 @@ public final class IncompleteMarks {
         IntSupplier inactive = database.intConstant("DATABASE_LOCK_INACTIVE");
         upstream.relyOn("finds the unfinished migration's status in the active database's lock row",
             database.staticMethod("hasIncompleteMigrationMarker", boolean.class));
-        upstream.relyOn("loads the database as CoreProtect's own, not as a migration's activation, so that the"
-            + " unfinished migration's status is checked", Names.CONFIG_HANDLER, "loadDatabase()V");
+        upstream.relyOn("loads the database as CoreProtect's own, not as a migration's activation, without a"
+            + " prepared ClickHouse database, so that the unfinished migration's status is checked",
+            Names.CONFIG_HANDLER, "loadDatabase()V");
         upstream.relyOn("refuses to load a database with the unfinished migration's status, unless a migration"
-            + " activates it", DatabaseTypeSelection.checkedLoad(upstream.type(Names.CONFIG_HANDLER)));
+            + " activates it by handing it a prepared ClickHouse database; on some builds, at startup on MySQL with"
+            + " database-lock, it first fails, before creating tables, when the database lock check finds the"
+            + " database locked", DatabaseTypeSelection.checkedLoad(upstream.type(Names.CONFIG_HANDLER)));
         relyOnStartupCheck(upstream, "treats a database whose lock row has the unfinished migration's status as"
             + " locked");
         return new IncompleteMarks(incomplete, inactive);
@@ -102,8 +106,15 @@ public final class IncompleteMarks {
      */
     private static void relyOnStartupCheck(Upstream upstream, String check) throws Missing {
         upstream.relyOn(check, Names.CONFIG_HANDLER, "checkDatabaseLock(Ljava/sql/Statement;)Z");
-        upstream.relyOn("fails CoreProtect's start when the database lock check finds the database locked",
-            Names.CONFIG_HANDLER, "performInitialization(Z)Z");
+        // Later CoreProtects check MySQL's lock before they create its tables, where the table may not exist yet
+        String beforeTables = "checkDatabaseLock(Ljava/sql/Statement;Z)Z";
+        if (upstream.type(Names.CONFIG_HANDLER).staticMethodsNamed(Collections.singleton("checkDatabaseLock"))
+            .contains(beforeTables)) {
+            upstream.relyOn(check + "; with true, it treats a missing MySQL lock table as unlocked",
+                Names.CONFIG_HANDLER, beforeTables);
+        }
+        upstream.relyOn("fails CoreProtect's start when loading its database throws or fails, or when the database"
+            + " lock check finds the database locked", Names.CONFIG_HANDLER, "performInitialization(Z)Z");
         upstream.relyOn("reports CoreProtect's start as failed when its initialization fails",
             Names.PLUGIN_INITIALIZATION, "initializePlugin(" + Names.descriptor(Names.CORE_PROTECT) + ")Z");
         upstream.relyOn("disables CoreProtect when its start fails", Names.CORE_PROTECT, "onEnable()V");
