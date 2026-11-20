@@ -633,7 +633,9 @@ public final class ClickHouseApi {
             upstream.relyOn("registers the active database's writer in CoreProtect's data folder, where a sink"
                 + " registers too, so that only one of them writes", Names.CLICKHOUSE_DATABASE,
                 "initialize(" + Names.descriptor(Names.CLICKHOUSE_JDBC_CONFIG) + "Ljava/lang/String;)" + database);
-            upstream.relyOn("assigns a new identifier above the largest assigned, under the lock on ConfigHandler",
+            upstream.relyOn("assigns a new identifier above the largest assigned, under the lock on ConfigHandler,"
+                + " and on ClickHouse publishes it before caching it; while a database reload pauses persistence"
+                + " or another thread holds the database write lock, it assigns none and gives -1",
                 Names.CONFIG_HANDLER, "resolveIdentifierId(Lnet/coreprotect/config/ConfigHandler$CacheType;"
                     + "Ljava/lang/String;Z)I");
             upstream.relyOn("records an assigned identifier among the assigned ones and raises the counter to it",

@@ -37,9 +37,10 @@ import java.util.TreeSet;
  * class, while it resolves an identifier that
  * its cache lacks, such as a material's ID, by allocating a new one, reading
  * it from ClickHouse or reloading that kind's whole cache; while it reloads
- * a kind's cache to look one up, when {@code database-lock} is off; and
- * while it drops one from its cache. Those read the active database's type,
- * so changing it under this lock keeps a resolution from seeing half of the
+ * a kind's cache to look one up, when {@code database-lock} is off; and,
+ * depending on the build, while it drops one from its cache or caches one
+ * that ClickHouse has published. Those read the active database's type, so
+ * changing it under this lock keeps a resolution from seeing half of the
  * change. CoreProtect 24 has no such lock.
  *
  * <p>The bulk cache loaders, such as {@code loadWorlds} and
@@ -50,7 +51,8 @@ import java.util.TreeSet;
  * across kinds. So hold it only while CoreProtect's consumer is paused and
  * its reloads are locked out, as while a migration holds CoreProtect's
  * database reload; then only the locked resolutions, from event listeners,
- * can change identifiers.
+ * can change identifiers, and on later builds none can: they first try the
+ * database reload's lock, which the migration holds.
  */
 public final class ConfigLock {
 
@@ -62,8 +64,10 @@ public final class ConfigLock {
 
     static {
         HOLDERS.put("resolveMissingIdentifierId", "resolves an identifier that its cache lacks, allocating a new"
-            + " one, reading it from ClickHouse or reloading that kind's whole cache, while holding the lock on"
-            + " ConfigHandler");
+            + " one, reading it from ClickHouse or reloading that kind's whole cache, and on ClickHouse publishing"
+            + " a new one there before caching it, while holding the lock on ConfigHandler");
+        HOLDERS.put("cachePublishedIdentifier", "caches an identifier once ClickHouse has published it, raising the"
+            + " counter, while holding the lock on ConfigHandler");
         HOLDERS.put("reloadAndGetId", "reloads a kind's whole identifier cache to look one up, when database-lock"
             + " is off, while holding the lock on ConfigHandler");
         HOLDERS.put("loadMissingIdentifierValue", "reads the value of an identifier that its cache lacks from"
