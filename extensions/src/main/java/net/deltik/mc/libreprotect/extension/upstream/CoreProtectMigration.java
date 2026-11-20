@@ -260,6 +260,11 @@ public final class CoreProtectMigration implements MigrationBridge {
         if (flags.converterRunning()) {
             throw new MigrationException("CoreProtect is upgrading its database. Wait for it to finish.");
         }
+        // Before the pause's refusal, which a halt can leave saying what doesn't help, such as to reload
+        if (protocol.gate().persistenceHalted()) {
+            throw new MigrationException("CoreProtect stopped saving events after a database failure. Restart the"
+                + " server before migrating.");
+        }
         String refusal = protocol.pause().refusal();
         if (refusal != null) {
             throw new MigrationException(refusal);
@@ -270,10 +275,6 @@ public final class CoreProtectMigration implements MigrationBridge {
         if (!protocol.selection().databaseLockEnabled()) {
             throw new MigrationException("Migrations need database-lock: true in config.yml, so that CoreProtect"
                 + " refuses to start on an unfinished target. Set it, restart the server, and try again.");
-        }
-        if (protocol.gate().persistenceHalted()) {
-            throw new MigrationException("CoreProtect stopped saving events after a database failure. Restart the"
-                + " server before migrating.");
         }
         Engine source = activeEngine();
         if (source == target) {

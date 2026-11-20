@@ -24,6 +24,7 @@ import net.coreprotect.config.ConfigHandler;
 import net.coreprotect.consumer.Consumer;
 import net.deltik.mc.libreprotect.extension.common.DatabaseSettings;
 import net.deltik.mc.libreprotect.extension.common.Engine;
+import net.deltik.mc.libreprotect.extension.common.PurgeChunkLock;
 import net.deltik.mc.libreprotect.extension.migration.ForwardingSink;
 import net.deltik.mc.libreprotect.extension.migration.MigrationException;
 import net.deltik.mc.libreprotect.extension.migration.MigrationSession;
@@ -141,6 +142,116 @@ class ReloadLifecyclePauseTest extends MigrationSessionContract {
         }));
 
         assertTrue(paused.get());
+        assertReloadPossible();
+    }
+
+    @Test
+    @DisplayName("should pause between the consumer's batches, since one that the pause interrupted would lose"
+        + " identifiers")
+    void waitsForConsumerBatch() throws Exception {
+        AssumeCapability.strategy("consumer.gate", "pause-claims");
+        MigrationSession session = bridge().claim(Engine.MYSQL);
+        assertTrue(Lifecycle.tryClaimConsumerPause(), "the consumer's gate was held");
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        AtomicReference<Object> gateAfterPause = new AtomicReference<>();
+        Thread worker = new Thread(() -> {
+            try {
+                session.pause();
+                gateAfterPause.set(coreProtect.get("Consumer.isPaused"));
+                session.close();
+            } catch (Throwable e) {
+                failure.set(e);
+            }
+        }, "LibreProtect migration");
+        worker.start();
+        try {
+            Thread.sleep(500);
+            assertFalse(Lifecycle.isDatabaseReloadPaused(), "the pause began during the consumer's batch");
+        } finally {
+            Lifecycle.releaseOperationPause();
+        }
+
+        worker.join(30_000);
+        assertFalse(worker.isAlive());
+        assertNull(failure.get());
+        assertEquals(false, gateAfterPause.get(), "the pause kept the consumer's gate");
+        assertReloadPossible();
+    }
+
+    @Test
+    @DisplayName("should wait for an auto-purge chunk before it holds the consumer's gate, which the chunk may wait"
+        + " for")
+    void chunkBeforeGate() throws Exception {
+        AssumeCapability.strategy("consumer.gate", "pause-claims");
+        MigrationSession session = bridge().claim(Engine.MYSQL);
+        CountDownLatch holding = new CountDownLatch(1);
+        CountDownLatch finish = new CountDownLatch(1);
+        Thread chunk = new Thread(() -> {
+            try {
+                assertTrue(PurgeChunkLock.tryHold(1000));
+                holding.countDown();
+                finish.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                if (PurgeChunkLock.isHeldByCurrentThread()) {
+                    PurgeChunkLock.release();
+                }
+            }
+        }, "LibreProtect auto-purge");
+        chunk.start();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread worker = new Thread(() -> {
+            try {
+                session.pause();
+            } catch (Throwable e) {
+                failure.set(e);
+            } finally {
+                session.close();
+            }
+        }, "LibreProtect migration");
+        // Whatever fails, the chunk ends: its lock is the JVM's, which every later test of auto-purge would wait for
+        try {
+            assertTrue(holding.await(5, TimeUnit.SECONDS));
+            worker.start();
+            Thread.sleep(500);
+
+            assertEquals(false, coreProtect.get("Consumer.isPaused"), "the pause held the gate while a chunk ran");
+            assertFalse(Lifecycle.isDatabaseReloadPaused(), "the pause began while a chunk ran");
+        } finally {
+            finish.countDown();
+            chunk.join(5_000);
+        }
+        worker.join(30_000);
+        assertFalse(worker.isAlive());
+        assertNull(failure.get());
+        assertReloadPossible();
+    }
+
+    @Test
+    @DisplayName("should refuse a manual purge that holds the consumer's gate rather than wait for it")
+    void refusesManualPurgeHoldingGate() throws Exception {
+        AssumeCapability.strategy("consumer.gate", "pause-claims");
+        MigrationSession session = bridge().claim(Engine.MYSQL);
+        // As /co purge holds it, once it has claimed the database
+        ConfigHandler.purgeRunning = true;
+        coreProtect.call("Consumer.setMaintenancePaused", true);
+        Throwable failure;
+        try {
+            failure = onWorker(() -> {
+                try {
+                    session.pause();
+                } finally {
+                    session.close();
+                }
+            });
+        } finally {
+            coreProtect.call("Consumer.setMaintenancePaused", false);
+            ConfigHandler.purgeRunning = false;
+        }
+
+        assertInstanceOf(MigrationException.class, failure);
+        assertEquals(PURGE_RUNNING, failure.getMessage());
         assertReloadPossible();
     }
 
@@ -444,6 +555,22 @@ class ReloadLifecyclePauseTest extends MigrationSessionContract {
     }
 
     @Test
+    @DisplayName("should refuse while CoreProtect waits for /co reload after a failure, saying so")
+    void refusesWhileReloadRequired() {
+        // As after an upgrade or a purge of its database failed
+        coreProtect.call("Consumer.requireDatabaseReload");
+        try {
+            MigrationException refusal = assertThrows(MigrationException.class, () -> bridge().claim(Engine.MYSQL));
+
+            assertEquals("CoreProtect paused saving events until its database is reloaded. Run /co reload, and try"
+                + " again.", refusal.getMessage());
+            assertFalse(ConfigHandler.migrationRunning);
+        } finally {
+            Lifecycle.endDatabaseReload(true);
+        }
+    }
+
+    @Test
     @DisplayName("should switch without a hook that tidies up after it, saying what CoreProtect wasn't told")
     void switchesWithoutAHook() throws Exception {
         useMySQL();
@@ -474,6 +601,23 @@ class ReloadLifecyclePauseTest extends MigrationSessionContract {
         assertEquals("CoreProtect stopped saving events after a database failure. Restart the server before"
             + " migrating.", refusal.getMessage());
         assertFalse(ConfigHandler.migrationRunning);
+    }
+
+    @Test
+    @DisplayName("should say to restart, not to reload, once CoreProtect stopped saving events during a reload")
+    void refusesHaltedDuringReload() {
+        // As a switch back to the source that failed leaves it
+        coreProtect.call("Consumer.requireDatabaseReload");
+        coreProtect.set("Consumer.persistenceHalted", true);
+        try {
+            MigrationException refusal = assertThrows(MigrationException.class, () -> bridge().claim(Engine.MYSQL));
+
+            assertEquals("CoreProtect stopped saving events after a database failure. Restart the server before"
+                + " migrating.", refusal.getMessage());
+            assertFalse(ConfigHandler.migrationRunning);
+        } finally {
+            Lifecycle.endDatabaseReload(true);
+        }
     }
 
     @Test

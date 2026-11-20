@@ -290,7 +290,7 @@ Before you start:
 * Don't change the new database's settings once the migration starts. LibreProtect checks them again before it copies and before it switches, and stops if they changed.
 * The ClickHouse server must be a version that CoreProtect supports (see [CoreProtect's documentation](https://docs.coreprotect.net/)), with an Atomic database. Before it copies anything, the migration asks CoreProtect's own check whether the server is new enough, and stops if it isn't.
 
-While the migration runs, CoreProtect keeps logging: new events wait in memory and go to the new database after the switch. Lookups, rollbacks, purges and `/co reload` are refused until it finishes. The console shows the progress. Don't stop the server until the migration reports its result.
+While the migration runs, CoreProtect keeps logging: new events wait in memory and go to the new database after the switch. On CoreProtect versions that don't add new names to the database while it's busy, a painting placed or broken meanwhile, of a variant that CoreProtect hasn't logged before, is logged without its variant, as during `/co reload`. Lookups, rollbacks, purges and `/co reload` are refused until it finishes. The console shows the progress. Don't stop the server until the migration reports its result.
 
 Before it switches, LibreProtect checks the copy: every table's row count and row IDs, every row of small tables and reference tables, and a sample of the rows of larger tables. `--full-validation` compares every row instead. Any difference stops the migration before the switch.
 

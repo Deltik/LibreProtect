@@ -46,6 +46,8 @@ final class ReloadLifecyclePause implements Pause {
 
     private static final long AUTO_PURGE_TIMEOUT_MILLIS = 10_000;
     private static final long RETRY_MILLIS = 100;
+    /** Short, since lookups that wait for the consumer's gate take it as soon as it's free */
+    private static final long GATE_RETRY_MILLIS = 5;
     private static final long PAUSE_TIMEOUT_MILLIS = 120_000;
     private static final long POLL_MILLIS = 250;
 
@@ -57,6 +59,7 @@ final class ReloadLifecyclePause implements Pause {
     private final StaticMethod<Boolean, RuntimeException> reloadPaused;
     private final StaticMethod<?, RuntimeException> shutdownSignal;
     private final StaticMethod<Boolean, InterruptedException> awaitDrain;
+    private final ConsumerGate gate;
     private final Flags flags;
     private final Hooks.PurgeWorker purgeWorker;
     /** CoreProtect's recovery of DuckDB, or {@code null}; only a migration from DuckDB needs it (see {@link EngineSide}) */
@@ -75,6 +78,7 @@ final class ReloadLifecyclePause implements Pause {
         awaitDrain = upstream.type(Names.DATABASE).staticMethod("awaitConnectionDrain", boolean.class, long.class)
             .throwing(InterruptedException.class);
         MigrationProtocol.need(upstream, StartResult.CAPABILITY);
+        gate = MigrationProtocol.need(upstream, ConsumerGate.CAPABILITY);
         flags = MigrationProtocol.need(upstream, Flags.CAPABILITY);
         purgeWorker = MigrationProtocol.need(upstream, Hooks.PURGE_WORKER);
         recovery = MigrationProtocol.orNull(upstream, Hooks.DUCKDB_RECOVERY);
@@ -111,8 +115,13 @@ final class ReloadLifecyclePause implements Pause {
         if (manualPurgeRunning()) {
             return StartResult.of(StartResult.Kind.PURGE_RUNNING.name()).refusal();
         }
-        if (reloadRunning.call() || reloadPaused.call() || (recovery != null && recovery.pending())) {
+        if (reloadRunning.call() || (recovery != null && recovery.pending())) {
             return "CoreProtect is reloading or recovering its database. Wait for it to finish.";
+        }
+        if (reloadPaused.call()) {
+            // Such as after a purge or an upgrade of its database failed
+            return "CoreProtect paused saving events until its database is reloaded. Run /co reload, and try"
+                + " again.";
         }
         return null;
     }
@@ -154,31 +163,74 @@ final class ReloadLifecyclePause implements Pause {
          * Begin the reload, retrying for a few seconds while auto-purge holds
          * the database for a chunk; it stops once it sees
          * {@code migrationRunning}, and the pause waits for its chunk lock too.
+         *
+         * <p>The reload begins between the consumer's batches, with its gate
+         * held until the reload's lock is taken: some CoreProtects refuse
+         * the identifiers that a batch resolves once a reload begins, so a
+         * batch that the reload interrupted would store events without them.
          */
         @Override
         void doAcquire() throws MigrationException, InterruptedException {
-            long autoPurgeDeadline = System.nanoTime() + AUTO_PURGE_TIMEOUT_MILLIS * 1_000_000L;
-            while (!reloading) {
-                StartResult result = StartResult.of(begin.call());
-                if (result.started()) {
-                    reloading = true;
-                } else if (result.kind() != StartResult.Kind.PURGE_RUNNING || manualPurgeRunning()) {
-                    throw new MigrationException(result.refusal());
-                } else {
-                    waitFor(autoPurgeDeadline, "Auto-purge didn't pause for the migration");
-                    Thread.sleep(RETRY_MILLIS);
-                }
-            }
             long deadline = System.nanoTime() + PAUSE_TIMEOUT_MILLIS * 1_000_000L;
-            // Auto-purge's claim already keeps its chunks out of the reload; this makes sure, as without the lifecycle
+            // Before taking the gate, which a chunk may wait for while it holds its lock; once it sees
+            // migrationRunning, auto-purge starts no other chunk
             while (!PurgeChunkLock.awaitNoChunk(POLL_MILLIS)) {
                 waitFor(deadline, "Auto-purge didn't finish its current step");
             }
-            while (!lock.call(POLL_MILLIS)) {
-                waitFor(deadline, "CoreProtect's database work didn't finish");
+            boolean autoPurgeRefused = false;
+            long autoPurgeDeadline = deadline;
+            boolean gated = false;
+            try {
+                while (!reloading) {
+                    if (!gate.tryHold()) {
+                        // A manual purge holds the gate until it's done, and a halt for good
+                        refuseHeldGate();
+                        waitFor(deadline, "CoreProtect's lookups or its consumer didn't pause");
+                        Thread.sleep(GATE_RETRY_MILLIS);
+                        continue;
+                    }
+                    gated = true;
+                    StartResult result = StartResult.of(begin.call());
+                    if (result.started()) {
+                        reloading = true;
+                        break;
+                    }
+                    // Auto-purge takes the gate for its chunks
+                    gate.release();
+                    gated = false;
+                    if (result.kind() != StartResult.Kind.PURGE_RUNNING || manualPurgeRunning()) {
+                        throw new MigrationException(result.refusal());
+                    }
+                    if (!autoPurgeRefused) {
+                        autoPurgeRefused = true;
+                        autoPurgeDeadline = System.nanoTime() + AUTO_PURGE_TIMEOUT_MILLIS * 1_000_000L;
+                    }
+                    waitFor(autoPurgeDeadline, "Auto-purge didn't pause for the migration");
+                    Thread.sleep(RETRY_MILLIS);
+                }
+                while (!lock.call(POLL_MILLIS)) {
+                    waitFor(deadline, "CoreProtect's database work didn't finish");
+                }
+            } finally {
+                if (gated) {
+                    gate.release();
+                }
             }
             while (!awaitDrain.call(POLL_MILLIS)) {
                 waitFor(deadline, "CoreProtect's database connections didn't close");
+            }
+        }
+
+        /**
+         * @throws MigrationException if the gate is held by what the
+         *         migration doesn't wait for
+         */
+        private void refuseHeldGate() throws MigrationException {
+            if (manualPurgeRunning()) {
+                throw new MigrationException(StartResult.of(StartResult.Kind.PURGE_RUNNING.name()).refusal());
+            }
+            if (gate.persistenceHalted()) {
+                throw new MigrationException(StartResult.of(StartResult.Kind.PERSISTENCE_HALTED.name()).refusal());
             }
         }
 

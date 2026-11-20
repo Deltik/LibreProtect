@@ -94,6 +94,19 @@ final class Lifecycle {
     }
 
     /**
+     * Claim the consumer's gate, as a batch of the consumer does.
+     *
+     * @return whether it was free
+     */
+    static boolean tryClaimConsumerPause() {
+        return consumer("tryClaimConsumerPause", boolean.class).call();
+    }
+
+    static void releaseOperationPause() {
+        consumer("releaseOperationPause", void.class).call();
+    }
+
+    /**
      * @return the status of a database lock row that marks an unfinished migration
      */
     static int incompleteStatus() {
