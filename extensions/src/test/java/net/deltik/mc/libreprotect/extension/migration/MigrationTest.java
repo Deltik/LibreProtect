@@ -396,6 +396,21 @@ class MigrationTest {
             assertEquals("", clickHouse.apply("user", "user", ""));
             assertEquals("", relational.apply("user", "uuid", ""));
         }
+
+        @Test
+        @DisplayName("should treat a sign row without an action as ClickHouse stores it only where ClickHouse is"
+            + " involved")
+        void clickHouseSignActions() throws Exception {
+            FakeBridge bridge = new FakeBridge(null);
+            Transcoder toClickHouse = Migration.canonical(bridge, Engine.SQLITE, Engine.CLICKHOUSE);
+            Transcoder relational = Migration.canonical(bridge, Engine.SQLITE, Engine.MYSQL);
+
+            assertEquals(0L, toClickHouse.apply("sign", "action", null));
+            assertEquals(1, toClickHouse.apply("sign", "action", 1));
+            assertNull(toClickHouse.apply("block", "action", null));
+            assertNull(toClickHouse.apply("sign", "color", null));
+            assertNull(relational.apply("sign", "action", null));
+        }
     }
 
     @Test

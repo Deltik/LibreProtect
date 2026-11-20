@@ -32,6 +32,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.SQLIntegrityConstraintViolationException;
 import java.util.ArrayList;
@@ -411,6 +412,61 @@ class ClickHouseRowSourceTest {
             server.insertEvent(prefix, "entity_spawn", 4, spawn(null, null, "uuid-b", null, 0));
 
             assertEquals(new TableStats(2, 3, 4), source.stats("entity_spawn"));
+        }
+    }
+
+    @Nested
+    @DisplayName("Sign rows that CoreProtect's views leave out")
+    class HiddenSigns {
+
+        @Test
+        @DisplayName("should name sign rows without an action before copying, and how to keep them")
+        void withoutAction() throws SQLException {
+            // As earlier LibreProtect builds copied them from CoreProtect before 2.19
+            server.insertEvent(prefix, "sign", 3, sign(null));
+            server.insertEvent(prefix, "sign", 4, sign(1));
+            // A rollback of row 3, as CoreProtect records it: the same key, only rolled_back set
+            Map<String, Object> rollback = located(1_700_000_000L, null, 1, 5, null, 7);
+            rollback.put("rolled_back", 1);
+            server.insertEvent(prefix, "sign", 3, rollback);
+
+            SQLDataException e = assertThrows(SQLDataException.class, () -> source.stats("sign"));
+            String remedy = "ALTER TABLE " + reads.qualified(server.config().database(), prefix + "event_data")
+                + " UPDATE action = 0 WHERE family = 'sign' AND action IS NULL AND user_id IS NOT NULL SETTINGS"
+                + " mutations_sync = 2";
+            assertEquals("ClickHouse has 1 sign row without an action, which CoreProtect leaves out, so a copy would"
+                + " lose them. An earlier LibreProtect migration stored them so, from a database of CoreProtect"
+                + " before 2.19. To keep them, give them the action that CoreProtect reads them with on SQLite and"
+                + " MySQL in ClickHouse, then migrate again: " + remedy, e.getMessage());
+
+            server.execute(remedy);
+            try (ClickHouseRowSource again = new ClickHouseRowSource(reads, server.config(), prefix)) {
+                assertEquals(new TableStats(2, 3, 4), again.stats("sign"));
+                List<String> columns = again.columns("sign");
+                Row restored = again.read("sign", columns, 0, 10).get(0);
+                assertEquals(3, restored.rowId());
+                assertEquals(0L, restored.values()[columns.indexOf("action")]);
+                assertEquals(1L, restored.values()[columns.indexOf("rolled_back")]);
+            }
+        }
+
+        @Test
+        @DisplayName("should copy signs whose rows without an action only update their state")
+        void stateOnly() throws SQLException {
+            server.insertEvent(prefix, "sign", 4, sign(1));
+            // A rollback of a row that was purged since, which CoreProtect leaves out too
+            Map<String, Object> rollback = located(1_600_000_000L, null, 1, 5, null, 7);
+            rollback.put("rolled_back", 1);
+            server.insertEvent(prefix, "sign", 2, rollback);
+
+            assertEquals(new TableStats(1, 4, 4), source.stats("sign"));
+        }
+
+        private Map<String, Object> sign(Integer action) {
+            Map<String, Object> row = located(1_700_000_000L, 3L, 1, 5, 64, 7);
+            row.put("action", action);
+            row.put("line_1", "Hello");
+            return row;
         }
     }
 

@@ -275,6 +275,15 @@ class ClickHouseEndpointsTest {
         }
 
         @Test
+        @DisplayName("should store a sign row without an action as CoreProtect reads it, since ClickHouse's views leave"
+            + " such rows out")
+        void signWithoutAction() throws SQLException {
+            // From CoreProtect before 2.19, which left the action of older sign rows unset
+            assertEquals(0L, ClickHouseRowSink.toClickHouse(family("sign"), "sign", "action", null, 1));
+            assertEquals(2L, ClickHouseRowSink.toClickHouse(family("sign"), "sign", "action", 2L, 1));
+        }
+
+        @Test
         @DisplayName("should pass other values through, block metadata included")
         void others() throws SQLException {
             byte[] meta = {(byte) 0xac, (byte) 0xed, 0, 5};
@@ -337,7 +346,17 @@ class ClickHouseEndpointsTest {
             Arguments.of("entity_spawn", "yaw", 1e40, "(1.0E40) is out of range for ClickHouse's Float32"),
             Arguments.of("entity_spawn", "x", "far", "('far') isn't a number"),
             Arguments.of("chat", "message", 5L, "(5) isn't text or binary data"),
-            Arguments.of("material_map", "id", -3L, "(-3) is out of range for ClickHouse's UInt32"));
+            Arguments.of("material_map", "id", -3L, "(-3) is out of range for ClickHouse's UInt32"),
+            // CoreProtect's views or lookups of ClickHouse leave rows out without them
+            Arguments.of("block", "action", null, "is missing, without which CoreProtect leaves the row out"),
+            Arguments.of("container", "action", null, "is missing, without which CoreProtect leaves the row out"),
+            Arguments.of("entity_container", "action", null, "is missing, without which CoreProtect leaves the row"
+                + " out"),
+            Arguments.of("entity_interaction", "action", null, "is missing, without which CoreProtect leaves the row"
+                + " out"),
+            Arguments.of("item", "action", null, "is missing, without which CoreProtect leaves the row out"),
+            Arguments.of("entity_spawn", "origin_x", null, "is missing, without which CoreProtect leaves the row"
+                + " out"));
     }
 
     static Stream<Arguments> fit() {
@@ -359,7 +378,9 @@ class ClickHouseEndpointsTest {
             Arguments.of("entity_spawn", "block_rowid", 5_000_000_000L),
             Arguments.of("user", "uuid", ""),
             Arguments.of("skull", "skin", null),
-            Arguments.of("world", "world", "world_the_end"));
+            Arguments.of("world", "world", "world_the_end"),
+            Arguments.of("session", "action", null),
+            Arguments.of("entity_spawn", "origin_y", null));
     }
 
     /**

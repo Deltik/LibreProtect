@@ -586,6 +586,10 @@ final class ClickHouseRowSink implements RowSink {
         } else if (column.equals("uuid") && "".equals(value)
             && (familyTable.equals("user") || familyTable.equals("username_log"))) {
             converted = null;
+        } else if (value == null && column.equals("action") && familyTable.equals("sign")) {
+            // CoreProtect from before 2.19 left the action of older sign rows unset, which it reads as 0 on the
+            // other engines; its lookups look for placements and edits only, and ClickHouse's leave such rows out
+            converted = 0L;
         }
         ClickHouseColumns.requireFits(family, table, column, converted, rowId);
         return converted;

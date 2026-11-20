@@ -346,7 +346,8 @@ final class Migration implements Runnable {
      *         canonical encoding; a value that has none, which the copy kept
      *         unchanged, compares as it is. Values of engines with the same
      *         encoding compare as they are. ClickHouse can't store a NULL
-     *         uuid, so there NULL and empty are the same.
+     *         uuid, so there NULL and empty are the same, and its copy of a
+     *         sign row without an action has 0, as CoreProtect reads it.
      */
     static Transcoder canonical(MigrationBridge bridge, Engine from, Engine to) {
         boolean encodingsDiffer = from.isColumnar() != to.isColumnar();
@@ -355,6 +356,9 @@ final class Migration implements Runnable {
             if (clickHouse && isEmpty(value) && column.equalsIgnoreCase("uuid")
                 && (table.equals("user") || table.equals("username_log"))) {
                 return null;
+            }
+            if (clickHouse && value == null && column.equalsIgnoreCase("action") && table.equals("sign")) {
+                return 0L;
             }
             if (!encodingsDiffer) {
                 return value;

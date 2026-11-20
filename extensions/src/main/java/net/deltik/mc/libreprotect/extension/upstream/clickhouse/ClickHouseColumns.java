@@ -89,6 +89,17 @@ final class ClickHouseColumns {
 
     private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
 
+    /**
+     * The column of each table without which CoreProtect's views or its
+     * lookups leave a row out, taking it for an update of an event's state,
+     * which sets nothing else, rather than for an event (see
+     * {@link ClickHouseApi}); its lookups of entity_interaction skip rows
+     * without an action that its view shows
+     */
+    static final Map<String, String> SHOWN_WITH = Map.of("block", "action", "container", "action",
+        "entity_container", "action", "entity_interaction", "action", "item", "action", "sign", "action",
+        "entity_spawn", "origin_x");
+
     private ClickHouseColumns() {
     }
 
@@ -179,6 +190,8 @@ final class ClickHouseColumns {
         String problem = misfit(base, value);
         if (value == null && !nullable && !LOCATED.contains(physical)) {
             problem = "is missing, which ClickHouse requires";
+        } else if (value == null && column.equals(SHOWN_WITH.get(family.tableName()))) {
+            problem = "is missing, without which CoreProtect leaves the row out";
         }
         if (problem != null) {
             throw new SQLDataException("Can't write " + table + " row " + rowId + " to ClickHouse: its " + column

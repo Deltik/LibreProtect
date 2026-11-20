@@ -32,6 +32,7 @@ import net.deltik.mc.libreprotect.extension.upstream.clickhouse.ClickHouseApi.Po
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.SQLIntegrityConstraintViolationException;
 import java.sql.SQLNonTransientConnectionException;
@@ -90,6 +91,7 @@ final class ClickHouseRowSource implements RowSource {
     private final String prefix;
     private HighWaterMarks highWaterMarks;
     private boolean entitySpawnChecked;
+    private boolean signActionsChecked;
     private Cursor cursor;
     private volatile boolean aborted;
 
@@ -396,6 +398,9 @@ final class ClickHouseRowSource implements RowSource {
      * through a copy on the target's constraint, name the duplicates up front.
      */
     private void checkCopyable(String table) throws SQLException {
+        if (table.equals("sign")) {
+            checkSignActions();
+        }
         if (entitySpawnChecked || !table.equals("entity_spawn")) {
             return;
         }
@@ -411,6 +416,38 @@ final class ClickHouseRowSource implements RowSource {
                 + String.join(" and ", problems) + ". Resolve the duplicates in ClickHouse before migrating.");
         }
         entitySpawnChecked = true;
+    }
+
+    /**
+     * CoreProtect from before 2.19 left the action of older sign rows unset,
+     * earlier LibreProtect builds copied such rows into ClickHouse as they
+     * were, and CoreProtect's views now leave them out. A copy would lose
+     * them, with nothing for validation to see, so name them up front. The
+     * rows that CoreProtect writes to update an event's state have no action
+     * either, but no user.
+     */
+    private void checkSignActions() throws SQLException {
+        if (signActionsChecked) {
+            return;
+        }
+        String events = api.qualified(database, prefix + "event_data");
+        long hidden;
+        try (Connection connection = connection();
+             PreparedStatement statement = connection.prepareStatement("SELECT count() FROM " + events
+                 + " WHERE family = 'sign' AND action IS NULL AND user_id IS NOT NULL");
+             ResultSet resultSet = statement.executeQuery()) {
+            resultSet.next();
+            hidden = resultSet.getLong(1);
+        }
+        if (hidden > 0) {
+            throw new SQLDataException(String.format(Locale.ROOT, "ClickHouse has %,d sign row%s without an action,"
+                + " which CoreProtect leaves out, so a copy would lose them. An earlier LibreProtect migration stored"
+                + " them so, from a database of CoreProtect before 2.19. To keep them, give them the action that"
+                + " CoreProtect reads them with on SQLite and MySQL in ClickHouse, then migrate again: ALTER TABLE"
+                + " %s UPDATE action = 0 WHERE family = 'sign' AND action IS NULL AND user_id IS NOT NULL SETTINGS"
+                + " mutations_sync = 2", hidden, hidden == 1 ? "" : "s", events));
+        }
+        signActionsChecked = true;
     }
 
     private static void duplicates(Connection connection, String view, String column, String description,

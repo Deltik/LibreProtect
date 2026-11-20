@@ -94,8 +94,10 @@ public final class ClickHouseApi {
     static final String BATCH_RECEIPT_FAMILY = "_batch_receipt";
 
     private static final String VIEWS = "creates a view of the event table per CoreProtect table, named after the"
-        + " table, with rowid and the table's own column names; the keys that views add for lookups, such as"
-        + " location keys, have names that start with _key_, and the user view shows a missing UUID as ''";
+        + " table, with rowid and the table's own column names, showing every row of the table, except that the"
+        + " views of block, container, entity_container, item and sign leave out rows without an action, and"
+        + " entity_spawn's those without an origin_x; the keys that views add for lookups, such as location keys,"
+        + " have names that start with _key_, and the user view shows a missing UUID as ''";
 
     private final Class<?> familyType;
     private final Bound newConfig;
